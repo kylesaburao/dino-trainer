@@ -1,0 +1,28 @@
+html, body {
+  margin: 0;
+  background: #fff;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 15vh;
+  box-sizing: border-box;
+  transition: filter 0.75s ease;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+body.night {
+  filter: invert(1);
+}
+
+canvas {
+  width: 600px;
+  max-width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+}
