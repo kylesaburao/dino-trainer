@@ -1,0 +1,22 @@
+{
+ "file": "survey-jump-51000000-3000.jsonl",
+ "seeds": 3000,
+ "seedRange": [
+  51000000,
+  51002999
+ ],
+ "crashes": 0,
+ "crashRate": 0,
+ "crashRateUpper95oneSided": 0.0009980790119965867,
+ "reachedCap": 3000,
+ "frames": 2023074000,
+ "downShare": 0,
+ "obstaclesPassed": 65623636,
+ "obstaclesDuckedShare": 0,
+ "midEncountered": 9605653,
+ "midPassed": 9591107,
+ "midDucked": 0,
+ "midDuckedShare": 0,
+ "solver": null,
+ "crashList": []
+}
