@@ -81,3 +81,29 @@ Read in order:
 - **A wrong premise in a draft plan, caught only on self-review:** the research `gen 1 11` is end-exclusive (seeds 1–10), and the boring-frame counter was per process. Verify every numeric claim against the code before briefing.
 - **The approved ES design (Run B′ from transfer-handoff §7.3) was not checked against env.js's start-score floor.** desktop-1 found that it never starts inside 400–800. Check that a curriculum actually puts mass where its hypothesis needs it before calling it a test of that hypothesis.
 - **A PushNotification was attempted while the user was at the terminal.** It was not sent, which is harmless. Use notifications only when the user is away.
+
+## 7. Addendum: desktop-2's step-1 report arrived after this file was written (awaiting YOUR decision)
+**Why starts must be 0 or ≥ ~2000.** It's a faithfulness constraint.
+- `createGame` `startScore` starts at the speed cap (core.js:432–434).
+- Natural speed ramps from 6 to 13 by about 1,700 points (core.js:641).
+- In the 400–800 zone a startScore game would run 30–58% too fast. Pterodactyls (minSpeed 8.5, which natural play reaches at about 453 points) and the jump and gap physics would all be wrong.
+
+**The natural-ramp start is feasible and faithful.**
+- While running, the world (obstacles, speed, RNG) depends only on (seed, frame), not on the controller. So a solver-driven prefix hands over the natural world.
+- Frames to reach S: 2,247 at 400, 4,000 at 800 (closed form (√(36+0.08S)−6)/0.001).
+- The solver costs about 1.43 µs/frame, about the same as the student. The prefix is 1.5–5× the student's work per ramp episode.
+
+**desktop-2's proposed step-2 design (not yet approved):**
+- `--ramp-frac F`, `--ramp-min P`, `--ramp-max P`: a third stratum, training-only, off by default, needs `--window`.
+- Ramp starts are drawn from the seed hash, so no trainer RNG and defaults stay bit-identical.
+- Handover at the first frame with score ≥ S, the dino grounded and keys up.
+- A `teacherFrames` metric column.
+- **Move `test/solver.js` to `trainer/teacher.js`, with `test/solver.js` re-exporting it.**
+- Tests: the handover world equals pure-solver play, plus spy-agent timing.
+- The bit-identity harness is IDENTICAL at defaults. The ramp gets a same-tree straight vs split+resume determinism check.
+
+**Conflict to resolve before approving.** The BC pipeline plan (`runs/exp-bc-clones/BC-PIPELINE-PLAN.md` §2) keeps `test/solver.js` in place, with `trainer/bc.js` requiring it. If both land, there should be one teacher owner. Options:
+- approve the move, after `wt/bc` merges, and have `trainer/bc.js` import `trainer/teacher.js`;
+- or keep the solver in `test/` for both.
+
+desktop-2 has been told to hold for your decision.
