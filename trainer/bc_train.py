@@ -7,8 +7,10 @@ A port of research/scripts/feature-sufficiency/trainB.py (variant base), kept
 expression for expression (dtypes, rng call order) so it reproduces that
 prototype's params exactly on the same rows. The algorithm is the one in
 trainer/bc.js (the node backend). Rows: float32 [obs-dim features, label, weight].
-Prints one JSON line per epoch ({epoch, loss, recall: {none, jump}, seconds}) and
-writes {layers, params, log} to --out; Node owns best.json.
+Labels are policy.js action indices (0 none, 1 jump, 2 duck). Class weights cover
+all three classes, as in bc.js (absent classes get 0). Prints one JSON line per
+epoch ({epoch, loss, recall: {none, jump[, duck]}, seconds}; duck only when the
+demos have label-2 rows) and writes {layers, params, log} to --out; Node owns best.json.
 --snapshot-dir DIR (optional) also writes DIR/epoch-NN.json ({layers, params, epoch};
 NN and epoch 1-based) after each epoch's last optimiser step: a float64 copy only, so it
 draws no RNG and changes no computation.
@@ -38,6 +40,7 @@ del D
 N = len(y); counts = np.array([(sw * (y == c)).sum() for c in range(3)])
 cw = np.where(counts > 0, np.sqrt(counts.sum() / (2 * np.maximum(counts, 1))), 0.0)
 w_all = (sw * cw[y]).astype(np.float32)
+has_duck = bool(counts[2] > 0)
 layers = [X.shape[1]] + hidden + [3]
 rng = np.random.default_rng(a.seed)
 Ws = [rng.normal(0, 1 / np.sqrt(layers[i]), (layers[i + 1], layers[i])).astype(np.float32) for i in range(len(layers) - 1)]
@@ -96,8 +99,10 @@ for ep in range(epochs):
     # train-set recall per class (subsample)
     sub = rng.choice(N, min(N, 200000), replace=False)
     pred = forward(X[sub])[-1].argmax(1)
-    acc = [float(((pred == c) & (y[sub] == c)).sum() / max(1, (y[sub] == c).sum())) for c in (0, 1)]
-    row = dict(epoch=ep, loss=float(tot / w_all.sum()), recall=dict(none=acc[0], jump=acc[1]), seconds=time.time() - t0)
+    acc = [float(((pred == c) & (y[sub] == c)).sum() / max(1, (y[sub] == c).sum())) for c in ((0, 1, 2) if has_duck else (0, 1))]
+    recall = dict(none=acc[0], jump=acc[1])
+    if has_duck: recall['duck'] = acc[2]
+    row = dict(epoch=ep, loss=float(tot / w_all.sum()), recall=recall, seconds=time.time() - t0)
     log.append(row)
     print(json.dumps(row), flush=True)
 json.dump(dict(layers=layers, params=flat_params(), log=log), open(a.out, 'w'))

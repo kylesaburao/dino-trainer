@@ -1,12 +1,17 @@
 'use strict';
-// Behaviour cloning of the solver (test/solver.js): demonstration generation, the
-// node training backend, and the trained-net -> best.json assembly.
+// Behaviour cloning of a solver teacher (test/solver.js): demonstration generation,
+// the node training backend, and the trained-net -> best.json assembly.
 //
-// Demonstrations (bc-gen): for each seed, then each start level, play the solver
+// Teachers (bc-gen --teacher, TEACHERS below): 'jump' = createSolver (the default;
+// it never ducks), 'duck' = createDuckSolver (jumps like createSolver, ducks under
+// mid pterodactyls). Each is resolved by name when a demo set is generated, so this
+// file loads on trees whose solver.js lacks createDuckSolver.
+// Demonstrations (bc-gen): for each seed, then each start level, play the teacher
 // on a fresh v2 game from that level for `span` points. Every running frame gives
 // one Float32 row [policy.observe features (OBS_DIM), label, weight], where label
-// is the solver's action (1 = jump key down, 0 = none; it never ducks). The
-// solver reads hidden state; the rows hold only what policy.observe exposes.
+// is the teacher's action in policy.js indices (0 none, 1 jump key down, 2 down key
+// down); a teacher that returns both keys throws. The teacher reads hidden state;
+// the rows hold only what policy.observe exposes.
 // Boring frames (grounded, label none, nearest visible obstacle more than 40
 // frames away or absent) are kept 1 in keepBoring with weight keepBoring; the
 // counter resets every episode, so the output does not depend on worker count.
@@ -16,22 +21,52 @@
 // weighted per row by weight * classWeight[label] (classWeight_c = sqrt(total /
 // (2 count_c)) over weighted counts), normalised by the batch weight sum; Adam
 // (0.9, 0.999, 1e-8) with a cosine learning rate over epochs * floor(N / batch)
-// steps; a fresh permutation each epoch, remainder dropped.
+// steps; a fresh permutation each epoch, remainder dropped. The class weights cover
+// all three classes (0 for an absent one), so duck demos are sqrt-balanced the same
+// way. The constant 2 is kept for 3 classes on purpose: it is a uniform scale on
+// every row weight, which the batch-sum normalisation (and the loss / sum(w) report)
+// cancels, and keeping it leaves jump-demo training bit-identical.
+// Recall (per epoch, on a 200k-row subsample) reports none and jump, plus duck when
+// the demo set has any label-2 row; without duck rows the output is unchanged.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { isMainThread, parentPort, workerData, Worker } = require('worker_threads');
 const Core = require('../core.js');
 const P = require('../policy.js');
-const { createSolver } = require('../test/solver.js');
 const { gaussian } = require('./es.js');
 
 const DEMOS_FORMAT = 'dino-bc-demos-v1';
 const OBS_DIM = P.OBS_DIM;
 const ROW = OBS_DIM + 2;                 // features, label, weight
-const GEN_DEFAULTS = { levels: [0, 2000, 50000, 300000, 900000], span0: 3000, span: 5000, keepBoring: 10, gameVersion: 'v2' };
+const GEN_DEFAULTS = { levels: [0, 2000, 50000, 300000, 900000], span0: 3000, span: 5000, keepBoring: 10, gameVersion: 'v2', teacher: 'jump' };
 const TRAIN_DEFAULTS = { epochs: 15, batch: 1024, lr: 2e-3, seed: 1 };
 const RECALL_SUBSAMPLE = 200000;
+
+// ---------------------------------------------------------------------------
+// Teachers
+// ---------------------------------------------------------------------------
+// name -> the factory exported by `file` (a path from the repo root, recorded in the
+// demos manifest as `teacher`; the name is recorded as `teacherName`).
+const TEACHERS = {
+  jump: { file: 'test/solver.js', factory: 'createSolver' },
+  duck: { file: 'test/solver.js', factory: 'createDuckSolver' },
+};
+
+// The teacher factory for `name`; throws for an unknown name or a missing export.
+function resolveTeacher(name) {
+  const t = TEACHERS[name];
+  if (!t) throw new Error(`unknown teacher ${name}; one of ${Object.keys(TEACHERS).join(', ')}`);
+  const f = require(path.join(__dirname, '..', t.file))[t.factory];
+  if (typeof f !== 'function') throw new Error(`${t.factory} not available on this tree (${t.file}); teacher ${name} needs it`);
+  return f;
+}
+
+// policy.js action index of a teacher action; a teacher must never hold both keys.
+function actionLabel(act) {
+  if (act.jump && act.down) throw new Error('teacher returned both jump and down');
+  return act.down ? 2 : act.jump ? 1 : 0;
+}
 
 // ---------------------------------------------------------------------------
 // Demonstrations
@@ -45,17 +80,18 @@ function isBoring(x, label) {
   return tau0 > 40 / 30;
 }
 
-// One episode: the solver from startScore `level` for `span` points. push(x, label, weight).
-function genEpisode(seed, level, span, keepBoring, gameVersion, push) {
+// One episode: the teacher from startScore `level` for `span` points. push(x, label, weight).
+// createTeacher (a factory, as in TEACHERS) defaults to the jump teacher.
+function genEpisode(seed, level, span, keepBoring, gameVersion, push, createTeacher = resolveTeacher('jump')) {
   const g = Core.createGame({ rng: Core.createRng(seed), version: gameVersion, startScore: level || undefined });
-  const sol = createSolver();
+  const sol = createTeacher();
   const cap = (level + span) / Core.CFG.scoreCoef;
   const x = new Float32Array(OBS_DIM);
   let boring = 0;
   do {
     const act = sol(g);
+    const label = actionLabel(act);
     if (g.state === 'running') {
-      const label = act.jump ? 1 : 0;
       P.observe(g, x);
       if (!isBoring(x, label)) push(x, label, 1);
       else if (boring++ % keepBoring === 0) push(x, label, keepBoring);
@@ -65,8 +101,10 @@ function genEpisode(seed, level, span, keepBoring, gameVersion, push) {
   return { crashed: g.state === 'over' };
 }
 
-// All episodes of one seed. Returns { rows: Float32Array, episodes }.
+// All episodes of one seed. Returns { rows: Float32Array, episodes }. The teacher is
+// o.createTeacher if given (in-thread only: tests), else TEACHERS[o.teacher || 'jump'].
 function genSeed(seed, o) {
+  const createTeacher = o.createTeacher || resolveTeacher(o.teacher || 'jump');
   let buf = new Float32Array(ROW * 65536), n = 0;
   const episodes = [];
   for (const level of o.levels) {
@@ -80,7 +118,7 @@ function genSeed(seed, o) {
       counts[label] += w;
       n++;
     };
-    const r = genEpisode(seed, level, level === 0 ? o.span0 : o.span, o.keepBoring, o.gameVersion, push);
+    const r = genEpisode(seed, level, level === 0 ? o.span0 : o.span, o.keepBoring, o.gameVersion, push, createTeacher);
     episodes.push({ seed, level, rows: n - before, weighted: counts, crashed: r.crashed });
   }
   return { rows: buf.slice(0, n * ROW), episodes };
@@ -127,9 +165,14 @@ if (!isMainThread && workerData && workerData.bcGen) {
 }
 
 // Write demos.bin and demos.json into dir. o: { seeds, levels, span0, span, keepBoring,
-// gameVersion, workers, coreHash }. Returns the manifest.
+// gameVersion, workers, coreHash, teacher (a TEACHERS name, default 'jump'),
+// createTeacher (optional factory overriding the table, workers <= 1 only: tests) }.
+// Returns the manifest.
 async function generateDemos(dir, o) {
   const opt = { ...GEN_DEFAULTS, ...o };
+  opt.teacher = opt.teacher || GEN_DEFAULTS.teacher;
+  if (opt.createTeacher && (opt.workers || 1) > 1) throw new Error('createTeacher cannot cross worker threads; use workers 1');
+  if (!opt.createTeacher) resolveTeacher(opt.teacher);   // fail before writing anything
   fs.mkdirSync(dir, { recursive: true });
   const binFile = path.join(dir, 'demos.bin');
   const tmp = `${binFile}.${process.pid}.tmp`;
@@ -138,7 +181,8 @@ async function generateDemos(dir, o) {
   const episodes = [];
   const weighted = [0, 0, 0], rowsByClass = [0, 0, 0];
   let rows = 0;
-  const genOpts = { levels: opt.levels, span0: opt.span0, span: opt.span, keepBoring: opt.keepBoring, gameVersion: opt.gameVersion };
+  const genOpts = { levels: opt.levels, span0: opt.span0, span: opt.span, keepBoring: opt.keepBoring, gameVersion: opt.gameVersion,
+    teacher: opt.teacher, ...(opt.createTeacher ? { createTeacher: opt.createTeacher } : {}) };
   try {
     await genSeedsParallel(opt.seeds, genOpts, opt.workers || 1, (i, r) => {
       const bytes = Buffer.from(r.rows.buffer, r.rows.byteOffset, r.rows.byteLength);
@@ -161,7 +205,7 @@ async function generateDemos(dir, o) {
   fs.renameSync(tmp, binFile);
   const manifest = {
     format: DEMOS_FORMAT, file: 'demos.bin', obsDim: OBS_DIM, rowFloats: ROW, layout: '[observe features..., label, weight] float32 little-endian',
-    coreHash: opt.coreHash, gameVersion: opt.gameVersion, teacher: 'test/solver.js',
+    coreHash: opt.coreHash, gameVersion: opt.gameVersion, teacher: TEACHERS[opt.teacher].file, teacherName: opt.teacher,
     seeds: opt.seeds, levels: opt.levels, span0: opt.span0, span: opt.span, keepBoring: opt.keepBoring,
     rows, counts: { rows: { none: rowsByClass[0], jump: rowsByClass[1], duck: rowsByClass[2] },
       weighted: { none: weighted[0], jump: weighted[1], duck: weighted[2] } },
@@ -330,6 +374,7 @@ function trainNode(data, o) {
   const rng = Core.createRng(o.seed);
   const params = P.initParams(layers, gaussian(rng));
   const cw = classWeights(y, sw);
+  const hasDuck = y.includes(2);
   const wRow = new Float64Array(n);
   let wTotal = 0;
   for (let i = 0; i < n; i++) { wRow[i] = sw[i] * cw[y[i]]; wTotal += wRow[i]; }
@@ -357,7 +402,7 @@ function trainNode(data, o) {
         params[k] -= lr * (m[k] / c1) / (Math.sqrt(v[k] / c2) + 1e-8);
       }
     }
-    const recall = recallOn(layers, params, data, rng);
+    const recall = recallOn(layers, params, data, rng, hasDuck);
     const row = { epoch: ep, loss: tot / wTotal, recall, seconds: (Date.now() - t0) / 1000 };
     log.push(row);
     if (o.onEpoch) o.onEpoch(row);
@@ -365,21 +410,24 @@ function trainNode(data, o) {
   return { layers, params: Array.from(params), log };
 }
 
-// Recall of classes none and jump on a random subsample of up to 200k rows.
-function recallOn(layers, params, { X, y, n, dim }, rng) {
+// Recall of classes none and jump (and duck when hasDuck: the demo set has label-2
+// rows) on a random subsample of up to 200k rows.
+function recallOn(layers, params, { X, y, n, dim }, rng, hasDuck = false) {
   const k = Math.min(n, RECALL_SUBSAMPLE);
   const pick = new Uint32Array(n);
   for (let i = 0; i < n; i++) pick[i] = i;
   for (let i = 0; i < k; i++) { const j = i + Math.floor(rng() * (n - i)); const s = pick[i]; pick[i] = pick[j]; pick[j] = s; }
   const net = P.createNet(layers, params);
-  const hit = [0, 0], tot = [0, 0];
+  const hit = [0, 0, 0], tot = [0, 0, 0];
   for (let r = 0; r < k; r++) {
     const i = pick[r], c = y[i];
-    if (c > 1) continue;
+    if (c > 2) continue;
     tot[c]++;
     if (predict(layers, params, X, dim, i, net) === c) hit[c]++;
   }
-  return { none: hit[0] / Math.max(1, tot[0]), jump: hit[1] / Math.max(1, tot[1]) };
+  const recall = { none: hit[0] / Math.max(1, tot[0]), jump: hit[1] / Math.max(1, tot[1]) };
+  if (hasDuck) recall.duck = hit[2] / Math.max(1, tot[2]);
+  return recall;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +474,6 @@ function assembleBest({ layers, params, validation, coreHash, config }) {
 }
 
 module.exports = {
-  DEMOS_FORMAT, ROW, GEN_DEFAULTS, TRAIN_DEFAULTS, isBoring, genEpisode, genSeed, generateDemos, resolveDemos, checkDemos,
+  DEMOS_FORMAT, ROW, GEN_DEFAULTS, TRAIN_DEFAULTS, TEACHERS, resolveTeacher, actionLabel, isBoring, genEpisode, genSeed, generateDemos, resolveDemos, checkDemos,
   loadDemos, sha256File, layerOffsets, createTrainer, classWeights, trainNode, pythonPath, trainPython, assembleBest,
 };

@@ -200,3 +200,133 @@ test('bc-train refuses demos from a different core hash unless --force', async (
   assert.strictEqual(bc.checkDemos(demos, coreHash(), true, (m) => warnings.push(m)), manifest.sha256);
   assert.strictEqual(warnings.length, 1);
 });
+
+// ---------------------------------------------------------------------------
+// Teacher selection (bc-gen --teacher)
+// ---------------------------------------------------------------------------
+// SMALL demos sha256 with the jump teacher, recorded on 700e8fb (before teacher
+// selection existed): the default must stay byte-identical.
+const SMALL_JUMP_SHA256 = 'cf4962aafb79e614013399ffc68ee21181190f0ee92c87953458cb0256463890';
+
+// A stand-in duck teacher, independent of createDuckSolver: the jump solver, but it
+// holds the down key on every 5th grounded no-op running frame.
+function createStubDuck() {
+  const sol = createSolver();
+  let k = 0;
+  return (g) => {
+    const act = sol(g);
+    if (g.state === 'running' && !g.dino.jumping && !act.jump && k++ % 5 === 0) return { jump: false, down: true };
+    return act;
+  };
+}
+
+let duckSmall = null;
+async function duckDemos() {
+  if (duckSmall) return duckSmall;
+  const dir = path.join(tmp, 'duck');
+  const manifest = await bc.generateDemos(dir, { ...SMALL, workers: 1, coreHash: coreHash(), teacher: 'duck', createTeacher: createStubDuck });
+  fs.writeFileSync(path.join(dir, 'demos.json'), JSON.stringify(manifest));
+  duckSmall = { dir, manifest, rows: new Float32Array(fs.readFileSync(path.join(dir, 'demos.bin')).buffer.slice(0)) };
+  return duckSmall;
+}
+
+const cli = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'trainer', 'cli.js'), ...args], { encoding: 'utf8' });
+
+test('teacher table: jump is createSolver, duck is createDuckSolver or a clear error, unknown names throw', () => {
+  assert.deepStrictEqual(Object.keys(bc.TEACHERS), ['jump', 'duck']);
+  assert.strictEqual(bc.GEN_DEFAULTS.teacher, 'jump');
+  assert.strictEqual(bc.resolveTeacher('jump'), createSolver);
+  const solver = require('./solver.js');
+  if (typeof solver.createDuckSolver === 'function') assert.strictEqual(bc.resolveTeacher('duck'), solver.createDuckSolver);
+  else assert.throws(() => bc.resolveTeacher('duck'), /createDuckSolver not available on this tree/);
+  assert.throws(() => bc.resolveTeacher('hop'), /unknown teacher hop/);
+  const run = cli('bc-gen', '--dir', path.join(tmp, 'badteacher'), '--teacher', 'hop');
+  assert.notStrictEqual(run.status, 0);
+  assert.match(run.stderr, /--teacher must be one of jump, duck/);
+  assert.ok(!fs.existsSync(path.join(tmp, 'badteacher')));
+});
+
+test('default (jump) demos are byte-identical to before teacher selection, and record teacherName jump', async () => {
+  const { dir, manifest } = await smallDemos();
+  assert.strictEqual(manifest.sha256, SMALL_JUMP_SHA256);
+  assert.strictEqual(manifest.teacher, 'test/solver.js');
+  assert.strictEqual(manifest.teacherName, 'jump');
+  const explicit = await bc.generateDemos(path.join(tmp, 'jump-explicit'), { ...SMALL, workers: 1, coreHash: coreHash(), teacher: 'jump' });
+  assert.strictEqual(explicit.sha256, SMALL_JUMP_SHA256);
+  const r = bc.trainNode(bc.loadDemos(path.join(dir, 'demos.bin')), { hidden: [4], epochs: 1, batch: 64, lr: 1e-2, seed: 1 });
+  assert.deepStrictEqual(Object.keys(r.log[0].recall), ['none', 'jump'], 'no duck key without duck rows');
+});
+
+test('a duck teacher gives label-2 rows (never boring), counted in the manifest, with recall.duck', async () => {
+  const { dir, manifest, rows } = await duckDemos();
+  const R = bc.ROW, D = P.OBS_DIM;
+  assert.strictEqual(manifest.teacherName, 'duck');
+  let duck = 0;
+  for (let i = 0; i < manifest.rows; i++) {
+    if (rows[i * R + D] !== 2) continue;
+    duck++;
+    assert.strictEqual(rows[i * R + D + 1], 1, 'a duck row is never down-weighted as boring');
+  }
+  assert.ok(duck > 0);
+  assert.strictEqual(manifest.counts.rows.duck, duck);
+  assert.strictEqual(manifest.counts.weighted.duck, duck);
+  const far = new Float32Array(D);   // grounded, no visible obstacle: boring for label 0 only
+  assert.strictEqual(bc.isBoring(far, 0), true);
+  assert.strictEqual(bc.isBoring(far, 2), false);
+  const data = bc.loadDemos(path.join(dir, 'demos.bin'));
+  assert.ok(bc.classWeights(data.y, data.sw).every(w => w > 0), 'all three classes weighted');
+  const r = bc.trainNode(data, { hidden: [8], epochs: 2, batch: 64, lr: 1e-2, seed: 1 });
+  assert.deepStrictEqual(Object.keys(r.log[1].recall), ['none', 'jump', 'duck']);
+  assert.ok(r.log[1].recall.duck >= 0 && r.log[1].recall.duck <= 1);
+  await assert.rejects(bc.generateDemos(path.join(tmp, 'duck-w2'), { ...SMALL, workers: 2, coreHash: coreHash(), teacher: 'duck', createTeacher: createStubDuck }),
+    /createTeacher cannot cross worker threads/);
+});
+
+test('a teacher that holds both jump and down throws', async () => {
+  assert.throws(() => bc.actionLabel({ jump: true, down: true }), /both jump and down/);
+  assert.deepStrictEqual([{ jump: false, down: false }, { jump: true, down: false }, { jump: false, down: true }].map(bc.actionLabel), [0, 1, 2]);
+  const both = () => { const sol = createSolver(); let f = 0; return (g) => (++f > 20 ? { jump: true, down: true } : sol(g)); };
+  await assert.rejects(bc.generateDemos(path.join(tmp, 'both'), { ...SMALL, workers: 1, coreHash: coreHash(), teacher: 'duck', createTeacher: both }),
+    /both jump and down/);
+});
+
+test('bc-train on duck demos: config.teacherName duck, recall.duck in bc-metrics, validation runs; old manifests read as jump', async () => {
+  const { dir } = await duckDemos();
+  const out = path.join(tmp, 'duckrun');
+  const run = cli('bc-train', '--dir', out, '--demos', dir, '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1');
+  assert.strictEqual(run.status, 0, run.stderr);
+  const best = JSON.parse(fs.readFileSync(path.join(out, 'best.json'), 'utf8'));
+  assert.strictEqual(best.config.teacherName, 'duck');
+  assert.ok('duck' in best.config.final.recall);
+  assert.strictEqual(typeof best.validation.median, 'number');
+  const metrics = fs.readFileSync(path.join(out, 'bc-metrics.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.ok('duck' in metrics[0].recall);
+  // A manifest from before teacher selection (no teacherName) trains as jump.
+  const { dir: jdir, manifest } = await smallDemos();
+  const old = path.join(tmp, 'oldmanifest');
+  fs.mkdirSync(old, { recursive: true });
+  fs.copyFileSync(path.join(jdir, 'demos.bin'), path.join(old, 'demos.bin'));
+  const { teacherName, ...legacy } = manifest;
+  assert.strictEqual(teacherName, 'jump');
+  fs.writeFileSync(path.join(old, 'demos.json'), JSON.stringify(legacy));
+  const out2 = path.join(tmp, 'oldrun');
+  const run2 = cli('bc-train', '--dir', out2, '--demos', old, '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1');
+  assert.strictEqual(run2.status, 0, run2.stderr);
+  const best2 = JSON.parse(fs.readFileSync(path.join(out2, 'best.json'), 'utf8'));
+  assert.strictEqual(best2.config.teacherName, 'jump');
+  assert.deepStrictEqual(Object.keys(best2.config.final.recall), ['none', 'jump']);
+});
+
+test('python backend: recall.duck on duck demos, absent on jump demos (skipped without numpy)', async (t) => {
+  const py = bc.pythonPath(ROOT);
+  const probe = spawnSync(py, ['-c', 'import numpy'], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0) {
+    t.skip(`python backend not tested: ${py} has no numpy (set PYTHON to an interpreter with numpy, e.g. the repo's .venv)`);
+    return;
+  }
+  const o = { hidden: [8], epochs: 2, batch: 64, lr: 1e-2, seed: 1 };
+  const d = await bc.trainPython(path.join((await duckDemos()).dir, 'demos.bin'), path.join(tmp, 'py-duck.json'), o, ROOT);
+  assert.deepStrictEqual(Object.keys(d.log[1].recall), ['none', 'jump', 'duck']);
+  const j = await bc.trainPython(path.join((await smallDemos()).dir, 'demos.bin'), path.join(tmp, 'py-jump.json'), o, ROOT);
+  assert.deepStrictEqual(Object.keys(j.log[1].recall), ['none', 'jump']);
+});
