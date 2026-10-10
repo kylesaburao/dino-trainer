@@ -5,7 +5,7 @@
 // Exits when the event fires or when the trainer is gone.
 // Usage: node tools/event-watch.js <run dir> [--threshold 2000] [--after GEN] [--max-frames N] [--poll-ms 1000]
 //   --after GEN       only count validations and frames at generations > GEN (the resume point)
-//   --max-frames N    also stop (censor) once training frames since --after reach N
+//   --max-frames N    also stop (censor) once training frames (+ teacherFrames, ramp arm) since --after reach N
 const fs = require('fs');
 const path = require('path');
 
@@ -39,7 +39,7 @@ const timer = setInterval(() => {
       return;
     }
   }
-  const frames = rows.filter(r => r.generation > AFTER).reduce((a, r) => a + r.frames, 0);
+  const frames = rows.filter(r => r.generation > AFTER).reduce((a, r) => a + r.frames + (r.teacherFrames || 0), 0);   // ramp arm: teacher frames count too
   if (frames >= MAX_FRAMES) {
     log(`frame budget reached: ${frames} >= ${MAX_FRAMES} training frames, censored at generation ${rows[rows.length - 1].generation}`);
     if (seenPid && alive(seenPid)) { process.kill(seenPid, 'SIGINT'); log(`SIGINT sent to ${seenPid}`); }
