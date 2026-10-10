@@ -68,7 +68,8 @@ function logTail(name, n = 40) {
   return readLines(newest).slice(-n);
 }
 
-// Weights for live playback: the latest checkpoint's center ('current') or best.json.
+// Weights for live playback: the latest checkpoint's center ('current', falling back to
+// best.json when there is no checkpoint) or best.json.
 function runModel(name, which) {
   const dir = path.join(RUNS, name);
   if (which === 'best') {
@@ -76,7 +77,8 @@ function runModel(name, which) {
     return b && { format: b.format, layers: b.layers, actionRepeat: b.actionRepeat, params: b.params, generation: b.generation, which };
   }
   const ck = readJson(path.join(dir, 'checkpoint.json'));
-  return ck && { layers: ck.layers, actionRepeat: ck.config.actionRepeat, params: ck.theta, generation: ck.generation, which: 'current' };
+  if (!ck) return which === 'current' ? runModel(name, 'best') : null;   // a run with only best.json
+  return { layers: ck.layers, actionRepeat: ck.config.actionRepeat, params: ck.theta, generation: ck.generation, which: 'current' };
 }
 
 // The page runs the real game code, served straight from the repo.

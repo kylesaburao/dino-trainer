@@ -8,6 +8,8 @@
 <style>
 :root {
   color-scheme: light;
+  --neg: #e34948;
+  --neutral: #f0efec;
   --surface-0: #f6f6f4;
   --surface-1: #fcfcfb;
   --border: #e4e3de;
@@ -34,6 +36,8 @@
     --series-1: #3987e5;
     --series-2: #d95926;
     --accent-soft: #1d2a3a;
+    --neg: #e66767;
+    --neutral: #383835;
   }
 }
 :root[data-theme="dark"] {
@@ -48,6 +52,8 @@
   --series-1: #3987e5;
   --series-2: #d95926;
   --accent-soft: #1d2a3a;
+  --neg: #e66767;
+  --neutral: #383835;
 }
 * { box-sizing: border-box; }
 body {
@@ -105,6 +111,17 @@ h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
 .stage { background: #fff; border-radius: 6px; margin-top: 10px; padding: 12px 0 4px; display: flex; justify-content: center; transition: filter 0.75s ease; }
 .stage.night { filter: invert(1); }
 .stage canvas { width: 600px; max-width: 100%; height: auto; image-rendering: pixelated; }
+.pb-row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; margin-top: 10px; }
+.pb-game { flex: 1 1 600px; min-width: 0; }
+.pb-game .stage { margin-top: 0; }
+.pb-net { flex: 1 1 360px; min-width: 0; position: relative; }
+.pb-net h3 { font-size: 13px; margin: 0; font-weight: 600; }
+.pb-net .sub { margin: 2px 0 4px; }
+#nn-canvas { display: block; width: 100%; height: 380px; }
+.nn-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+.nn-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.nn-legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.nn-warn { color: var(--critical); font-size: 12px; }
 .caption { color: var(--text-muted); font-size: 12px; margin-top: 6px; font-variant-numeric: tabular-nums; min-height: 1.5em; }
 pre.log {
   margin: 0; max-height: 260px; overflow: auto; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -136,8 +153,25 @@ th { color: var(--text-secondary); font-weight: 600; }
         <label>Speed <select id="pb-speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="16">16×</option></select></label>
       </div>
     </div>
-    <div class="stage" id="pb-stage"><canvas id="pb-canvas" width="600" height="150" aria-label="Live playback of the AI"></canvas></div>
-    <div class="caption" id="pb-caption">Waiting for weights…</div>
+    <div class="pb-row">
+      <div class="pb-game">
+        <div class="stage" id="pb-stage"><canvas id="pb-canvas" width="600" height="150" aria-label="Live playback of the AI"></canvas></div>
+        <div class="caption" id="pb-caption">Waiting for weights…</div>
+      </div>
+      <div class="pb-net">
+        <h3>Network <span id="nn-arch" style="font-weight:400;color:var(--text-muted)"></span></h3>
+        <div class="sub">The forward pass that chose the action on the frame shown, from the same observe() the dino plays on</div>
+        <canvas id="nn-canvas" role="img" aria-label="Neural network activations for the current frame"></canvas>
+        <div class="nn-legend">
+          <span><i style="background:var(--series-1)"></i>positive</span>
+          <span><i style="background:var(--neg)"></i>negative</span>
+          <span>edge opacity = |weight × activation|</span>
+          <span>ring = chosen action</span>
+        </div>
+        <div class="nn-warn" id="nn-warn" hidden></div>
+        <div class="tip" id="nn-tip"></div>
+      </div>
+    </div>
   </section>
   <div id="detail" style="margin-top:12px"><div class="empty">No runs found in the runs/ directory yet.</div></div>
 </main>
@@ -362,6 +396,7 @@ async function newEpisode() {
     $('#pb-stage').classList.remove('night');
     pb.game = DinoCore.createGame({ rng: DinoCore.createRng(pb.seed), hooks: { night: (on) => $('#pb-stage').classList.toggle('night', on) } });
     pb.agent = DinoPolicy.createAgent(pb.model);
+    nn.setModel(pb.model);
     pb.overAt = 0;
     pb.episodes++;
   } catch (e) {
@@ -385,13 +420,16 @@ function playbackFrame(t) {
     pb.acc += dt * speed;
     let steps = 0;
     while (pb.acc >= DinoCore.FRAME_MS && steps < 400) {
-      g.step(pb.agent.act(g));
+      const keys = pb.agent.act(g);
+      if (g.state === 'running') nn.capture(g, keys);
+      g.step(keys);
       pb.acc -= DinoCore.FRAME_MS;
       steps++;
       if (g.state === 'over') { pb.acc = 0; break; }
     }
   }
   pb.renderer.draw(g, g.frameIndex * DinoCore.FRAME_MS, 0);
+  nn.draw();
   const m = pb.model;
   $('#pb-caption').textContent = `${m.which === 'best' ? 'best' : 'latest'} weights from generation ${m.generation} · seed ${pb.seed} · ` +
     `score ${g.score()}${g.state === 'over' ? ' · crashed, next episode…' : ''} · speed ${g.speed.toFixed(2)}`;
@@ -405,6 +443,239 @@ function setPlaybackRun(name) {
   $('#playback').hidden = !name;
   newEpisode();
 }
+
+// ---------------------------------------------------------------------------
+// Network view. Per-layer activations come from an inline forward pass over
+// model.params using policy.js's layout (per layer: weights out x in,
+// row-major, then biases; tanh hidden layers, linear output, argmax), fed by
+// DinoPolicy.observe() on the exact game state the agent acts on. Each frame
+// the inline argmax is checked against the action the agent applied.
+// ---------------------------------------------------------------------------
+const nn = (() => {
+  const ACTION_NAMES = ['none', 'jump', 'down'];
+  const DINO_NAMES = ['height', 'vy', 'jumping', 'ducking', 'speed'];
+  const OBST_NAMES = ['present', 'rel x', 'box y', 'box w', 'box h', 'small cactus', 'large cactus', 'pterodactyl',
+    'group size', 'ptero low', 'ptero mid', 'ptero high', 'velocity'];
+  // Input groups as laid out by policy.js; generic labels if its layout ever changes.
+  const known = DinoPolicy.OBS_DIM === DINO_NAMES.length + DinoPolicy.OBS_K * OBST_NAMES.length;
+  const groups = known
+    ? [{ name: 'dino', from: 0, names: DINO_NAMES },
+      ...Array.from({ length: DinoPolicy.OBS_K }, (_, k) => ({ name: `obstacle ${k + 1}`, from: DINO_NAMES.length + k * OBST_NAMES.length, names: OBST_NAMES }))]
+    : [{ name: 'inputs', from: 0, names: Array.from({ length: DinoPolicy.OBS_DIM }, (_, i) => `input ${i}`) }];
+
+  const canvas = $('#nn-canvas'), ctx = canvas.getContext('2d'), tip = $('#nn-tip');
+  let model = null, acts = null, chosen = -1, fresh = false, mismatches = 0, nodes = [], dirty = true;
+  const x = new Float64Array(DinoPolicy.OBS_DIM);
+
+  function setModel(m) {
+    if (model && m.params === model.params) return;
+    model = m;
+    acts = m.layers.map(n => new Float64Array(n));
+    chosen = -1;
+    $('#nn-arch').textContent = `${m.layers.join('-')} · ${m.params.length} params`;
+    dirty = true;
+  }
+
+  function forward(input) {
+    const L = model.layers, p = model.params;
+    acts[0].set(input);
+    let k = 0;
+    for (let l = 1; l < L.length; l++) {
+      const nIn = L[l - 1], nOut = L[l], a = acts[l - 1], out = acts[l];
+      const bBase = k + nOut * nIn, last = l === L.length - 1;
+      for (let i = 0; i < nOut; i++) {
+        let s = p[bBase + i];
+        const row = k + i * nIn;
+        for (let j = 0; j < nIn; j++) s += p[row + j] * a[j];
+        out[i] = last ? s : Math.tanh(s);
+      }
+      k = bBase + nOut;
+    }
+    const o = acts[L.length - 1];
+    let best = 0;
+    for (let i = 1; i < o.length; i++) if (o[i] > o[best]) best = i;
+    return best;
+  }
+
+  // Called right before game.step(keys), on the state the agent just acted on.
+  function capture(game, keys) {
+    if (!model) return;
+    const argmax = forward(DinoPolicy.observe(game, x));
+    chosen = DinoPolicy.ACTIONS.indexOf(keys);
+    if ((model.actionRepeat || 1) === 1 && argmax !== chosen) {
+      if (!mismatches) console.error(`network view mismatch: inline forward pass chose ${argmax}, agent applied ${chosen}`);
+      mismatches++;
+      const w = $('#nn-warn');
+      w.hidden = false;
+      w.textContent = `Inline forward pass disagreed with the agent on ${mismatches} frame(s)`;
+    }
+    fresh = true;
+  }
+
+  function layout(W, H) {
+    const L = model.layers, padT = 10, padB = 24, labelL = 78, labelR = 74;
+    const colX = L.map((_, l) => labelL + l * (W - labelL - labelR) / (L.length - 1));
+    const out = [];
+    L.forEach((n, l) => {
+      let ys;
+      if (l === 0) {
+        const gap = 10, unit = (H - padT - padB - gap * (groups.length - 1)) / n;
+        ys = [];
+        groups.forEach((g, gi) => g.names.forEach((_, j) => { ys[g.from + j] = padT + gi * gap + (g.from + j + 0.5) * unit; }));
+      } else if (l === L.length - 1) {
+        ys = Array.from({ length: n }, (_, i) => H / 2 + (i - (n - 1) / 2) * 46);
+      } else {
+        const unit = (H - padT - padB) / n;
+        ys = Array.from({ length: n }, (_, i) => padT + (i + 0.5) * unit);
+      }
+      const r = l === L.length - 1 ? 9 : Math.max(2, Math.min(5, (H - padT - padB) / n * 0.38));
+      out.push(ys.map((y, i) => ({ x: colX[l], y, r, l, i })));
+    });
+    return out;
+  }
+
+  // Diverging fill: neutral at 0, blue for positive, red for negative.
+  function mix(a, b, t) {
+    const pa = parseInt(a.slice(1), 16), pb2 = parseInt(b.slice(1), 16);
+    const c = (sh) => Math.round(((pa >> sh) & 255) * (1 - t) + ((pb2 >> sh) & 255) * t);
+    return `rgb(${c(16)},${c(8)},${c(0)})`;
+  }
+
+  function draw() {
+    if (!model || (!fresh && !dirty)) return;
+    fresh = false;
+    dirty = false;
+    const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth, H = canvas.clientHeight;
+    if (!W || !H) return;
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const pos = css('--series-1'), neg = css('--neg'), neutral = css('--neutral'), ink = css('--text-primary'), muted = css('--text-muted');
+    const L = model.layers, p = model.params;
+    nodes = layout(W, H);
+
+    // Edges: colour = weight sign, width = |weight|, opacity = |weight x source activation|.
+    let k = 0;
+    for (let l = 1; l < L.length; l++) {
+      const nIn = L[l - 1], nOut = L[l], a = acts[l - 1];
+      let maxW = 1e-9, maxC = 1e-9;
+      for (let i = 0; i < nOut * nIn; i++) {
+        const w = Math.abs(p[k + i]);
+        if (w > maxW) maxW = w;
+        const c = Math.abs(p[k + i] * a[i % nIn]);
+        if (c > maxC) maxC = c;
+      }
+      for (let i = 0; i < nOut; i++) {
+        const to = nodes[l][i];
+        for (let j = 0; j < nIn; j++) {
+          const w = p[k + i * nIn + j];
+          const alpha = Math.abs(w * a[j]) / maxC;
+          if (alpha < 0.04) continue;
+          const from = nodes[l - 1][j];
+          ctx.globalAlpha = Math.min(0.85, alpha);
+          ctx.strokeStyle = w >= 0 ? pos : neg;
+          ctx.lineWidth = 0.4 + 1.6 * Math.abs(w) / maxW;
+          ctx.beginPath();
+          ctx.moveTo(from.x, from.y);
+          ctx.lineTo(to.x, to.y);
+          ctx.stroke();
+        }
+      }
+      k += nOut * nIn + nOut;
+    }
+    ctx.globalAlpha = 1;
+
+    // Nodes: fill = activation (inputs/hidden clamped to [-1, 1]; outputs scaled by max |logit|).
+    const outA = acts[L.length - 1];
+    const outMax = Math.max(1e-9, ...Array.from(outA, Math.abs));
+    nodes.forEach((col, l) => col.forEach((n) => {
+      const v = l === L.length - 1 ? outA[n.i] / outMax : Math.max(-1, Math.min(1, acts[l][n.i]));
+      ctx.fillStyle = mix(neutral, v >= 0 ? pos : neg, Math.abs(v));
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = muted;
+      ctx.globalAlpha = 0.35;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }));
+
+    // Output labels + chosen-action ring.
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    nodes[L.length - 1].forEach((n) => {
+      const on = n.i === chosen;
+      if (on) {
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, n.r + 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.fillStyle = on ? ink : muted;
+      ctx.font = `${on ? '600 ' : ''}12px system-ui, sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.fillText(ACTION_NAMES[n.i] || `out ${n.i}`, n.x + 16, n.y - 6);
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText(outA[n.i].toFixed(2), n.x + 16, n.y + 8);
+    });
+
+    // Input group labels with a bracket.
+    ctx.textAlign = 'right';
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.strokeStyle = muted;
+    ctx.lineWidth = 1;
+    for (const g of groups) {
+      const top = nodes[0][g.from].y, bot = nodes[0][g.from + g.names.length - 1].y, bx = nodes[0][0].x - 9;
+      ctx.beginPath();
+      ctx.moveTo(bx + 3, top);
+      ctx.lineTo(bx, top);
+      ctx.lineTo(bx, bot);
+      ctx.lineTo(bx + 3, bot);
+      ctx.stroke();
+      ctx.fillStyle = css('--text-secondary');
+      ctx.fillText(g.name, bx - 5, (top + bot) / 2);
+    }
+    // Hidden layer captions.
+    ctx.textAlign = 'center';
+    ctx.fillStyle = muted;
+    for (let l = 1; l < L.length - 1; l++) ctx.fillText(`hidden ${L.length > 3 ? l : ''}`.trim() + ` (${L[l]})`, nodes[l][0].x, H - 8);
+  }
+
+  function describe(n) {
+    const L = model.layers;
+    if (n.l === 0) {
+      const g = groups.find(q => n.i >= q.from && n.i < q.from + q.names.length);
+      return `<b>${esc(g.name)} · ${esc(g.names[n.i - g.from])}</b><div class="row">input ${n.i} = ${acts[0][n.i].toFixed(3)}</div>`;
+    }
+    if (n.l === L.length - 1) return `<b>${esc(ACTION_NAMES[n.i] || 'out ' + n.i)}${n.i === chosen ? ' (chosen)' : ''}</b><div class="row">logit ${acts[n.l][n.i].toFixed(3)}</div>`;
+    return `<b>hidden ${L.length > 3 ? n.l + ' ' : ''}unit ${n.i}</b><div class="row">tanh = ${acts[n.l][n.i].toFixed(3)}</div>`;
+  }
+
+  canvas.addEventListener('pointermove', (ev) => {
+    if (!model || !nodes.length) return;
+    const r = canvas.getBoundingClientRect(), px = ev.clientX - r.left, py = ev.clientY - r.top;
+    let best = null, bd = 12 * 12;
+    for (const col of nodes) for (const n of col) {
+      const d = (n.x - px) ** 2 + (n.y - py) ** 2;
+      if (d < bd) { bd = d; best = n; }
+    }
+    if (!best) { tip.style.display = 'none'; return; }
+    tip.innerHTML = describe(best);
+    tip.style.display = 'block';
+    const host = canvas.parentElement.getBoundingClientRect();
+    tip.style.left = Math.min(r.left - host.left + best.x + 12, host.width - tip.offsetWidth) + 'px';
+    tip.style.top = (r.top - host.top + best.y + 10) + 'px';
+  });
+  canvas.addEventListener('pointerleave', () => { tip.style.display = 'none'; });
+  window.addEventListener('resize', () => { dirty = true; });
+
+  return { setModel, capture, draw, get mismatches() { return mismatches; }, get chosen() { return chosen; }, get acts() { return acts; } };
+})();
 
 pb.renderer = DinoRender.createRenderer($('#pb-canvas'));
 $('#pb-which').onchange = () => { pb.model = null; newEpisode(); };
