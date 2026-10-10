@@ -108,7 +108,7 @@ Seeds 4–12, run to 1500 generations, plus seeds 1–3 from earlier.
 ### 5.2 Certification on fresh held-out offsets 100–174 (75 seeds)
 | Model | Passed | 95% CP | Failure scores |
 |---|---|---|---|
-| shipped `model.js` (`runs/v2-h32x32-1m`, gen 970) | **72/75** | 0.888–0.992 | 655, 531 (early); 991,514 (late) |
+| shipped `model.js` (`runs/v2-es-d2w32-s1-t1m`, gen 970) | **72/75** | 0.888–0.992 | 655, 531 (early); 991,514 (late) |
 | hygiene s3 (`/Users/kyle/Desktop/dino-game-d2/runs/exp-hyg-s3-full`, best = gen 733, 12/12 validation) | **71/75** | 0.869–0.985 | 727, 585, 536, 603 (all early) |
 
 - These are statistically tied.

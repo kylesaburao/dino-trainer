@@ -8,7 +8,7 @@ Some of the work in it was still running at the snapshot time. Those items are m
 
 ## 0. Status in brief
 
-- The **shipped model is unchanged and still the best**: `runs/v2-h32x32-1m`, generation 970, 71/75 fresh held-out seeds.
+- The **shipped model is unchanged and still the best**: `runs/v2-es-d2w32-s1-t1m`, generation 970, 71/75 fresh held-out seeds.
 - **The tie-rate σ controller (HANDOFF §9 fix 1) failed** in 14 replay runs: σ runs away. It is being reverted.
 - **The stall rule is harmful** at wd 0.01: it skips 65–70% of steps and escaped 0 of 3 runs.
 - **Plateau escape is a seed lottery.** On 32,32 about a third of seeds escape by generation 900. This holds for the shipped defaults, for the hygiene flags (mid ranks + decoupled wd 0.01), and for wd 0.1. Tie handling doesn't change it.
@@ -77,7 +77,7 @@ Branch heads at the snapshot (`git fetch` first):
 The Mac is about 2.5× faster. Put long runs there.
 
 ### 3.2 Cross-architecture determinism: PASS
-desktop-1 replayed the shipped config (`--hidden 32,32 --target 1000000 --seed 1`, defaults, 800 generations) on x86. It matches the committed `runs/v2-h32x32-1m/metrics.jsonl` to 1e-9 in every field for all 800 generations. It does so again at `ee6995c`. The Mac's own control run also matches with 0 mismatches. **Results from either machine are interchangeable.**
+desktop-1 replayed the shipped config (`--hidden 32,32 --target 1000000 --seed 1`, defaults, 800 generations) on x86. It matches the committed `runs/v2-es-d2w32-s1-t1m/metrics.jsonl` to 1e-9 in every field for all 800 generations. It does so again at `ee6995c`. The Mac's own control run also matches with 0 mismatches. **Results from either machine are interchangeable.**
 
 ### 3.3 Decay check (HANDOFF §11 step 1)
 - Run A was resumed at generation 430 with `--weight-decay 0.01` for 6 minutes, in `runs/exp-A-wd001` on the Mac.

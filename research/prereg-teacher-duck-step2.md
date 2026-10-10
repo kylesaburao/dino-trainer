@@ -118,7 +118,7 @@ The observability probe, `research/scripts/prereg-teacher-duck-step2/conflicts.j
 - **H-unobservable:** the duck decision is not a function of `observe()`. Prediction: the conflict bars of §5.1 fail on the held-out demos. The premise probe argues against it.
 
 ## 5. Design
-**Run dirs.** One group, `runs/exp-bc-duck/`, with one arm per dir: `runs/exp-bc-duck/d<d>w<w>-s<seed>`. Demos go in `runs/exp-bc-duck/demos` and `runs/exp-bc-duck/heldout-demos`, the jump twin in `runs/exp-bc-duck/jump-d2w32-s2`, and scans in `runs/exp-bc-duck/scans/`. All runs nest one level down, and the dashboard shows them (§2.3).
+**Run dirs.** One group, `runs/exp-bc-duck/`, with one arm per dir: `runs/exp-bc-duck/d<d>w<w>-s<seed>`. Demos go in `runs/exp-bc-duck/v2-demos-duck-s1-40` and `runs/exp-bc-duck/v2-demos-duck-s41-60`, the jump twin in `runs/exp-bc-duck/v2-bc-jump-d2w32-s2`, and scans in `runs/exp-bc-duck/scans/`. All runs nest one level down, and the dashboard shows them (§2.3).
 
 **Environment.** Every command runs from the main checkout at the recorded commit, with:
 - `PYTHON=/Users/kyle/Desktop/dino-game/.venv/bin/python`;
@@ -135,15 +135,15 @@ The observability probe, `research/scripts/prereg-teacher-duck-step2/conflicts.j
 - `test/bc.test.js` (`6ef29c2`) already pins the jump sha and the 1-epoch params. The two checks above repeat it at full scale and take seconds.
 
 ### 5.1 Demos and the observability gate (static; no training)
-1. **Training demos:** `bc-gen --teacher duck --dir runs/exp-bc-duck/demos` with the defaults (seeds 1–40, default levels). Report:
+1. **Training demos:** `bc-gen --teacher duck --dir runs/exp-bc-duck/v2-demos-duck-s1-40` with the defaults (seeds 1–40, default levels). Report:
    - rows and weighted counts per class;
    - duck share and the duck/jump ratio;
    - the sha256.
 
    **C-duck-rows:** the rows are expected to be **byte-identical** to the premise probe's (sha256 `363872f61a785729820c3729eda3c6261a91b19fc32598baf620679ee0149ea7`, 2,062,427 rows), because the probe re-implements `bc-gen`'s row rule. A mismatch is not fatal by itself, but nothing is trained until it is explained, for example by a different label rule or boring rule.
-2. **Held-out demos:** `bc-gen --teacher duck --seeds 41-60 --dir runs/exp-bc-duck/heldout-demos`. These are disjoint from the training demos, and they are the sweep's held-out range (`research/bc-sweep-report.md` §1). **No probe has seen them.** The jump-generation held-out demos for the same seeds are at `runs/exp-bc-sweep/heldout-demos`, and they form the baseline.
+2. **Held-out demos:** `bc-gen --teacher duck --seeds 41-60 --dir runs/exp-bc-duck/v2-demos-duck-s41-60`. These are disjoint from the training demos, and they are the sweep's held-out range (`research/bc-sweep-report.md` §1). **No probe has seen them.** The jump-generation held-out demos for the same seeds are at `runs/exp-bc-sweep/heldout-demos`, and they form the baseline.
 3. **Observability gate, on the held-out demos only:**
-   - `node research/scripts/prereg-teacher-duck-step2/conflicts.js --demos runs/exp-bc-duck/heldout-demos --grid 1e-3`;
+   - `node research/scripts/prereg-teacher-duck-step2/conflicts.js --demos runs/exp-bc-duck/v2-demos-duck-s41-60 --grid 1e-3`;
    - the same with `--grid 1e-2`;
    - the mask control `--mask 7,14,15,16,20,27,28,29,33,40,41,42` (box y and the height one-hot of all three slots) at 1e-3;
    - the baseline: the same commands on `runs/exp-bc-sweep/heldout-demos` (teacher-jump, seeds 41–60).
@@ -156,13 +156,13 @@ The observability probe, `research/scripts/prereg-teacher-duck-step2/conflicts.j
 
    The 1e-2 grid is reported, not barred. It merges cells about 6 px wide, so it overstates conflicts. The same statistics on the training demos (seeds 1–40) are reported descriptively, not as a gate.
 4. **Fallback visibility (only if step 1's survey reports fallbacks > 0):** a replay probe, written then and registered as an amendment before it runs. For each fallback, it records whether the blocking obstacle was on screen (x < W) at the decision frame. A fallback blocked only by off-screen obstacles is by construction not learnable from `observe()`. Report the share. If it exceeds 10 % of fallbacks, record it as a known ceiling on duck share, not as a student failure. If step 1 reports 0 fallbacks, this item is void.
-5. **Fallback coverage (from step 1, before any scan):** convert step 1's counts into expected untrained states per tier-B scan: fallbacks per full game, by `fallbackWhy` reason, × 1,000 games. Measured: 8,176 duckable pterodactyls in one full teacher game (seed 30,003,000, `duckshare.js`). So even a 0.1 % fallback share means about 8 per game, or about 8,000 per scan. Count the fallbacks in `runs/exp-bc-duck/demos` too (premise: 0). Record both numbers before the scans run, so that §7's fallback row is read against a fixed expectation. Whether to add demos that contain fallbacks is **decided after step 1** (§11).
+5. **Fallback coverage (from step 1, before any scan):** convert step 1's counts into expected untrained states per tier-B scan: fallbacks per full game, by `fallbackWhy` reason, × 1,000 games. Measured: 8,176 duckable pterodactyls in one full teacher game (seed 30,003,000, `duckshare.js`). So even a 0.1 % fallback share means about 8 per game, or about 8,000 per scan. Count the fallbacks in `runs/exp-bc-duck/v2-demos-duck-s1-40` too (premise: 0). Record both numbers before the scans run, so that §7's fallback row is read against a fixed expectation. Whether to add demos that contain fallbacks is **decided after step 1** (§11).
 6. **Release timing (descriptive):** report the none/duck pair in the `ducking` split (release frames; premise value 0.48 %). Also report the distribution of the slot-1 obstacle's x feature on release frames, against the 0.03 offset (§3).
 
 ### 5.2 Clones
 | Arm | Shape | Seeds | Why | Jump-generation twin: same shape and seed, `runs/exp-bc-sweep/` (tier B on seeds 30,003,000–30,003,999) |
 |---|---|---|---|---|
-| **A** | d2-w32 (44-32-32-3, the shipped shape) | 1, 2 | shipped shape | `d2-w32-s1` (0/1,000); s2: **new twin** `runs/exp-bc-duck/jump-d2w32-s2` (below) |
+| **A** | d2-w32 (44-32-32-3, the shipped shape) | 1, 2 | shipped shape | `d2-w32-s1` (0/1,000); s2: **new twin** `runs/exp-bc-duck/v2-bc-jump-d2w32-s2` (below) |
 | **B** | d2-w8 (44-8-8-3) | 1, 2 | the small arm: 0/1,000 on both seeds | `d2-w8-s1`, `d2-w8-s2` (each 0/1,000) |
 | **C** | d1-w8 (44-8-3) | 1, 2 | the smallest shape in the grid, 0/1,000 on both seeds; jump s1 margin already CSS-flagged | `d1-w8-s1`, `d1-w8-s2` (each 0/1,000) |
 
@@ -170,12 +170,12 @@ The observability probe, `research/scripts/prereg-teacher-duck-step2/conflicts.j
 - **Excluded shapes:** d8-w8 s1 scored 2/1,000 (seeds 30,003,071 at 47 points and 30,003,596 at 70), and d4-w8 s2 stopped after 360 games.
 - I checked the twins' scan files directly (`runs/exp-bc-sweep/scans/*.jsonl`): each header has `base: 30003000`, `n: 1000`, with 1,000 seed rows and a footer. `runs/exp-bc-sweep/summary.json` is stale for tier B and is not used.
 
-**Training.** `bc-train --backend python --hidden <h> --seed <s> --demos runs/exp-bc-duck/demos --snapshots --wasm --dir runs/exp-bc-duck/d<d>w<w>-s<s>`:
+**Training.** `bc-train --backend python --hidden <h> --seed <s> --demos runs/exp-bc-duck/v2-demos-duck-s1-40 --snapshots --wasm --dir runs/exp-bc-duck/d<d>w<w>-s<s>`:
 - the shipped hyperparameters (15 epochs, batch 1024, lr 2e-3);
 - the default class weights;
 - `--snapshots`, so that held-out agreement can be computed per epoch as in the sweep. It does not change training (`research/bc-sweep-report.md` §2).
 
-**Jump twin for A-s2:** `bc-train --backend python --seed 2 --hidden 32,32 --demos runs/exp-bc-e2e --snapshots --wasm --dir runs/exp-bc-duck/jump-d2w32-s2`, then a scan like the others.
+**Jump twin for A-s2:** `bc-train --backend python --seed 2 --hidden 32,32 --demos runs/exp-bc-e2e --snapshots --wasm --dir runs/exp-bc-duck/v2-bc-jump-d2w32-s2`, then a scan like the others.
 
 ### 5.3 Evaluation (paired with the jump generation)
 For each duck clone, and for the jump twin where marked:
@@ -189,7 +189,7 @@ For each duck clone, and for the jump twin where marked:
    - Contiguity check, as in the `prereg-bc-pipeline-e2e.md` Results: 1,000 seed rows, contiguous, footer present.
 3. **Duck recall:**
    - train-set `recall.duck` from `bc-metrics.jsonl`;
-   - **held-out** weighted agreement and per-class recall on `runs/exp-bc-duck/heldout-demos`, per epoch snapshot, with `research/scripts/prereg-bc-sweep/agreement.py`. It now reports `recallDuck`, plus `duckPredShare`: the weighted share of true-duck rows predicted none, jump or duck. The extra keys appear only when the demos contain label 2.
+   - **held-out** weighted agreement and per-class recall on `runs/exp-bc-duck/v2-demos-duck-s41-60`, per epoch snapshot, with `research/scripts/prereg-bc-sweep/agreement.py`. It now reports `recallDuck`, plus `duckPredShare`: the weighted share of true-duck rows predicted none, jump or duck. The extra keys appear only when the demos contain label 2.
 
    Sanity check on this commit: the jump clone d2-w8-s1's epoch-15 snapshot, on the premise demos, gives recallDuck 0 and duckPredShare [0, 1, 0], meaning it jumps every duck frame.
 4. **Duck share in play:** `node research/scripts/prereg-teacher-duck-step2/duckshare.js --model <arm>/best.json --base 30003000 --n 10 --out runs/exp-bc-duck/duckshare/<arm>.json`, and once with `--teacher duck` as the reference. It uses the first 10 tier-B seeds, full games to 1M, and the `policy.js` `createAgent` JS forward pass.
@@ -327,7 +327,7 @@ For each duck clone, and for the jump twin where marked:
 - **Tier-B seeds are not held out. Nothing here is a certification.**
 - **Shipping is out of scope.** It would need, in order:
   1. the user's approval;
-  2. certification on fresh held-out offsets, paired with the shipped jump-generation clone. **The next fresh offset is 325** (325–474 for 150 seeds). The sweep spent none (`research/bc-sweep-report.md` §6), and `runs/bc-v2-h32x32/evals.jsonl` ends at offsets 175–324;
+  2. certification on fresh held-out offsets, paired with the shipped jump-generation clone. **The next fresh offset is 325** (325–474 for 150 seeds). The sweep spent none (`research/bc-sweep-report.md` §6), and `runs/v2-bc-jump-d2w32-s1/evals.jsonl` ends at offsets 175–324;
   3. `export-css` and `test/browser-check.js` with 0 CSS/JS disagreements;
   4. an AGENTS.md decision-log entry.
 - **Never** `session`, `finish` or `--auto-export`, and never write the root `model.js`/`model.css` in this step.
@@ -362,11 +362,11 @@ All met: step 1 passed (0/5,000 crashes, fallback 0/41,372,227, `5fd8248`); `6ef
 | C-duck-rows | `bc-gen --teacher duck`: 2,062,427 rows, sha256 `363872f61a785729820c3729eda3c6261a91b19fc32598baf620679ee0149ea7`, identical to the premise probe |
 
 ### §5.1 demos and the observability gate
-- **Training demos** (`runs/exp-bc-duck/demos`, seeds 1–40):
+- **Training demos** (`runs/exp-bc-duck/v2-demos-duck-s1-40`, seeds 1–40):
   - rows: none 1,817,370, jump 203,379, duck 41,678;
   - weighted: 1,924,245 / 203,379 / 41,678; weighted duck share 1.921 %, duck/jump 0.205;
   - teacher crashes 0; fallbacks 0 of 7,244 mid pterodactyls (`duckdemo-premise.js` on the same rows).
-- **Held-out demos** (`runs/exp-bc-duck/heldout-demos`, seeds 41–60):
+- **Held-out demos** (`runs/exp-bc-duck/v2-demos-duck-s41-60`, seeds 41–60):
   - 1,031,320 rows: none 908,229, jump 101,876, duck 21,215; weighted none 961,545;
   - weighted duck share 1.956 %; sha256 `814c0686107f9a5933a668a56260adac908b171cf37528c3d3bbb749297ae4ea`;
   - the jump-generation baseline is `runs/exp-bc-sweep/heldout-demos` (sha `dcf49f2f…`).

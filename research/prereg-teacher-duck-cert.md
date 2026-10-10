@@ -11,9 +11,9 @@ Arm choice (the orchestrator's): d2w8 (arm B of step 2), both training seeds. St
 ## 2. Arms (all on the same seeds, so the comparison is paired)
 | Arm | Run dir | Shape | Teacher | Step-2 evidence (not held out) |
 |---|---|---|---|---|
-| duck s1 | `runs/exp-bc-duck/d2w8-s1` | 44-8-8-3 | duck | tier A 25/25, tier B 0/1,000, duck share 1.000, min margin 5.61e-4 |
-| duck s2 | `runs/exp-bc-duck/d2w8-s2` | 44-8-8-3 | duck | tier A 25/25, tier B 0/1,000, duck share 1.000, min margin 3.58e-4 |
-| jump (control) | `runs/bc-v2-h32x32` (shipped) | 44-32-32-3 | jump | 150/150 on offsets 175–324, 25/25 on 0–24 |
+| duck s1 | `runs/exp-bc-duck/v2-bc-duck-d2w8-s1` | 44-8-8-3 | duck | tier A 25/25, tier B 0/1,000, duck share 1.000, min margin 5.61e-4 |
+| duck s2 | `runs/exp-bc-duck/v2-bc-duck-d2w8-s2` | 44-8-8-3 | duck | tier A 25/25, tier B 0/1,000, duck share 1.000, min margin 3.58e-4 |
+| jump (control) | `runs/v2-bc-jump-d2w32-s1` (shipped) | 44-32-32-3 | jump | 150/150 on offsets 175–324, 25/25 on 0–24 |
 
 All three `best.json` have `gameVersion` v2, target 1,000,000, and core hash `0f329d4e3493…`, equal to the current `coreHash()` (checked before registration).
 
@@ -39,7 +39,7 @@ Order: duck s1, duck s2, jump. `eval` appends one record to `<run>/evals.jsonl`;
 ## 4. CSS gate
 For each duck arm that passes 150/150, run the decision log's browser check on that model. `test/browser-check.js` has no option to point it at another model (its header and code read the root `model.js`/`model.css` via `path.join(__dirname, '..')`), so:
 1. verify with `node -e` that `trainer/store.js` `ROOT` resolves to this worktree (checked before registration: `/Users/kyle/Desktop/dino-game/.claude/worktrees/agent-aceb6b8ae5aa15fef`);
-2. `node trainer/cli.js export --dir runs/exp-bc-duck/d2w8-s<k> --which best` (writes `model.js` and `model.css` in this worktree only);
+2. `node trainer/cli.js export --dir runs/exp-bc-duck/v2-bc-duck-d2w8-s<k> --which best` (writes `model.js` and `model.css` in this worktree only);
 3. `node test/browser-check.js` only. Not the test suite: `test/net.test.js` pins the shipped model and would fail by design;
 4. record the pass count N/38, the CSS agreement JSON (`frames`, `disagree`, `score`), and any non-CSS check that fails (reported separately from the gate);
 5. `git checkout -- model.js model.css`, then `git status` must show them clean. Then the next arm.
@@ -73,9 +73,9 @@ For each duck arm that passes 150/150, run the decision log's browser check on t
 ### Certification (offsets 325–474, 150 seeds, paired)
 | Arm | Run dir | Passed | 95 % CP pass rate (two-sided) | One-sided 95 % upper bound on failure | Failures | Min score | Wall |
 |---|---|---|---|---|---|---|---|
-| duck s1 (44-8-8-3) | `runs/exp-bc-duck/d2w8-s1` | **150/150** | 0.9757–1.000 | 1.98 % | none | 1,000,000 | 12.4 s |
-| duck s2 (44-8-8-3) | `runs/exp-bc-duck/d2w8-s2` | **150/150** | 0.9757–1.000 | 1.98 % | none | 1,000,000 | 13.4 s |
-| jump, shipped (44-32-32-3) | `runs/bc-v2-h32x32` | **150/150** | 0.9757–1.000 | 1.98 % | none | 1,000,000 | 26.0 s |
+| duck s1 (44-8-8-3) | `runs/exp-bc-duck/v2-bc-duck-d2w8-s1` | **150/150** | 0.9757–1.000 | 1.98 % | none | 1,000,000 | 12.4 s |
+| duck s2 (44-8-8-3) | `runs/exp-bc-duck/v2-bc-duck-d2w8-s2` | **150/150** | 0.9757–1.000 | 1.98 % | none | 1,000,000 | 13.4 s |
+| jump, shipped (44-32-32-3) | `runs/v2-bc-jump-d2w32-s1` | **150/150** | 0.9757–1.000 | 1.98 % | none | 1,000,000 | 26.0 s |
 
 **McNemar (exact, one-sided, H1 "the duck clone fails more"):**
 | Pair | b (only duck fails) | c (only jump fails) | Concordant failures | p |

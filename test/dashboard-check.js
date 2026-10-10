@@ -4,7 +4,7 @@
 // [--shots DIR]` (CHROME env var overrides the Chrome path).
 //
 // It builds a throwaway runs/ tree in the OS temp dir, so it depends only on committed
-// files (runs/v2-h32x32-1m, runs/bc-v2-h32x32):
+// files (runs/v2-es-d2w32-s1-t1m, runs/v2-bc-jump-d2w32-s1):
 //   es-run              ES run: best.json, metrics.jsonl, evals.jsonl
 //   grp/bc-run          nested BC run, training: train.lock (this pid), bc-metrics.jsonl with
 //                       none/jump/duck recall, snapshots/epoch-01..02.json, best.json, and
@@ -44,7 +44,7 @@ function check(name, ok, detail = '') {
 function buildFixture(dir) {
   const w = (f, s) => { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), s); };
   const src = (f) => fs.readFileSync(path.join(ROOT, f));
-  for (const f of ['best.json', 'metrics.jsonl', 'evals.jsonl']) w(`es-run/${f}`, src(`runs/v2-h32x32-1m/${f}`));
+  for (const f of ['best.json', 'metrics.jsonl', 'evals.jsonl']) w(`es-run/${f}`, src(`runs/v2-es-d2w32-s1-t1m/${f}`));
   fs.mkdirSync(path.join(dir, 'plain'));
 
   const demosFile = path.join(dir, 'grp', 'demos-set', 'demos.json');
@@ -56,7 +56,7 @@ function buildFixture(dir) {
   }));
   w(`grp/demos-set/demos.bin.${process.pid}.tmp`, '');
 
-  const best = JSON.parse(src('runs/bc-v2-h32x32/best.json'));
+  const best = JSON.parse(src('runs/v2-bc-jump-d2w32-s1/best.json'));
   best.config = { target: 1000000, hidden: [32, 32], actionRepeat: 1, gameVersion: 'v2', method: 'behaviour cloning of test/solver.js (supervised; no ES)',
     trainer: 'trainer/cli.js bc-train --backend python', backend: 'python', epochs: 3, batch: 1024, lr: 0.002, seed: 1,
     demos: demosFile, demosRows: 1000, trainSeconds: 6, snapshots: 'grp/bc-run/snapshots' };
@@ -65,7 +65,7 @@ function buildFixture(dir) {
     recall: { none: 0.99 + e * 0.004, jump: 0.98 + e * 0.01, duck: 0.9 + e * 0.05 }, seconds: 2 + e })).join('\n') + '\n');
   for (const e of [1, 2]) w(`grp/bc-run/snapshots/epoch-0${e}.json`, JSON.stringify({ layers: best.layers, params: best.params, epoch: e }));
   w('grp/bc-run/train.lock', JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }) + '\n');
-  const old = JSON.parse(src('runs/bc-v2-h32x32/best.json'));   // research-trained: no bc-metrics, no demos, no teacherName
+  const old = JSON.parse(src('runs/v2-bc-jump-d2w32-s1/best.json'));   // research-trained: no bc-metrics, no demos, no teacherName
   w('grp/bc-old/best.json', JSON.stringify(old));
   w('grp/bc-run.log', 'bc-train: dir=grp/bc-run backend=python layers=44-32-32-3 epochs 3\nepoch 0: loss 0.1000\nepoch 1: loss 0.0500\n');
 

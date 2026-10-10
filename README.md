@@ -41,7 +41,7 @@ This prints the pass rate with a 95% confidence interval.
 node trainer/cli.js export --dir runs/exp-bc-mine --which best   # writes model.js and model.css
 node test/browser-check.js                                      # headless Chrome check, including CSS/JS agreement
 ```
-`export`, `finish`, `session` and `--auto-export` all overwrite the shipped `model.js`/`model.css`. The shipped model is `runs/exp-bc-duck/d2w8-s1`; the previous jump-only clone is `runs/bc-v2-h32x32`. `node test/css-agreement.js --dir <run>` checks CSS/JS agreement through the duck phase for a candidate without touching the root files.
+`export`, `finish`, `session` and `--auto-export` all overwrite the shipped `model.js`/`model.css`. The shipped model is `runs/exp-bc-duck/v2-bc-duck-d2w8-s1`; the previous jump-only clone is `runs/v2-bc-jump-d2w32-s1`. `node test/css-agreement.js --dir <run>` checks CSS/JS agreement through the duck phase for a candidate without touching the root files.
 
 **Neuroevolution (research pipeline).** The OpenAI-ES trainer learns from the game score alone. It runs for hours, so start it detached:
 ```sh

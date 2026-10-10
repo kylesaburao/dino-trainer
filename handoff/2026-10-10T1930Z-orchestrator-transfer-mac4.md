@@ -58,7 +58,7 @@ Run these at the same time. They are independent until step 2 joins them.
 - **Held-out offsets:** the next fresh one is **325**, unless the sweep's certification rung spends 325–474; mac-3 will tell you.
 
 ## 2. State of main (`ccbb600`, pushed)
-- **Shipped model:** `runs/bc-v2-h32x32`, a jump-generation clone (44-32-32-3). It certified 150/150, and three clones scanned 0/2,000 each.
+- **Shipped model:** `runs/v2-bc-jump-d2w32-s1`, a jump-generation clone (44-32-32-3). It certified 150/150, and three clones scanned 0/2,000 each.
 - **BC pipeline:**
   - `bc-gen` → `bc-train --backend node|python [--snapshots]`;
   - validated end to end (`research/prereg-bc-pipeline-e2e.md`);

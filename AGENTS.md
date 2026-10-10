@@ -51,9 +51,9 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend pytho
 
 The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale. `runs/main` no longer exists. Pass both explicitly.
 
-- **Shipped model:** `runs/exp-bc-duck/d2w8-s1` (44-8-8-3, duck generation: jumps and ducks; since 2026-10-10, see the decision log).
-- **Previous shipped clone:** `runs/bc-v2-h32x32` (44-32-32-3, jump generation), kept for comparison.
-- **Previous ES model:** `runs/v2-h32x32-1m` (generation 970), kept for comparison.
+- **Shipped model:** `runs/exp-bc-duck/v2-bc-duck-d2w8-s1` (44-8-8-3, duck generation: jumps and ducks; since 2026-10-10, see the decision log).
+- **Previous shipped clone:** `runs/v2-bc-jump-d2w32-s1` (44-32-32-3, jump generation), kept for comparison.
+- **Previous ES model:** `runs/v2-es-d2w32-s1-t1m` (generation 970), kept for comparison.
 
 **`--auto-export`, `session` and `finish` overwrite the shipped `model.js` and `model.css`**, and from an ES run that would replace the shipped clone with a weaker model. Don't use them unless an ES model has beaten the shipped one on fresh held-out seeds and the user has approved replacing it. `browser-check.js` checks that `model.css` matches `model.js`; after you replace `model.js`, run `export-css`.
 
@@ -67,7 +67,7 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 | Teacher | `test/solver.js` (reads the hidden gap and the fairness lookahead) | none |
 | Inputs at play time | the 44 `observe()` features | the 44 `observe()` features |
 | Code | `trainer/bc.js` (demos, node backend, best.json), `trainer/bc_train.py` (numpy backend); `cli.js bc-gen` / `bc-train`. Prototype: `research/scripts/feature-sufficiency/` | `trainer/` |
-| Run dir | `runs/bc-v2-h32x32` (`best.json` records the method in `config`) | `runs/v2-h32x32-1m`, `runs/exp-*` |
+| Run dir | `runs/v2-bc-jump-d2w32-s1` (`best.json` records the method in `config`) | `runs/v2-es-d2w32-s1-t1m`, `runs/exp-*` |
 
 - The BC pipeline is `bc-gen` then `bc-train` (Commands above). The teacher is `test/solver.js`; demonstration features come only from `policy.observe`. Both backends run the same algorithm (a port of the prototype's `trainB.py`): the python backend reproduces the shipped clone's params exactly from the prototype's demos (`--seed 1`), and the node backend needs no dependencies but does not match it bit for bit.
 - `bc-gen` reproduces the prototype's rows (`cloneB.js gen`), except that the boring-frame counter now resets every episode, so a few down-weighted rows differ.
@@ -81,9 +81,11 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 | Model file format | **`dino-mlp-v1`** | `model.js`, `best.json` |
 | BC teacher | **`teacher-jump`** (`test/solver.js` `createSolver`, jump only) and **`teacher-duck`** (planned: ducks under mid pterodactyls) | `best.json` `config.teacherName` and demos manifest `teacherName`, stored as `jump` / `duck` (= `--teacher`) |
 | Project generation | named after its teacher: the **jump generation** (everything up to 2026-10-10: the shipped clone and the depth × width sweep) and the **duck generation** (`teacher-duck` and the clones trained on it) | docs, handoffs, register rows |
-| New BC run dirs | `runs/bc-<teacher>-d<depth>w<width>[-s<seed>]`, e.g. `runs/bc-duck-d2w32-s1`; experiments use `runs/exp-bc-<teacher>-...` | |
+| Game rules | (also) **rules v3**: superhuman past 100k, in progress on `wt/game-v3` | |
+| Run dirs (every model, any method) | **`runs/[<group>/]v<R>-<method>-[<teacher>-]d<depth>w<width>-s<seed>[-<tag>]`**. `v<R>` is the game rules the model was **trained for**, and always comes first. `<method>` is `bc` or `es` (later also `distill`, `quant`). Examples: `v2-bc-duck-d2w8-s1`, `v2-es-d2w32-s1-t1m`, `v3-bc-duck-d2w32-s1`. Demo dirs: `v<R>-demos-<teacher>-s<seeds>` | run dir names, `model.js` `source`, briefs, docs |
 
-- Existing run dirs keep their names, and their `v2` means rules v2. Examples: the shipped `runs/bc-v2-h32x32` (jump generation) and `runs/v2-h32x32-1m` (ES).
+- **A model is trained for one game-rules version.** The name prefix, `best.json` `gameVersion` and `model.js` `gameVersion` must agree. Evaluating a model on other rules (for example a v2 model on rules v3) is a cross-rules evaluation: say so explicitly ("v2 model on rules v3").
+- **Renamed 2026-10-10** (user order "rename all now"): `bc-v2-h32x32` → `v2-bc-jump-d2w32-s1`, `v2-h32x32-1m` → `v2-es-d2w32-s1-t1m`, `v2-h32x32` → `v2-es-d2w32-s1`, and `exp-bc-duck/<shape>-s<n>` → `exp-bc-duck/v2-bc-duck-<shape>-s<n>`, `exp-bc-duck/jump-d2w32-s2` → `exp-bc-duck/v2-bc-jump-d2w32-s2`, `exp-bc-duck/demos` → `exp-bc-duck/v2-demos-duck-s1-40`, `exp-bc-duck/heldout-demos` → `exp-bc-duck/v2-demos-duck-s41-60`. Gitignored local research dirs (for example `runs/exp-bc-sweep/*`) keep their old names because pre-registrations cite them; all of them are rules v2.
 - Avoid "T"-prefixed labels for teachers. "Type T/M" (ES stuck θs) and "T1/T2" (sweep agreement thresholds) already use them.
 
 **One source of game logic.** `core.js` is the DOM-free simulation, and the trainer, tests, browser and dashboard all run it.
@@ -183,9 +185,9 @@ Work as a methodical researcher. Don't try things to see what sticks.
 
 ## Decision log
 
-### 2026-10-10 (later): ship the duck-generation clone `runs/exp-bc-duck/d2w8-s1`
+### 2026-10-10 (later): ship the duck-generation clone `runs/exp-bc-duck/v2-bc-duck-d2w8-s1`
 
-**Decision.** `model.js` and `model.css` now hold `runs/exp-bc-duck/d2w8-s1/best.json`: a 44-8-8-3 clone of `teacher-duck` (`createDuckSolver`). It jumps cacti and low pterodactyls, ducks under mid ones, and stays grounded under high ones. The user approved it ("Ship d2w8-s1").
+**Decision.** `model.js` and `model.css` now hold `runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json`: a 44-8-8-3 clone of `teacher-duck` (`createDuckSolver`). It jumps cacti and low pterodactyls, ducks under mid ones, and stays grounded under high ones. The user approved it ("Ship d2w8-s1").
 
 **Evidence.**
 - Step 1, `research/prereg-teacher-duck.md`: the duck solver crashed 0 times in 5,000 full games, with 0 fallbacks.
@@ -195,11 +197,11 @@ Work as a methodical researcher. Don't try things to see what sticks.
 
 **Caveat.** At d2w32, one of two seeds got stuck ducking (204/1,000). How often that happens is being measured in `research/prereg-teacher-duck-stuck.md`. The shipped 2×8 model is certified, but retraining it should be screened.
 
-**Reversibility.** Run `node trainer/cli.js export --dir runs/bc-v2-h32x32 --which best`, then the browser check.
+**Reversibility.** Run `node trainer/cli.js export --dir runs/v2-bc-jump-d2w32-s1 --which best`, then the browser check.
 
 ### 2026-10-10: ship a behaviour clone of the solver instead of the ES model
 
-**Problem.** The goal is an AI that reliably reaches 1,000,000 points in v2. The shipped ES model (`runs/v2-h32x32-1m`, generation 970) passed 72/75 fresh held-out games on offsets 100–174. Its failures were early, at 460–740 points (the first pterodactyls), plus a rare late crash near 994k. A day of ES work (σ control, tie handling, curricula, seed racing) produced no model better than it. Pure ES reaches the second wall slowly or not at all on most seeds. The open question was whether the 44 inputs were the limit, or the training method was.
+**Problem.** The goal is an AI that reliably reaches 1,000,000 points in v2. The shipped ES model (`runs/v2-es-d2w32-s1-t1m`, generation 970) passed 72/75 fresh held-out games on offsets 100–174. Its failures were early, at 460–740 points (the first pterodactyls), plus a rare late crash near 994k. A day of ES work (σ control, tie handling, curricula, seed racing) produced no model better than it. Pure ES reaches the second wall slowly or not at all on most seeds. The open question was whether the 44 inputs were the limit, or the training method was.
 
 **Constraints at the time.**
 - `policy.js` observations and the anti-cheat rules were fixed. The model may not observe hidden state.
@@ -208,7 +210,7 @@ Work as a methodical researcher. Don't try things to see what sticks.
 
 **Evidence.**
 - `research/feature-sufficiency.md`, probe B: MLPs trained by supervised learning on 2.1M frames of solver demonstrations, using only the unchanged 44 features, played 352 full games to 1M with 0 crashes. This included 44-8-8-3 networks.
-- Paired certification on fresh held-out offsets 175–324 (150 seeds, target 1M, v2, core hash `0f329d4e…`), using `node trainer/cli.js eval --model <m> --target 1000000 --seed-offset 175 --seeds 150`. Raw output is in `runs/exp-bc-clones/cert-175-324-*.txt` (gitignored); the clone's record is in `runs/bc-v2-h32x32/evals.jsonl`.
+- Paired certification on fresh held-out offsets 175–324 (150 seeds, target 1M, v2, core hash `0f329d4e…`), using `node trainer/cli.js eval --model <m> --target 1000000 --seed-offset 175 --seeds 150`. Raw output is in `runs/exp-bc-clones/cert-175-324-*.txt` (gitignored); the clone's record is in `runs/v2-bc-jump-d2w32-s1/evals.jsonl`.
 
   | Model | Passed | 95% CP | Failures |
   |---|---|---|---|
@@ -227,9 +229,9 @@ Work as a methodical researcher. Don't try things to see what sticks.
 - *Use the clone only as an ES starting point, then fine-tune with ES.* Not needed for shipping, because the clone is already at the certification ceiling. It stays available if a future change, such as a new game version, needs a polished policy.
 - *Ship the clone (chosen).* The user approved this on 2026-10-10 ("Shipping the clone is allowed"). Their earlier question was whether learning from the solver's privileged labels contaminates training. The answer: it doesn't. The evaluation seeds are disjoint from the demonstration seeds (below 1e6 against at least 2^31), and the model observes only the allowed features. It is the standard privileged-teacher, or "learning by cheating", setup.
 
-**Decision.** `model.js` and `model.css` now hold `runs/bc-v2-h32x32/best.json`: a 44-32-32-3 behaviour clone of `test/solver.js` (variant `base`, `trainB.py` with SEED=1). The ES trainer remains the research pipeline. The project's claim changes from "neuroevolution-trained" to "distilled from an exact solver, on legal inputs".
+**Decision.** `model.js` and `model.css` now hold `runs/v2-bc-jump-d2w32-s1/best.json`: a 44-32-32-3 behaviour clone of `test/solver.js` (variant `base`, `trainB.py` with SEED=1). The ES trainer remains the research pipeline. The project's claim changes from "neuroevolution-trained" to "distilled from an exact solver, on legal inputs".
 
-**Reversibility.** Cheap to reverse. Run `node trainer/cli.js export --dir runs/v2-h32x32-1m --which best`, which also writes `model.css`, then run the browser check. The model format, the inputs and the game are unchanged. The clone's HI key and game version are the same as before.
+**Reversibility.** Cheap to reverse. Run `node trainer/cli.js export --dir runs/v2-es-d2w32-s1-t1m --which best`, which also writes `model.css`, then run the browser check. The model format, the inputs and the game are unchanged. The clone's HI key and game version are the same as before.
 
 **What would change this.**
 - An ES model, or an ES-fine-tuned clone, beats the shipped clone on ≥ 150 fresh held-out seeds.

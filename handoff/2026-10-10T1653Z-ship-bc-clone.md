@@ -9,7 +9,7 @@ Read after `handoff/2026-10-10T1626Z-orchestrator-transfer.md` and the retrospec
 ## 2. What changed on main
 - `wt/wasm` was merged (`cdf6e53`). desktop-2's x86 checks were all IDENTICAL, with a 1.65–1.70× speed-up. The Mac browser check passed 38/38. `--wasm` is now in the AGENTS.md flag map.
 - Research note 8, `research/validation-selection.md`, was merged. Selection bias is real, but fixing it gains only about 0.4 points of pass rate. Designs A–E are described there, not implemented.
-- **Ship:** `model.js` and `model.css` now hold `runs/bc-v2-h32x32/best.json`, the clone `m_base_s1`, 44-32-32-3. `runs/bc-v2-h32x32/evals.jsonl` holds the 150-seed certification and the standard 25-seed eval.
+- **Ship:** `model.js` and `model.css` now hold `runs/v2-bc-jump-d2w32-s1/best.json`, the clone `m_base_s1`, 44-32-32-3. `runs/v2-bc-jump-d2w32-s1/evals.jsonl` holds the 150-seed certification and the standard 25-seed eval.
 
 ## 3. Certification (pre-registered in `runs/exp-bc-clones/PREREG-cert-175-324.md`)
 | Model | Offsets 175–324 |

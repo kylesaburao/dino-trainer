@@ -81,7 +81,7 @@ Three seed sets, all disjoint from training, from `env.js`: screen S (validation
 All flags are described only; none is implemented. Each defaults so that trainer output is bit-identical to today (checked with `node test/bit-identity.js <old> <new>`; the core hash is untouched because only `trainer/` changes).
 
 **Premise checks first (seconds-scale, no trainer):**
-1. From `runs/v2-h32x32-1m/metrics.*`, tabulate per-generation validation counts in the last 300 generations: fraction of generations at 36/36, and lag-1 autocorrelation of the counts. Tests point 1 of section 1: if counts are strongly autocorrelated and range widely, jitter is real theta movement (supports EMA); if they hover near 33-36 with little autocorrelation, they are sampling noise (supports confirm stage).
+1. From `runs/v2-es-d2w32-s1-t1m/metrics.*`, tabulate per-generation validation counts in the last 300 generations: fraction of generations at 36/36, and lag-1 autocorrelation of the counts. Tests point 1 of section 1: if counts are strongly autocorrelated and range widely, jitter is real theta movement (supports EMA); if they hover near 33-36 with little autocorrelation, they are sampling noise (supports confirm stage).
 2. Replay 2-3 saved thetas (best.json at different generations if available) on 100 fresh validation-range seeds; report counts and discordant pairs (gives rho and d for section 4B). If a decisive test cannot be run because only one theta exists, the pool design needs the checkpoint-dump flag first (see B).
 
 **A. `--val-confirm K:N` (default off).**

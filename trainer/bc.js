@@ -464,7 +464,7 @@ function trainPython(binFile, outFile, o, root, onLine = () => {}) {
 }
 
 // ---------------------------------------------------------------------------
-// best.json (Node owns the schema; same as ES runs and runs/bc-v2-h32x32)
+// best.json (Node owns the schema; same as ES runs and runs/v2-bc-jump-d2w32-s1)
 // ---------------------------------------------------------------------------
 function assembleBest({ layers, params, validation, coreHash, config }) {
   return {

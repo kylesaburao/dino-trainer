@@ -35,10 +35,10 @@ For the Node vs Python question, one more hypothesis:
 
   The scan uses **seeds 30,000,000–30,001,999**. They are in the ES training range, which is irrelevant to a supervised clone. They spend no held-out offsets (the next is still 325) and overlap no demonstrations.
 - **Models exist:**
-  - shipped `runs/bc-v2-h32x32/best.json` (Python, SEED=1);
+  - shipped `runs/v2-bc-jump-d2w32-s1/best.json` (Python, SEED=1);
   - replicate `runs/exp-bc-clones/model_base_s2.json` (Python, SEED=2);
   - Node clone `/Users/kyle/Desktop/dino-game-bc/runs/exp-bc-repro/node-s1/best.json` (control (c); 25/25 validation; trained on the same converted demos);
-  - ES gen 970 `runs/v2-h32x32-1m/best.json`.
+  - ES gen 970 `runs/v2-es-d2w32-s1-t1m/best.json`.
 - **The solver is deterministic and its crashes are observable** (`bc-gen` counts them; 0 so far). It is replayed only on seeds where a clone failed.
 
 ## 4. Design
@@ -97,7 +97,7 @@ C1 alone carries the shipped claim. If C1 = 0 and C2 > 0 (or the reverse), the r
 
 Run exactly in the §4 order: P → STOP check → C1 → N1 → C2 → S + oracle trace. Scripts: `research/scripts/prereg-bc-robustness/` (`scan.js` runner on the trainer's worker pool, the same job path as `eval`; `diag.js` per-failure diagnosis, arm S and oracle trace; `analyze.js` statistics). Raw per-seed scores, logs and diagnosis JSON: `runs/exp-bc-robust/` (gitignored). Core hash `0f329d4e3493…` asserted by the runner. 18 workers, `--wasm`.
 
-**Models checked before running** (all `dino-mlp-v1`, layers 44-32-32-3, `gameVersion` v2, `actionRepeat` 1, four distinct parameter vectors): C1 `runs/bc-v2-h32x32/best.json` (identical params to the shipped `model.js`); C2 `runs/exp-bc-clones/model_base_s2.json`; N1 `runs/exp-bc-robust/node-s1.json` (sha1 `490e5b6d…`, byte-identical copy of `dino-game-bc/runs/exp-bc-repro/node-s1/best.json`); P `runs/v2-h32x32-1m/best.json` (generation 970).
+**Models checked before running** (all `dino-mlp-v1`, layers 44-32-32-3, `gameVersion` v2, `actionRepeat` 1, four distinct parameter vectors): C1 `runs/v2-bc-jump-d2w32-s1/best.json` (identical params to the shipped `model.js`); C2 `runs/exp-bc-clones/model_base_s2.json`; N1 `runs/exp-bc-robust/node-s1.json` (sha1 `490e5b6d…`, byte-identical copy of `dino-game-bc/runs/exp-bc-repro/node-s1/best.json`); P `runs/v2-es-d2w32-s1-t1m/best.json` (generation 970).
 
 ### Per-arm failure counts (seeds 30,000,000 + 0..N−1, v2, full games 0 → 1,000,000)
 

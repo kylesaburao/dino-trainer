@@ -304,7 +304,7 @@ Reading:
 - **Core hash:** `trainer/store.js coreHash()` hashes `core.js` and `policy.js`. Any edit to `observe()`, or
   `OBS_DIM`, invalidates every checkpoint, so `--resume` needs `--force`. And `--force` is only valid when
   decisions are provably unchanged, which a new feature never satisfies. Every run, including the shipped
-  `runs/v2-h32x32-1m`, would need fresh training.
+  `runs/v2-es-d2w32-s1-t1m`, would need fresh training.
 - **Model shape:** `createAgent` rejects a model whose `layers[0] !== OBS_DIM`. The shipped `model.js` (44
   inputs) stops loading until it is retrained and re-exported.
 - **CSS network:** the input names are generic (`trainer/css-model.js` loops over `layers[0]`; `css-nn.js`

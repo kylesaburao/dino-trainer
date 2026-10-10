@@ -27,7 +27,7 @@ Read in order:
    - rm only on literal paths.
 
 ## 2. State of main (pushed, `1ba7231`)
-- **Shipped model:** `runs/bc-v2-h32x32` (44-32-32-3 clone of `test/solver.js`). It passed 150/150 on fresh held-out offsets 175–324, against 143/150 for the ES model (McNemar p = 0.008). **The next fresh held-out offset is 325.**
+- **Shipped model:** `runs/v2-bc-jump-d2w32-s1` (44-32-32-3 clone of `test/solver.js`). It passed 150/150 on fresh held-out offsets 175–324, against 143/150 for the ES model (McNemar p = 0.008). **The next fresh held-out offset is 325.**
 - **Merged this session:**
   - `--wasm` (1.65–1.7×, bit-identical on arm64 and x86);
   - research note 8 (`research/validation-selection.md`);
