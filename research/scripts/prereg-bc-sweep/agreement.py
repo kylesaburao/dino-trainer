@@ -5,7 +5,8 @@ policy.createNet flat layout: per layer, nOut x nIn row-major weights, then nOut
 evaluates the tanh MLP in float64 (as policy.js does) on the held-out demos (bc-gen seeds
 41-60: float32 rows [44 features, label, weight]) and writes <dir>/agreement.json:
   per epoch: agreement = sum(w * [argmax == label]) / sum(w), and the weighted recall of
-  "none" (label 0) and "jump" (label 1); plus the final epoch's predictions on a fixed
+  "none" (label 0) and "jump" (label 1), and, when the demos hold duck rows (label 2,
+  teacher-duck), recallDuck and duckPredShare (research/prereg-teacher-duck-step2.md); plus the final epoch's predictions on a fixed
   spot-check subset (every STRIDE-th row) for spot-check.js (policy.js argmax).
 argmax takes the first index on ties, like policy.js.
 Usage: python agreement.py <heldout demos.bin> <run dir> [<run dir> ...]
@@ -21,6 +22,7 @@ y = D[:, OBS].astype(np.int64)
 w = D[:, OBS + 1].astype(np.float64)
 del D
 spot = np.arange(0, len(y), STRIDE)
+HAS_DUCK = bool((y == 2).any())
 
 
 def unflatten(layers, params):
@@ -54,8 +56,14 @@ for run in sys.argv[2:]:
         pred = np.concatenate([predict(Ws, bs, X[i:i + CHUNK]) for i in range(0, len(y), CHUNK)])
         hit = (pred == y)
         rec = {c: float((w * (hit & (y == c))).sum() / (w * (y == c)).sum()) for c in (0, 1)}
-        out['epochs'].append(dict(epoch=s['epoch'], agreement=float((w * hit).sum() / w.sum()), recallNone=rec[0], recallJump=rec[1],
-                                  unweighted=float(hit.mean()), predCounts=[int((pred == c).sum()) for c in range(3)]))
+        row = dict(epoch=s['epoch'], agreement=float((w * hit).sum() / w.sum()), recallNone=rec[0], recallJump=rec[1],
+                   unweighted=float(hit.mean()), predCounts=[int((pred == c).sum()) for c in range(3)])
+        if HAS_DUCK:  # teacher-duck demos (label 2); keys absent for jump demos, so old outputs are unchanged
+            dm = (y == 2)
+            row['recallDuck'] = float((w * (hit & dm)).sum() / (w * dm).sum())
+            # weighted share of true-duck rows predicted none / jump / duck
+            row['duckPredShare'] = [float((w * (dm & (pred == c))).sum() / (w * dm).sum()) for c in range(3)]
+        out['epochs'].append(row)
         out['layers'] = s['layers']
         final_pred = pred
     if final_pred is not None:

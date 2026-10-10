@@ -16,17 +16,41 @@
 //      defined solver answer and are counted as 'undefined', not compared;
 //   5. drift: the solver's own trajectory on the same seed is recorded per frame (dino
 //      y/ducking, obstacle-list hash) and compared frame-aligned to the model's.
+// --teacher jump|duck (default jump: output identical to the original script). With duck
+// (research/prereg-teacher-duck-step2.md §5.3 step 6), the reference for steps 3-5 is
+// test/solver.js createDuckSolver, and each record gains a `duck` block:
+//   - the shadow's private state is `hold` (as createSolver) plus its per-obstacle duck/jump
+//     plan, which it forms on the model's own trajectory at the frame its jump would take
+//     off. Ground answers are therefore the duck teacher's answers given the model's history,
+//     not a replay of its own game; airborne validity is handled as above;
+//   - fallbackFrames: frames where the shadow fell back from a duck to a jump (with reason);
+//     fallbackInNearWindow marks a teacher-fallback situation near the crash (class v);
+//   - downAirFrames (model DOWN while airborne = fast-drop; the teacher never does), total
+//     and inside the near-fatal window;
+//   - classHint, a fixed heuristic to be reviewed by hand, in this order:
+//       (iii) down-airborne         model DOWN while airborne inside the near-fatal window
+//       (v)   teacher-fallback       the shadow fell back inside the near-fatal window
+//       (ii)  duck-through-takeoff   last effective disagreement: model duck, teacher jump
+//       (iv)  late-release           crashed while ducking, into a non-mid obstacle, after
+//                                    ducking a mid pterodactyl in the same duck
+//       (i)   false-down             crashed while ducking, no mid pterodactyl in that duck
+//             under-duck             killed by a mid pterodactyl the teacher would duck
+//             jump-type              none of the above
 // Usage: node diag.js --arm C1 --scan <C1.jsonl> --model <best.json> --out <diag-C1.json>
-//          [--seeds a,b,c] (default: every failing seed in --scan)
+//          [--seeds a,b,c] (default: every failing seed in --scan) [--teacher jump|duck]
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.join(__dirname, '..', '..', '..');
 const { createRng, createGame, standBox, obstacleBox, GROUND, DUCK_H, CFG } = require(path.join(ROOT, 'core.js'));
 const { createAgent } = require(path.join(ROOT, 'policy.js'));
-const { createSolver } = require(path.join(ROOT, 'test', 'solver.js'));
+const solvers = require(path.join(ROOT, 'test', 'solver.js'));
 
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; };
+const TEACHER = opt('--teacher', 'jump');
+if (TEACHER !== 'jump' && TEACHER !== 'duck') throw new Error(`--teacher must be jump or duck, got ${TEACHER}`);
+const DUCK = TEACHER === 'duck';
+const createSolver = DUCK ? solvers.createDuckSolver : solvers.createSolver;
 const ARM = opt('--arm');
 const lines = fs.readFileSync(path.resolve(opt('--scan')), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
 const header = lines.find(l => l.header);
@@ -76,13 +100,32 @@ function diagnose(seed) {
   const dis = [];                 // disagreements
   let undefinedAir = 0, jumpValid = true, wasDucking = false, lastAir = -Infinity, frame = 0;
   const firstSeen = new Map();    // obstacle -> first frame with x < 600 (observable)
+  const fallbackFrames = [], downAir = [];
+  let duckedMid = false;          // the current duck has passed over a mid pterodactyl
+  const stand0 = standBox(game.dino.y);
   do {
+    if (DUCK) {
+      if (!game.dino.ducking) duckedMid = false;
+      else for (const o of game.obstacles) {
+        if (o.t.name !== 'ptero' || PTERO_CLASS[o.y] !== 'mid') continue;
+        const b = obstacleBox(o);
+        if (b.x < stand0.x + stand0.w && b.x + b.w > stand0.x) duckedMid = true;
+      }
+    }
+    const fb0 = DUCK ? { n: shadow.stats.fallback, ...shadow.stats.fallbackWhy } : null;
     for (const o of game.obstacles) if (o.x < 600 && !firstSeen.has(o)) firstSeen.set(o, frame);
     scores.push(game.score()); ys.push(game.dino.y); ducks.push(game.dino.ducking ? 1 : 0); ohs.push(obsHash(game));
     const airborne = game.dino.jumping;
     const k = agent.act(game);
     const sk = shadow(game);      // query only; never applied
     const a = actName(k), sa = actName(sk);
+    if (DUCK && game.state === 'running') {
+      if (shadow.stats.fallback > fb0.n) {
+        const why = Object.keys(shadow.stats.fallbackWhy).filter(r => shadow.stats.fallbackWhy[r] > fb0[r]);
+        fallbackFrames.push({ frame, score: game.score(), why });
+      }
+      if (airborne && k.down) downAir.push(frame);
+    }
     if (game.state === 'running') {
       if (!airborne) {
         if (a !== sa) {
@@ -134,9 +177,24 @@ function diagnose(seed) {
   const verdict = effective.length === 0 ? 'no-effective-disagreement'
     : early.length > 0 ? 'covariate-shift (first effective disagreement before the near-fatal window)'
       : 'in-distribution action error (all effective disagreements in the near-fatal window)';
+  const state = !crashed ? '-' : d.jumping ? 'air' : crashFrame - lastAir <= 3 ? 'landing' : wasDucking ? 'ducking' : 'ground';
+  let duck;
+  if (DUCK) {
+    const fbNear = fallbackFrames.filter(x => x.frame >= nearFrom);
+    const daNear = downAir.filter(f => f >= nearFrom);
+    const last = effective[effective.length - 1];
+    const classHint = !crashed ? '-'
+      : daNear.length ? '(iii) down-airborne'
+        : fbNear.length ? '(v) teacher-fallback'
+          : last && last.model === 'duck' && last.solver === 'jump' ? '(ii) duck-through-takeoff'
+            : state === 'ducking' && killerName !== 'ptero-mid' ? (duckedMid ? '(iv) late-release' : '(i) false-down')
+              : killerName === 'ptero-mid' ? 'under-duck' : 'jump-type';
+    duck = { fallbackFrames, fallbackInNearWindow: fbNear.length, downAirFrames: downAir.length, downAirInNearWindow: daNear.length, classHint };
+  }
   return {
     arm: ARM, seed, score, crashFrame, speed: game.speed, killer: killerName,
-    state: !crashed ? '-' : d.jumping ? 'air' : crashFrame - lastAir <= 3 ? 'landing' : wasDucking ? 'ducking' : 'ground',
+    state,
+    ...(DUCK ? { teacher: 'duck', duck } : {}),
     last30: rle(acts.slice(-30)),
     solver: { pass: S.score >= TARGET, score: S.score, crashed: S.crashed },
     trace: {
