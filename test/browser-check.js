@@ -199,7 +199,7 @@ function cdpClient(url) {
     const crashed = await waitUntil(`game.state === 'over'`, 20000);
     const humanScore = await evaluate('game.score()');
     check('running into an obstacle ends the game', crashed, `score ${humanScore}`);
-    const hiSaved = await evaluate(`localStorage.getItem('dino-hi')`);
+    const hiSaved = await evaluate(`localStorage.getItem(HI_KEY)`);
     check('human run saves HI to localStorage', hiSaved === String(humanScore), `HI ${hiSaved}`);
     await sleep(900);
     await tap('Space');
@@ -211,7 +211,7 @@ function cdpClient(url) {
     await waitUntil(`game.state === 'over'`, 20000);
 
     // ---- 3. AI mode -----------------------------------------------------
-    await evaluate(`hi = 1; localStorage.setItem('dino-hi', '1'); __t.humanJump = 0; __t.humanDown = 0;`);
+    await evaluate(`hi = 1; localStorage.setItem(HI_KEY, '1'); __t.humanJump = 0; __t.humanDown = 0;`);
     await sleep(900);   // past the restart lockout
     await click(btn.x, btn.y);
     await sleep(50);
@@ -240,7 +240,7 @@ function cdpClient(url) {
     check('AI plays and scores, crashes and auto-restarts', scored && restarted && t.maxScore > 0, `runs ${t.runs}, max score ${t.maxScore}`);
     check('AI picks keys exactly once per fixed-timestep update', t.applyKeys === t.aiFramesApplied && t.applyKeys > 0, `applyKeys ${t.applyKeys}, updates with AI ${t.aiFramesApplied}`);
     check('AI issued key presses through the real input functions', t.aiPresses > 0, `in-run presses ${t.aiPresses}`);
-    check('AI runs do not overwrite the human HI', (await evaluate(`localStorage.getItem('dino-hi')`)) === '1' && (await evaluate('hi')) === 1);
+    check('AI runs do not overwrite the human HI', (await evaluate(`localStorage.getItem(HI_KEY)`)) === '1' && (await evaluate('hi')) === 1);
 
     // Turn AI off mid-run: keys released, the click does not jump, the player has control.
     await waitUntil(`game.state === 'running' && !game.dino.jumping && game.score() < 20`, 20000);
@@ -255,7 +255,7 @@ function cdpClient(url) {
     await tap('Space');
     check('player has control again after AI off', (await T('humanJump')) === 1 && await waitUntil(`game.dino.jumping || game.state === 'over'`, 500));
     await waitUntil(`game.state === 'over'`, 20000);
-    check('a run that had AI on at any point does not write HI', (await evaluate(`localStorage.getItem('dino-hi')`)) === '1');
+    check('a run that had AI on at any point does not write HI', (await evaluate(`localStorage.getItem(HI_KEY)`)) === '1');
 
     check('no console errors, warnings or exceptions on the page', problems.length === 0, problems.join('; '));
     console.log(`screenshot: ${path.join(scratch, 'page.png')}`);
