@@ -150,7 +150,7 @@ th { color: var(--text-secondary); font-weight: 600; }
       </div>
       <div class="controls">
         <label>Weights <select id="pb-which"><option value="current">Latest checkpoint</option><option value="best">Best (validation)</option></select></label>
-        <label>Speed <select id="pb-speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="16">16×</option></select></label>
+        <label>Speed <select id="pb-speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option><option value="32">32×</option><option value="64">64×</option><option value="128">128×</option></select></label>
       </div>
     </div>
     <div class="pb-row">
@@ -419,7 +419,7 @@ function playbackFrame(t) {
     const speed = Number($('#pb-speed').value);
     pb.acc += dt * speed;
     let steps = 0;
-    while (pb.acc >= DinoCore.FRAME_MS && steps < 400) {
+    while (pb.acc >= DinoCore.FRAME_MS && steps < 1024) {
       const keys = pb.agent.act(g);
       if (g.state === 'running') nn.capture(g, keys);
       g.step(keys);
@@ -427,6 +427,7 @@ function playbackFrame(t) {
       steps++;
       if (g.state === 'over') { pb.acc = 0; break; }
     }
+    if (steps >= 1024) pb.acc = 0;   // can't keep up: drop the backlog instead of letting it grow
   }
   pb.renderer.draw(g, g.frameIndex * DinoCore.FRAME_MS, 0);
   nn.draw();
