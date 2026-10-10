@@ -1,6 +1,6 @@
 # Handoff: multi-machine training-efficiency work (2026-10-10, 15:49 UTC)
 
-Snapshot of progress and findings across all sessions. Read the root `HANDOFF.md` first (sessions of 2026-10-09 → 10 morning). This file covers what happened after it, from about 14:50Z to 15:49Z. Where the two disagree, this file is newer.
+Snapshot of progress and findings across all sessions. Read `handoff/archive/2026-10-10T0742Z-HANDOFF.md` first (the archived root HANDOFF.md, sessions of 2026-10-09 → 10 morning). This file covers what happened after it, from about 14:50Z to 15:49Z. Where the two disagree, this file is newer.
 
 Some of the work in it was still running at the snapshot time. Those items are marked **IN FLIGHT**: check their state before relying on them.
 
