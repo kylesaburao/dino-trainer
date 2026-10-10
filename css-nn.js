@@ -6,14 +6,13 @@
 // This script writes the observation (policy.js observe(), exactly what
 // training saw) into those properties and reads --act back. There is no
 // JavaScript fallback: if the CSS self-test fails, the dino doesn't play.
-// model.js, when present, is used only to cross-check the CSS decisions.
+// The page never loads model.js; the weights exist only in model.css.
 const { FRAME_MS } = DinoCore;
 const { OBS_DIM, ACTIONS, observe } = DinoPolicy;
 
 const renderer = DinoRender.createRenderer(document.getElementById('game'));
 const nn = document.getElementById('nn');
 const $status = document.getElementById('status');
-const $check = document.getElementById('check');
 const $speed = document.getElementById('speed');
 
 const STEP_BUDGET_MS = 12;     // simulation time per display frame before playback falls behind
@@ -50,21 +49,6 @@ function selfTest() {
 }
 
 // ---------------------------------------------------------------------------
-// Cross-check against model.js (same weights in JavaScript), if present
-// ---------------------------------------------------------------------------
-const MODEL = typeof DINO_MODEL !== 'undefined' ? DINO_MODEL : null;
-const jsDecide = MODEL ? DinoPolicy.createNet(MODEL.layers, MODEL.params) : null;
-const check = { frames: 0, disagree: 0, stale: null };
-
-// Same identity as trainer/css-model.js modelId(): generation + sha256 prefix.
-async function modelJsId() {
-  const json = JSON.stringify({ layers: MODEL.layers, params: Array.from(MODEL.params) });
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
-  const hex = Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
-  return `${MODEL.generation ?? 'na'}-${hex.slice(0, 16)}`;
-}
-
-// ---------------------------------------------------------------------------
 // Game and agent
 // ---------------------------------------------------------------------------
 let gameVersion = 'v1', actionRepeat = 1;
@@ -90,12 +74,7 @@ function act() {
   if (game.state !== 'running') return ACTIONS[0];
   if (wait <= 0) {
     observe(game, x);
-    const a = cssDecide(x);
-    if (jsDecide) {
-      check.frames++;
-      if (jsDecide(x) !== a) check.disagree++;
-    }
-    current = ACTIONS[a];
+    current = ACTIONS[cssDecide(x)];
     wait = actionRepeat;
   }
   wait--;
@@ -147,16 +126,6 @@ function showStatus() {
   $status.textContent = `game ${game.version}${game.version === 'v2' ? ` (level ${game.level.toFixed(2)})` : ''} · score ${game.score()}` +
     ` · ${eff.toFixed(1)}× real time` + (behind ? ` (CSS can't keep up with ${$speed.value}×)` : '') +
     ` · ${Math.round(rate.fps / actionRepeat)} CSS decisions/s`;
-  if (!jsDecide) {
-    $check.textContent = 'model.js not loaded: no JavaScript cross-check';
-  } else {
-    $check.innerHTML = '';
-    const span = document.createElement('span');
-    if (check.stale) span.className = 'warn';
-    span.textContent = (check.stale ? `${check.stale} · ` : '') +
-      `cross-check vs model.js: ${check.frames - check.disagree}/${check.frames} decisions identical`;
-    $check.appendChild(span);
-  }
 }
 
 function fail(e) {
@@ -169,7 +138,7 @@ function fail(e) {
   console.error(e);
 }
 
-(async function start() {
+(function start() {
   try {
     selfTest();
     gameVersion = cssString('--nn-game') || 'v1';
@@ -178,14 +147,6 @@ function fail(e) {
   } catch (e) {
     fail(e);
     return;
-  }
-  if (MODEL) {
-    try {
-      const id = await modelJsId(), cssId = cssString('--nn-model-id');
-      if (id !== cssId) check.stale = `model.css (${cssId}) is not from this model.js (${id}); run node trainer/cli.js export-css`;
-    } catch (e) {
-      check.stale = 'could not compare model.css with model.js';
-    }
   }
   newGame();
   requestAnimationFrame((t) => { last = t; rate.t0 = t; frame(t); });

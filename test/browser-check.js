@@ -276,16 +276,24 @@ function cdpClient(url) {
     check('no console errors, warnings or exceptions on the v2 page', problems.length === 0, problems.join('; '));
 
     // ---- 5. CSS-network page (index-css.html + model.css) -----------------
+    // The page has no JavaScript network; the test compares against model.js itself.
+    const shipped = require(path.join(ROOT, 'model.js'));
+    const { modelId } = require(path.join(ROOT, 'trainer', 'css-model.js'));
     await load(path.join(ROOT, 'index-css.html'));
-    const css = await evaluate(`({ failed: failed && failed.message, stale: check.stale, version: game && game.version,
-      want: DINO_MODEL.gameVersion || 'v1', speeds: [...document.querySelectorAll('#speed option')].map(o => Number(o.value)) })`);
-    check('CSS page: self-test passes and model.css matches model.js', !css.failed && css.stale === null && css.version === css.want, JSON.stringify(css));
+    const css = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), version: game && game.version,
+      loadsModelJs: typeof DINO_MODEL !== 'undefined', speeds: [...document.querySelectorAll('#speed option')].map(o => Number(o.value)) })`);
+    check('CSS page: self-test passes, model.css is from model.js, and model.js is not loaded',
+      !css.failed && css.id === modelId(shipped) && css.version === (shipped.gameVersion || 'v1') && !css.loadsModelJs, JSON.stringify(css));
     check('CSS page: speed options 1x to 2048x', css.speeds.join() === '1,2,4,8,16,32,64,128,256,512,1024,2048', css.speeds.join());
+    // Test-only: wrap the page's cssDecide to compare each CSS decision with policy.js on model.js.
+    await evaluate(`(() => { const net = DinoPolicy.createNet(${JSON.stringify(shipped.layers)}, ${JSON.stringify(Array.from(shipped.params))});
+      const cssOnly = cssDecide; window.__cmp = { frames: 0, disagree: 0 };
+      window.cssDecide = (x) => { const a = cssOnly(x); __cmp.frames++; if (net(x) !== a) __cmp.disagree++; return a; }; })()`);
     await evaluate(`document.getElementById('speed').value = '2048'`);
-    const cssPlays = await waitUntil(`game.state === 'running' && game.score() >= 100 && check.frames >= 1000`, 30000);
-    const agree = await evaluate(`({ frames: check.frames, disagree: check.disagree, score: game.score(), fps: Math.round(rate.fps) })`);
+    const cssPlays = await waitUntil(`game.state === 'running' && game.score() >= 100 && __cmp.frames >= 1000`, 30000);
+    const agree = await evaluate(`({ frames: __cmp.frames, disagree: __cmp.disagree, score: game.score(), fps: Math.round(rate.fps) })`);
     check('CSS page: the CSS network plays and scores', cssPlays, JSON.stringify(agree));
-    check('CSS page: every CSS decision equals the JavaScript network on model.js', agree.frames >= 1000 && agree.disagree === 0, JSON.stringify(agree));
+    check('CSS page: every CSS decision equals policy.js on model.js', agree.frames >= 1000 && agree.disagree === 0, JSON.stringify(agree));
     // Force a crash (test-only, as in section 3) and expect a fresh run to start.
     await evaluate(`(() => { const g0 = game; const id = setInterval(() => {
       if (game !== g0 || game.state !== 'running') { clearInterval(id); return; }
