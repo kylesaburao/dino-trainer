@@ -171,6 +171,7 @@ Per arm and shape, S = screen-clean seeds of 20. "Significant" = McNemar p ≤ 0
 | S ≥ 19 at one shape only | **Fixed at that shape only** | Report per shape. A d2w8-only fix serves the ship shape; d2w32 stays multi-seed plus screen |
 | S ≥ 19, but a tier-B failure in a screen-clean seed | The seed is not clean (S is recounted). A late mode exists, so P1 is wrong for this arm | Report; tier B for every passer of that arm at that shape before any reading of "fixed" |
 | Significant, but S < 19 | **Partial: the arm helps, not enough** | A combination or dose registration, chosen by which mode remains (below) |
+| Not significant, but S > control + 2 (for example d2w8 14/20: b = 6, c = 0, p = 0.016) | **Suggestive, underpowered at 20 seeds**, not a null | A dose or seed-count follow-up, registered separately |
 | Not significant, and S within the control ± 2 | **No detectable effect at this power** (a conditional null; scope §8) | That arm's hypothesis is not supported at this dose and scope |
 | Significantly worse (c ≥ 8 with b = 0, by the reversed test) | **Harmful** | Report the mode that grew |
 | (a) meets the bar, or is the only arm significant | H-weight | — |
