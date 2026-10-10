@@ -146,3 +146,10 @@ What this changes, for mac-3 to rule on before the arm runs (the readings in §5
 1. **No above-band θ in the set** (s5 is "between"). So the H-artefact control (reading F) can't be applied, and a reading-A result would not separate H-zone from H-artefact. Proposed: if A is met, record it as "promising, mechanism unattributed", and draw the confirmation batch's above-band θs from later-generation survey θs.
 2. **The teacher share is higher than estimated:** 33–56%, and 72% on s8, against the 30–48% estimate. Ramp frames per generation are 0.92–1.95× hyg8's. On θs that die early (s8, s15), the ramp arm gets only 28–44% student frames on the matched budget, so a null there is weak.
 3. s8's pre-resume θ dies early from 0 (median 188 on these seeds), unlike its post-resume hygiene validation medians (1,297–1,622). The stratum uses the frozen start θ, as registered.
+
+## 9. Amendment, 2026-10-10 (mac-3's rulings on the gate results; made before the arm runs)
+
+The θ set is **s5, s7, s8, s9 and s15 (stuck), with positive controls s4 and s12**. The round is an **attribution** round, not a confirmation. The §5 readings stand, with these rulings:
+1. **Reading F can't be applied:** the set has no above-band θ. If reading A is met, it is recorded as **"promising, mechanism unattributed (zone vs artefact)"**. The above-band negative control moves to a later round. s5 (18% of deaths below 800, median death 1208) is the nearest to above-band. It is reported separately but **not read as F**.
+2. **Teacher share:** a null on any θ whose student-frame share of the ramp arm is below 45% (from §8: s8 at 28%, s15 at 44%) is reported as **"underpowered at 10B"**, not as evidence against. Student-only frames stay the registered secondary metric (reading G).
+3. **s8:** the stratum uses the frozen start θ, as registered. No change.
