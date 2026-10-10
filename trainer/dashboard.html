@@ -333,7 +333,7 @@ function kdText(b) {
 function kdTiles(b) {
   const d = b.distill, q = b.quant;
   return `${d ? tile('Distilled from', esc(d.from || '–'), `${esc(d.mode)}${d.mode === 'soft' ? ` · τ ${esc(d.tau)} · α ${esc(d.alpha)}` : ''}${d.layers ? ` · ${esc(layersText(d.layers))}` : ''}${d.teacherName ? ` · teacher-${esc(d.teacherName)}` : ''}${d.paramsSha256 ? ` · sha ${esc(short(d.paramsSha256))}` : ''}`) : ''}
-    ${q ? tile('Quantized', `int${esc(q.bits)}`, `${q.mode === 'ptq' ? 'post-training' : q.mode === 'qat' ? 'quantization-aware training' : esc(q.mode || '')} · ${esc(q.scheme)} scales${q.levels !== null ? ` · ${esc(q.levels)} levels` : ''}${q.biases ? ` · biases ${esc(q.biases)}` : ''}${q.from ? ` · from ${esc(q.from)}` : ''}${q.fromSha256 ? ` (sha ${esc(short(q.fromSha256))})` : ''}`) : ''}`;
+    ${q ? tile('Quantized', `int${esc(q.bits)}`, `${q.mode === 'ptq' ? 'post-training' : q.mode === 'qat' ? 'quantization-aware training' : esc(q.mode || '')} · ${q.scheme === 'pow2' ? `pow2 scales 2^-k${q.k ? `, k ${esc(q.k.join(', '))}` : ''}` : `${esc(q.scheme)} scales`}${q.levels !== null ? ` · ${esc(q.levels)} levels` : ''}${q.biases ? ` · biases ${esc(q.biases)}` : ''}${q.from ? ` · from ${esc(q.from)}` : ''}${q.fromSha256 ? ` (sha ${esc(short(q.fromSha256))})` : ''}`) : ''}`;
 }
 
 function bcChip(r) {

@@ -19,7 +19,8 @@
 //     config.teacherName / the manifest's teacherName, else teacher-jump. Distilled runs
 //     (config.distillFrom) and quantized runs (config.quant: bc-train --quant-bits, or
 //     bc-quantize with config.quantFrom) also carry bc.distill / bc.quant (teacher model
-//     path, sha256, tau, mode, alpha; bits, scheme, levels, source), live from the log line.
+//     path, sha256, tau, mode, alpha; bits, scheme, levels, source; k per layer for
+//     scheme pow2), live from the log line.
 //   Demos runs (bc-gen; demos.json only): the manifest summary and teacher playback.
 // Running = train.lock with a live pid (train, bc-train), or a bc-gen temp file
 // demos.bin.<pid>.tmp with a live pid (bc-gen takes no lock). A nested run with no *.log
@@ -217,9 +218,10 @@ function quantSummary(cfg, live) {
   if (cfg && cfg.quant) {
     const q = cfg.quant;
     return { bits: q.bits, scheme: q.scheme, mode: q.mode, levels: q.levels ?? null, biases: q.biases || null,
-      from: cfg.quantFrom ? cfg.quantFrom.path : null, fromSha256: cfg.quantFrom ? cfg.quantFrom.paramsSha256 : null };
+      from: cfg.quantFrom ? cfg.quantFrom.path : null, fromSha256: cfg.quantFrom ? cfg.quantFrom.paramsSha256 : null,
+      ...(Array.isArray(q.k) ? { k: q.k } : {}) };
   }
-  return live && live.quant ? { ...live.quant, levels: null, biases: 'float', from: null, fromSha256: null } : null;
+  return live && live.quant ? { ...live.quant, levels: null, biases: live.quant.scheme === 'pow2' ? 'int' : 'float', from: null, fromSha256: null } : null;
 }
 
 function bcInfo(name, kind) {

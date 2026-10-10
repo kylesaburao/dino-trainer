@@ -16,12 +16,14 @@ NN and epoch 1-based) after each epoch's last optimiser step: a float64 copy onl
 draws no RNG and changes no computation.
 Distillation and quantization (off by default; trainer/bc.js header has the definitions):
 --teacher-logits FILE (float64 rows x 3, computed by Node from the teacher) with
---distill-mode soft|hard [--tau T --alpha A]; --quant-bits N [--quant-scheme row|layer]
+--distill-mode soft|hard [--tau T --alpha A]; --quant-bits N [--quant-scheme row|layer|pow2]
 (QAT: fake-quantized weights in forward and backward, straight-through to the float
-weights; the output params are the float64 q * scale, and the output gains `scales`).
+weights; the output params are the float64 q * scale, and the output gains `scales`;
+pow2 also fake-quantizes the biases, one 2^-k per layer recomputed every step, and the
+output gains `k` instead of `scales`).
 Neither draws RNG. Distilled rows add `distillLoss`; `loss` stays the CE vs the solver.
 Needs numpy (the repo's .venv; the PYTHON env var overrides the interpreter)."""
-import argparse, json, os, time
+import argparse, json, math, os, time
 import numpy as np
 
 ap = argparse.ArgumentParser()
@@ -39,7 +41,7 @@ ap.add_argument('--distill-mode', default='soft', choices=['soft', 'hard'])
 ap.add_argument('--tau', type=float, default=1.0)
 ap.add_argument('--alpha', type=float, default=0.0)
 ap.add_argument('--quant-bits', type=int, default=0)
-ap.add_argument('--quant-scheme', default='row', choices=['row', 'layer'])
+ap.add_argument('--quant-scheme', default='row', choices=['row', 'layer', 'pow2'])
 a = ap.parse_args()
 
 ROW = a.obs_dim
@@ -76,11 +78,12 @@ lr0, B, t = a.lr, a.batch, 0
 L = len(Ws)
 
 
-def forward(xb, W=None):
+def forward(xb, W=None, b=None):
     W = Ws if W is None else W
+    b = bs if b is None else b
     hs = [xb]
     for i in range(L):
-        z = hs[-1] @ W[i].T + bs[i]
+        z = hs[-1] @ W[i].T + b[i]
         hs.append(np.tanh(z) if i < L - 1 else z)
     return hs
 
@@ -95,8 +98,45 @@ def quantize(Wf):
     return k * sc, (sc[:, 0] if a.quant_scheme == 'row' else sc[:1, 0])
 
 
+def pow2_exponent(m, qmax):
+    """Largest integer k with m * 2^k <= qmax (0 for m = 0); trainer/bc.js pow2Exponent."""
+    if not m > 0: return 0
+    k = math.floor(math.log2(qmax / m))
+    while m * 2.0 ** (k + 1) <= qmax: k += 1
+    while m * 2.0 ** k > qmax: k -= 1
+    return k
+
+
+def quantize_pow2(Wf, bf):
+    """float32 layer (W, b) -> (float64 Wq, float64 bq, k): q * 2^-k with one k per layer;
+    trainer/bc.js quantizePow2Into."""
+    qmax = 2 ** (QB - 1) - 1
+    W64, b64 = Wf.astype(np.float64), bf.astype(np.float64)
+    k = pow2_exponent(float(max(np.abs(W64).max(), np.abs(b64).max())), qmax)
+    up, down = 2.0 ** k, 2.0 ** -k
+    q = lambda x: np.clip(np.floor(x * up + 0.5), -qmax, qmax) * down
+    return q(W64), q(b64), k
+
+
+POW2 = bool(QB) and a.quant_scheme == 'pow2'
+
+
+def fake_quant():
+    """The (W, b) lists the forward pass uses: float32 fake-quantized under QAT, else the floats."""
+    if not QB: return Ws, bs
+    if POW2:
+        qs = [quantize_pow2(Ws[i], bs[i]) for i in range(L)]
+        return [w.astype(np.float32) for w, _, _ in qs], [b.astype(np.float32) for _, b, _ in qs]
+    return [quantize(W)[0].astype(np.float32) for W in Ws], bs
+
+
 def flat_params():
     flat = []
+    if POW2:
+        for i in range(L):
+            wq, bq, _ = quantize_pow2(Ws[i], bs[i])
+            flat += wq.ravel().tolist() + bq.tolist()
+        return flat
     if QB:
         for i in range(L): flat += quantize(Ws[i])[0].ravel().tolist() + bs[i].astype(np.float64).tolist()
         return flat
@@ -141,8 +181,9 @@ for ep in range(epochs):
     for s in range(N // B):
         idx = perm[s * B:(s + 1) * B]
         xb, yb, wb = X[idx], y[idx], w_all[idx]
-        Wf = [quantize(W)[0].astype(np.float32) for W in Ws] if QB else Ws
-        hs = forward(xb, Wf)
+        if POW2: Wf, bf = fake_quant()
+        else: Wf, bf = [quantize(W)[0].astype(np.float32) for W in Ws] if QB else Ws, bs
+        hs = forward(xb, Wf, bf)
         z = hs[-1]; z = z - z.max(1, keepdims=True); p = np.exp(z); p /= p.sum(1, keepdims=True)
         if not distill:
             tot += float((wb * -np.log(p[np.arange(B), yb] + 1e-12)).sum())
@@ -165,7 +206,7 @@ for ep in range(epochs):
         write_json(os.path.join(a.snapshot_dir, name), dict(layers=layers, params=flat_params(), epoch=ep + 1))
     # train-set recall per class (subsample)
     sub = rng.choice(N, min(N, 200000), replace=False)
-    pred = forward(X[sub], [quantize(W)[0].astype(np.float32) for W in Ws] if QB else None)[-1].argmax(1)
+    pred = (forward(X[sub], *fake_quant()) if POW2 else forward(X[sub], [quantize(W)[0].astype(np.float32) for W in Ws] if QB else None))[-1].argmax(1)
     acc = [float(((pred == c) & (y_solver[sub] == c)).sum() / max(1, (y_solver[sub] == c).sum())) for c in ((0, 1, 2) if has_duck else (0, 1))]
     recall = dict(none=acc[0], jump=acc[1])
     if has_duck: recall['duck'] = acc[2]
@@ -174,5 +215,6 @@ for ep in range(epochs):
     log.append(row)
     print(json.dumps(row), flush=True)
 result = dict(layers=layers, params=flat_params(), log=log)
-if QB: result['scales'] = [quantize(W)[1].tolist() for W in Ws]
+if POW2: result['k'] = [quantize_pow2(Ws[i], bs[i])[2] for i in range(L)]
+elif QB: result['scales'] = [quantize(W)[1].tolist() for W in Ws]
 json.dump(result, open(a.out, 'w'))
