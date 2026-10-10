@@ -15,23 +15,28 @@
 //   node trainer/cli.js session [train options]          train, then finish (one detached command)
 //   node trainer/cli.js bc-gen   --dir runs/<name> [--seeds 1-40] [--levels 0,2000,50000,300000,900000]
 //                              [--span0 3000] [--span 5000] [--keep-boring 10] [--game v2] [--workers N] [--overwrite]
+//                              [--teacher jump|duck]
 //   node trainer/cli.js bc-train --dir runs/<name> --hidden 32,32 [--backend node|python] [--epochs 15]
 //                              [--batch 1024] [--lr 2e-3] [--seed 1] [--demos <dir or demos.json>]
 //                              [--target 1000000] [--workers N] [--wasm] [--force] [--overwrite] [--snapshots]
 //
 // Behaviour cloning of test/solver.js (trainer/bc.js; supervised, no ES):
-//   bc-gen    plays the solver on each seed (inclusive range) from each start level, for
+//   bc-gen    plays the teacher on each seed (inclusive range) from each start level, for
 //             --span0 points from 0 and --span points from the other levels, and writes
 //             demos.bin (Float32 rows [policy.observe features, label, weight]; label = the
-//             solver's jump key) and demos.json (manifest: coreHash, counts, solver crashes,
-//             sha256). Grounded no-op frames with the nearest obstacle more than 40 frames
+//             teacher's action: 0 none, 1 jump, 2 duck) and demos.json (manifest: coreHash,
+//             teacher, teacherName, counts, solver crashes, sha256). --teacher jump (default;
+//             createSolver, never ducks) or duck (createDuckSolver). Grounded no-op frames
+//             with the nearest obstacle more than 40 frames
 //             away (or none) are kept 1 in --keep-boring with that weight; the counter resets
 //             every episode, so the output is the same for any --workers.
 //   bc-train  trains a tanh MLP on the demos (--demos, default --dir) with weighted
 //             cross-entropy, sqrt-balanced class weights, Adam and a cosine learning rate,
 //             then validates it on the 25 validation seeds (full games to --target,
 //             default 1000000) and writes best.json (the same schema as ES runs, so eval
-//             and export work unchanged) and bc-metrics.jsonl (per-epoch loss and recall).
+//             and export work unchanged; config.teacherName from the demos manifest, 'jump'
+//             if absent) and bc-metrics.jsonl (per-epoch loss and recall; recall.duck only
+//             when the demos have duck rows).
 //             --backend node (default; plain Node) or python (trainer/bc_train.py, needs
 //             numpy: the repo's .venv/bin/python, or the PYTHON env var). Each backend is
 //             deterministic per --seed on one machine; the two do not match each other.
@@ -229,7 +234,7 @@ function parseArgs(argv) {
     } else if (['--resume', '--force', '--overwrite', '--auto-export', '--no-commit', '--skip-browser', '--snapshots'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = true;
     } else if (['--workers', '--time-budget', '--dir', '--which', '--model', '--out', '--seconds', '--log-every', '--seeds', '--seed-offset',
-      '--levels', '--span0', '--span', '--keep-boring', '--backend', '--epochs', '--batch', '--demos'].includes(a)) {
+      '--levels', '--span0', '--span', '--keep-boring', '--backend', '--epochs', '--batch', '--demos', '--teacher'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = takesValue();
     } else {
       throw new Error(`unknown argument ${a}`);
@@ -777,17 +782,20 @@ async function bcGenCmd({ config: cli, opts }) {
     span: opts.span !== undefined ? Number(opts.span) : d.span,
     keepBoring: opts.keepBoring !== undefined ? Number(opts.keepBoring) : d.keepBoring,
     gameVersion: cli.gameVersion || d.gameVersion,
+    teacher: opts.teacher !== undefined ? opts.teacher : d.teacher,
     workers: Number(opts.workers) || defaultWorkers(),
     coreHash: coreHash(),
   };
   if (!GAME_VERSIONS.includes(o.gameVersion)) throw new Error(`--game must be one of ${GAME_VERSIONS.join(', ')}`);
+  if (!Object.hasOwn(bc.TEACHERS, o.teacher)) throw new Error(`--teacher must be one of ${Object.keys(bc.TEACHERS).join(', ')}, got ${o.teacher}`);
+  bc.resolveTeacher(o.teacher);   // e.g. createDuckSolver not available on this tree
   if (!o.levels.every(l => Number.isInteger(l) && l >= 0)) throw new Error('--levels must be non-negative integers');
   if (!(Number.isInteger(o.keepBoring) && o.keepBoring >= 1)) throw new Error('--keep-boring must be a positive integer');
   if (!(o.span0 > 0 && o.span > 0)) throw new Error('--span0 and --span must be positive');
   const manifestFile = path.join(dir, 'demos.json');
   if (fs.existsSync(manifestFile) && !opts.overwrite) throw new Error(`${manifestFile} exists; pass --overwrite to regenerate`);
   log(`bc-gen: dir=${dir} seeds ${o.seeds[0]}-${o.seeds[o.seeds.length - 1]} levels ${o.levels.join(',')} span0 ${o.span0} span ${o.span} ` +
-    `keep-boring ${o.keepBoring} game ${o.gameVersion} workers ${o.workers} core=${o.coreHash.slice(0, 12)}`);
+    `keep-boring ${o.keepBoring} game ${o.gameVersion} teacher ${o.teacher} workers ${o.workers} core=${o.coreHash.slice(0, 12)}`);
   const t0 = Date.now();
   let lastLog = 0;
   o.onProgress = (done, total, rows) => {
@@ -795,7 +803,8 @@ async function bcGenCmd({ config: cli, opts }) {
   };
   const manifest = await require('./bc.js').generateDemos(dir, o);
   writeJsonAtomic(manifestFile, manifest);
-  log(`bc-gen: ${manifest.rows} rows (none ${manifest.counts.rows.none}, jump ${manifest.counts.rows.jump}), ` +
+  log(`bc-gen: ${manifest.rows} rows (none ${manifest.counts.rows.none}, jump ${manifest.counts.rows.jump}` +
+    `${manifest.counts.rows.duck ? `, duck ${manifest.counts.rows.duck}` : ''}), ` +
     `solver crashes ${manifest.solverCrashes}, ${((Date.now() - t0) / 1000).toFixed(1)}s -> ${path.relative(ROOT, manifestFile)}`);
   if (manifest.solverCrashes) throw new Error(`the solver crashed in ${manifest.solverCrashes} episode(s); the demonstrations are not trustworthy`);
 }
@@ -836,7 +845,8 @@ async function bcTrainCmd({ config: cli, opts }) {
   fs.rmSync(metricsFile, { force: true });
   const onEpoch = (row) => {
     fs.appendFileSync(metricsFile, JSON.stringify({ backend, ...row }) + '\n');
-    log(`epoch ${row.epoch}: loss ${row.loss.toFixed(4)} recall none ${row.recall.none.toFixed(4)} jump ${row.recall.jump.toFixed(4)} (${row.seconds.toFixed(1)}s)`);
+    log(`epoch ${row.epoch}: loss ${row.loss.toFixed(4)} recall none ${row.recall.none.toFixed(4)} jump ${row.recall.jump.toFixed(4)}` +
+      `${row.recall.duck !== undefined ? ` duck ${row.recall.duck.toFixed(4)}` : ''} (${row.seconds.toFixed(1)}s)`);
   };
   const t0 = Date.now();
   let result;
@@ -867,6 +877,7 @@ async function bcTrainCmd({ config: cli, opts }) {
     target, hidden: o.hidden, actionRepeat: 1, gameVersion,
     method: 'behaviour cloning of test/solver.js (supervised; no ES)',
     trainer: `trainer/cli.js bc-train --backend ${backend}`, backend,
+    teacherName: demos.manifest.teacherName || 'jump',
     epochs: o.epochs, batch: o.batch, lr: o.lr, seed: o.seed,
     demos: path.relative(ROOT, demos.manifestFile), demosSha256: sha, demosRows: demos.manifest.rows,
     trainSeconds, final: last ? { loss: last.loss, recall: last.recall } : null,
