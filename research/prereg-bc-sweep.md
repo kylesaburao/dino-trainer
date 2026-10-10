@@ -1,6 +1,6 @@
 # Pre-registration: behaviour-cloning sweep over depth × width: model efficiency and training effort
 
-Status: **registered.** Author: mac-3, 2026-10-10, on main `4808925`. It supersedes `research/prereg-bc-shapes.md`. That study's Step 0 checks, its gate and its certification rung are carried over in §6. Its extra 44-4-4-3 shape is dropped, because the user set the grid.
+Status: **stopped by the user (partial); report in `research/bc-sweep-report.md`. No held-out offsets spent.** Author: mac-3, 2026-10-10, on main `4808925`. It supersedes `research/prereg-bc-shapes.md`. That study's Step 0 checks, its gate and its certification rung are carried over in §6. Its extra 44-4-4-3 shape is dropped, because the user set the grid.
 
 **User's request (2026-10-10):** "training done on models of different configurations of layer count and layer sizes with a report on the efficiency of the model, the amount of effort required to train the model. Ideally the evaluation between models is time-independent so they can be trained in parallel. Operate layer counts [1,64], layer sizes [8, 64] (in powers of 2)."
 
