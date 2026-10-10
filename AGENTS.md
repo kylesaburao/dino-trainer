@@ -77,7 +77,7 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 |---|---|---|
 | Game rules | **rules v1**, **rules v2**; write "rules v2" in prose | `gameVersion: 'v1' \| 'v2'`, `?game=`, `HI_KEY`. The code field is unchanged |
 | Model file format | **`dino-mlp-v1`** | `model.js`, `best.json` |
-| BC teacher | **`teacher-jump`** (`test/solver.js` `createSolver`, jump only) and **`teacher-duck`** (planned: ducks under mid pterodactyls) | `best.json` `config`, demos manifest |
+| BC teacher | **`teacher-jump`** (`test/solver.js` `createSolver`, jump only) and **`teacher-duck`** (planned: ducks under mid pterodactyls) | `best.json` `config.teacherName` and demos manifest `teacherName`, stored as `jump` / `duck` (= `--teacher`) |
 | Project generation | named after its teacher: the **jump generation** (everything up to 2026-10-10: the shipped clone and the depth × width sweep) and the **duck generation** (`teacher-duck` and the clones trained on it) | docs, handoffs, register rows |
 | New BC run dirs | `runs/bc-<teacher>-d<depth>w<width>[-s<seed>]`, e.g. `runs/bc-duck-d2w32-s1`; experiments use `runs/exp-bc-<teacher>-...` | |
 
