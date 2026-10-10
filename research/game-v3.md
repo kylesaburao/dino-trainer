@@ -91,14 +91,14 @@ Results:
 
 The bar is met right after the step and tightens monotonically with score.
 
-**Superseded first proposal** (no step; `maxSpeed` 60 with `curve` 0.5 from v2's 19, on commit 3d7ca0a): 0% at 110k and 150k, 55.5% at 200k, 87.7% at 500k, 100% at 1M. The user ruled for the step instead.
+**Superseded first proposal** (no step; `maxSpeed` 60 with `curve` 0.5 from v2's 19, on commit b1a5529): 0% at 110k and 150k, 55.5% at 200k, 87.7% at 500k, 100% at 1M. The user ruled for the step instead.
 
 ## 4. Rules v1 and v2 unchanged (proof)
 
 - Rules v1: the existing goldens (`test/golden/`, from baseline `2da34de`) still pass, frame for frame (`test/parity.test.js`).
-- Rules v2: before `core.js` was edited, commit `29d189b` added 7 v2 golden traces (`test/golden-v2/`, 36,000 frames). `test/record-golden-v2.js` recorded them from `core.js` and `test/solver.js` at `10cd0e0`. They cover the 1k onset, 30k (groups of 4 from 31.6k), 148k → 151k and 998k → 1M, with both solvers and random keys (crashes, restarts, fast-drops, ducks). `test/v2-parity.test.js` passes them all after the change, and `test/v3.test.js` replays the three traces that start below 100k on rules v3, frame for frame.
+- Rules v2: before `core.js` was edited, commit `417eaa8` added 7 v2 golden traces (`test/golden-v2/`, 36,000 frames). `test/record-golden-v2.js` recorded them from `core.js` and `test/solver.js` at `10cd0e0`. They cover the 1k onset, 30k (groups of 4 from 31.6k), 148k → 151k and 998k → 1M, with both solvers and random keys (crashes, restarts, fast-drops, ducks). `test/v2-parity.test.js` passes them all after the change, and `test/v3.test.js` replays the three traces that start below 100k on rules v3, frame for frame.
 - Behaviour-cloning demos regenerate byte for byte: `bc-gen` with the default teacher gives sha256 `3a67bfd4e109d6bb…` (2,096,268 rows), and with `--teacher duck` gives `363872f61a785729…`, equal to `runs/exp-bc-duck/v2-demos-duck-s1-40`. `test/bc.test.js` and `test/net.test.js` pass.
-- `node test/bit-identity.js <10cd0e0 worktree> <this tree> --core-changed`: IDENTICAL, 7 scenarios, 48,603 values (again after rebasing onto `b4624b3`). The new `--core-changed` flag reports the core hash instead of comparing it.
+- `node test/bit-identity.js <10cd0e0 worktree> <this tree> --core-changed`: IDENTICAL, 7 scenarios, 48,603 values, and again against `b4624b3`. After the step at 100k it was not re-run against `e22126a`: it refuses to start while another trainer is running. The step touches only rules v3 above 100k, which those small v2 trainings never reach. The new `--core-changed` flag reports the core hash instead of comparing it.
 - **Core hash.** It changed (`0f329d4e…` → `65f3546c…`). That invalidates pre-v3 checkpoints (`--resume` needs `--force`) and pre-v3 demos (`bc-train` refuses them without `--force`). For rules v1/v2 work, `--force` is justified because the goldens, the regenerated demo hashes, `net.test.js` and bit-identity show identical games and decisions. Never reuse them for rules v3.
 
 ## 5. Solvers on rules v3
