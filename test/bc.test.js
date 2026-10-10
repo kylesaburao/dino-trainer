@@ -150,6 +150,41 @@ test('python backend: learns the small demos (skipped without numpy)', async (t)
   assert.ok(last.recall.jump > 0.9, `jump recall ${last.recall.jump}`);
 });
 
+test('python backend: --snapshots leaves params unchanged and writes one file per epoch (skipped without numpy)', async (t) => {
+  const py = bc.pythonPath(ROOT);
+  const probe = spawnSync(py, ['-c', 'import numpy'], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0) {
+    t.skip(`python backend not tested: ${py} has no numpy (set PYTHON to an interpreter with numpy, e.g. the repo's .venv)`);
+    return;
+  }
+  const { dir } = await smallDemos();
+  const bin = path.join(dir, 'demos.bin');
+  const o = { hidden: [8, 8], epochs: 5, batch: 64, lr: 1e-2, seed: 2 };
+  const plain = await bc.trainPython(bin, path.join(tmp, 'py-plain.json'), o, ROOT);
+  const snapshotDir = path.join(tmp, 'snaps');
+  const snap = await bc.trainPython(bin, path.join(tmp, 'py-snap.json'), { ...o, snapshotDir }, ROOT);
+  assert.deepStrictEqual(snap.params, plain.params, '--snapshots must not change training');
+  assert.deepStrictEqual(snap.log.map(r => r.loss), plain.log.map(r => r.loss));
+  const files = fs.readdirSync(snapshotDir).sort();
+  assert.deepStrictEqual(files, ['epoch-01.json', 'epoch-02.json', 'epoch-03.json', 'epoch-04.json', 'epoch-05.json']);
+  const snaps = files.map(f => JSON.parse(fs.readFileSync(path.join(snapshotDir, f), 'utf8')));
+  snaps.forEach((s, i) => {
+    assert.strictEqual(s.epoch, i + 1);
+    assert.deepStrictEqual(s.layers, plain.layers);
+    assert.strictEqual(s.params.length, P.numParams(s.layers));
+    P.createNet(s.layers, s.params);
+  });
+  assert.deepStrictEqual(snaps[snaps.length - 1].params, plain.params, 'the last snapshot is the final params');
+  assert.notDeepStrictEqual(snaps[0].params, plain.params);
+});
+
+test('bc-train --snapshots is rejected with the node backend', () => {
+  const run = spawnSync(process.execPath, [path.join(ROOT, 'trainer', 'cli.js'), 'bc-train', '--dir', path.join(tmp, 'snaprun'), '--hidden', '4', '--snapshots'], { encoding: 'utf8' });
+  assert.notStrictEqual(run.status, 0);
+  assert.match(run.stderr, /--snapshots is only supported with --backend python/);
+  assert.ok(!fs.existsSync(path.join(tmp, 'snaprun')));
+});
+
 test('bc-train refuses demos from a different core hash unless --force', async () => {
   const { dir, manifest } = await smallDemos();
   const bad = path.join(tmp, 'badhash');

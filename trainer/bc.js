@@ -392,10 +392,12 @@ function pythonPath(root) {
 }
 
 // Run bc_train.py on binFile; resolves to { layers, params, log }. onLine gets each stdout line.
+// o.snapshotDir (optional): write each epoch's params to <snapshotDir>/epoch-NN.json.
 function trainPython(binFile, outFile, o, root, onLine = () => {}) {
   const { spawn } = require('child_process');
   const args = [path.join(__dirname, 'bc_train.py'), '--demos', binFile, '--obs-dim', String(OBS_DIM), '--hidden', o.hidden.join(','),
     '--epochs', String(o.epochs), '--batch', String(o.batch), '--lr', String(o.lr), '--seed', String(o.seed), '--out', outFile];
+  if (o.snapshotDir) args.push('--snapshot-dir', o.snapshotDir);
   return new Promise((resolve, reject) => {
     const child = spawn(pythonPath(root), ['-W', 'ignore', ...args], { stdio: ['ignore', 'pipe', 'inherit'] });
     let buf = '';

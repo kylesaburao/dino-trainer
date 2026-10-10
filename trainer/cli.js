@@ -17,7 +17,7 @@
 //                              [--span0 3000] [--span 5000] [--keep-boring 10] [--game v2] [--workers N] [--overwrite]
 //   node trainer/cli.js bc-train --dir runs/<name> --hidden 32,32 [--backend node|python] [--epochs 15]
 //                              [--batch 1024] [--lr 2e-3] [--seed 1] [--demos <dir or demos.json>]
-//                              [--target 1000000] [--workers N] [--wasm] [--force] [--overwrite]
+//                              [--target 1000000] [--workers N] [--wasm] [--force] [--overwrite] [--snapshots]
 //
 // Behaviour cloning of test/solver.js (trainer/bc.js; supervised, no ES):
 //   bc-gen    plays the solver on each seed (inclusive range) from each start level, for
@@ -37,6 +37,10 @@
 //             deterministic per --seed on one machine; the two do not match each other.
 //             Refuses demos generated on another core hash unless --force, and an
 //             existing best.json unless --overwrite.
+//             --snapshots (python backend only; off by default) also writes each epoch's
+//             params to <dir>/snapshots/epoch-NN.json ({layers, params, epoch}, NN from 01,
+//             the policy.createNet flat layout), taken after the epoch's last optimiser
+//             step; it does not change training. Replaces any existing <dir>/snapshots/.
 //
 // Training-only curriculum (off by default; validation, held-out eval, the stop
 // check, eval and export always play full games from 0 to --target):
@@ -205,7 +209,7 @@ function parseArgs(argv) {
       out.config[BOOL_TO_KEY[a]] = true;
     } else if (a.startsWith('--no-') && BOOL_TO_KEY['--' + a.slice(5)]) {
       out.config[BOOL_TO_KEY['--' + a.slice(5)]] = false;
-    } else if (['--resume', '--force', '--overwrite', '--auto-export', '--no-commit', '--skip-browser'].includes(a)) {
+    } else if (['--resume', '--force', '--overwrite', '--auto-export', '--no-commit', '--skip-browser', '--snapshots'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = true;
     } else if (['--workers', '--time-budget', '--dir', '--which', '--model', '--out', '--seconds', '--log-every', '--seeds', '--seed-offset',
       '--levels', '--span0', '--span', '--keep-boring', '--backend', '--epochs', '--batch', '--demos'].includes(a)) {
@@ -766,6 +770,7 @@ async function bcTrainCmd({ config: cli, opts }) {
   if (!cli.hidden) throw new Error('bc-train needs --hidden (e.g. --hidden 32,32)');
   const backend = opts.backend || 'node';
   if (!['node', 'python'].includes(backend)) throw new Error(`--backend must be node or python, got ${backend}`);
+  if (opts.snapshots && backend !== 'python') throw new Error('--snapshots is only supported with --backend python');
   const d = bc.TRAIN_DEFAULTS;
   const o = {
     hidden: cli.hidden,
@@ -785,6 +790,8 @@ async function bcTrainCmd({ config: cli, opts }) {
   const sha = bc.checkDemos(demos, hash, !!opts.force, (m) => log(m));
   const release = acquireLock(dir);
   process.on('exit', release);
+  const snapshotDir = opts.snapshots ? path.join(dir, 'snapshots') : null;
+  if (snapshotDir) fs.rmSync(snapshotDir, { recursive: true, force: true });
   const gameVersion = demos.manifest.gameVersion;
   log(`bc-train: dir=${dir} backend=${backend} layers=${[OBS_DIM, ...o.hidden, 3].join('-')} epochs ${o.epochs} batch ${o.batch} lr ${o.lr} seed ${o.seed} ` +
     `demos ${path.relative(ROOT, demos.manifestFile)} (${demos.manifest.rows} rows, sha ${sha.slice(0, 12)}) core=${hash.slice(0, 12)}`);
@@ -802,7 +809,7 @@ async function bcTrainCmd({ config: cli, opts }) {
   } else {
     const outFile = path.join(dir, `bc-python.${process.pid}.tmp`);
     try {
-      result = await bc.trainPython(demos.binFile, outFile, o, ROOT, (line) => {
+      result = await bc.trainPython(demos.binFile, outFile, snapshotDir ? { ...o, snapshotDir } : o, ROOT, (line) => {
         if (line.startsWith('{')) onEpoch(JSON.parse(line)); else if (line) log(line);
       });
     } finally {
@@ -827,6 +834,7 @@ async function bcTrainCmd({ config: cli, opts }) {
     epochs: o.epochs, batch: o.batch, lr: o.lr, seed: o.seed,
     demos: path.relative(ROOT, demos.manifestFile), demosSha256: sha, demosRows: demos.manifest.rows,
     trainSeconds, final: last ? { loss: last.loss, recall: last.recall } : null,
+    ...(snapshotDir ? { snapshots: path.relative(ROOT, snapshotDir) } : {}),
   };
   writeJsonAtomic(bestFile, bc.assembleBest({ layers: result.layers, params: result.params, validation, coreHash: hash, config }));
   release();

@@ -9,8 +9,11 @@ prototype's params exactly on the same rows. The algorithm is the one in
 trainer/bc.js (the node backend). Rows: float32 [obs-dim features, label, weight].
 Prints one JSON line per epoch ({epoch, loss, recall: {none, jump}, seconds}) and
 writes {layers, params, log} to --out; Node owns best.json.
+--snapshot-dir DIR (optional) also writes DIR/epoch-NN.json ({layers, params, epoch};
+NN and epoch 1-based) after each epoch's last optimiser step: a float64 copy only, so it
+draws no RNG and changes no computation.
 Needs numpy (the repo's .venv; the PYTHON env var overrides the interpreter)."""
-import argparse, json, time
+import argparse, json, os, time
 import numpy as np
 
 ap = argparse.ArgumentParser()
@@ -22,6 +25,7 @@ ap.add_argument('--batch', type=int, default=1024)
 ap.add_argument('--lr', type=float, default=2e-3)
 ap.add_argument('--seed', type=int, default=1)
 ap.add_argument('--out', required=True)
+ap.add_argument('--snapshot-dir', default=None)
 a = ap.parse_args()
 
 ROW = a.obs_dim
@@ -52,6 +56,19 @@ def forward(xb):
     return hs
 
 
+def flat_params():
+    flat = []
+    for i in range(L): flat += Ws[i].astype(np.float64).ravel().tolist() + bs[i].astype(np.float64).tolist()
+    return flat
+
+
+def write_json(path, obj):
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as f: json.dump(obj, f)
+    os.replace(tmp, path)
+
+
+if a.snapshot_dir: os.makedirs(a.snapshot_dir, exist_ok=True)
 log = []
 steps = epochs * (N // B)
 for ep in range(epochs):
@@ -73,6 +90,9 @@ for ep in range(epochs):
         for j, (pp, gg) in enumerate(zip(params, grads)):
             m[j] = 0.9 * m[j] + 0.1 * gg; v[j] = 0.999 * v[j] + 0.001 * gg * gg
             pp -= lr * (m[j] / (1 - 0.9 ** t)) / (np.sqrt(v[j] / (1 - 0.999 ** t)) + 1e-8)
+    if a.snapshot_dir:
+        name = 'epoch-%0*d.json' % (max(2, len(str(epochs))), ep + 1)
+        write_json(os.path.join(a.snapshot_dir, name), dict(layers=layers, params=flat_params(), epoch=ep + 1))
     # train-set recall per class (subsample)
     sub = rng.choice(N, min(N, 200000), replace=False)
     pred = forward(X[sub])[-1].argmax(1)
@@ -80,6 +100,4 @@ for ep in range(epochs):
     row = dict(epoch=ep, loss=float(tot / w_all.sum()), recall=dict(none=acc[0], jump=acc[1]), seconds=time.time() - t0)
     log.append(row)
     print(json.dumps(row), flush=True)
-flat = []
-for i in range(L): flat += Ws[i].astype(np.float64).ravel().tolist() + bs[i].astype(np.float64).tolist()
-json.dump(dict(layers=layers, params=flat, log=log), open(a.out, 'w'))
+json.dump(dict(layers=layers, params=flat_params(), log=log), open(a.out, 'w'))
