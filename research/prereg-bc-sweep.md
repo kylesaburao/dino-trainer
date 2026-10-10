@@ -113,3 +113,12 @@ Scope: v2, the 44 features, the demos from seeds 1–40 with default `bc-gen` se
 - **Training:** the total training FLOPs over the grid are dominated by w64 at d32–64. At 15 epochs × 2.1M rows, d64 w64 costs about 6 × 261k × 31.4M ≈ 4.9e13 FLOPs. That is about 10–20 min per job at numpy speed with 2 threads. The other 27 configurations together cost roughly as much again. With parallel jobs, about 30–60 min.
 - **Tier A:** games are about MACs × 1.94M multiply-adds. d64 w64 is about 5e11 per game, so 25 games on 18 workers take minutes to tens of minutes. The largest few dominate.
 - **Tier B:** if every capped configuration passes tier A, that is 16 configurations at seed 1 plus 11 at seed 2 plus the control, about 28 scans. At 3–5 min each (d64 w8 is about 1.7× the shipped cost per frame), **about 1.5–2.5 h**.
+
+## Results (PARTIAL: stopped by the user, 2026-10-10 about 19:30 UTC; mac-3 executor, branch `wt/bc-sweep` from main `9992a55`)
+The full results are in **`research/bc-sweep-report.md`**. In summary:
+- **Controls.** Both STOP controls passed: the `--snapshots` params are identical to `py-s1`, and d2 w32 s1 scored 0/1,000 on tier B. T1 and T2 stay at 99.5% and 99.8%.
+- **Training.** All 28 configurations were trained at seed 1, and the 9 S2 candidates at seed 2.
+- **Tier B, seed 1.** All 14 eligible configurations that passed tier A were scanned. All scored 0/1,000 except d8 w8, at 2/1,000.
+- **Untrainable at the shipped hyperparameters (§6):** d ≥ 32 at w8, w16 and w32, and d ≥ 16 at w64. These nets collapse to the constant "none" predictor.
+- **Not reached:** S2. Seed-2 scans were done only for d1 w8 and d2 w8, both 0/1,000. There were no gate or certification steps.
+- **No held-out offsets were spent; the next fresh offset is still 325.**
