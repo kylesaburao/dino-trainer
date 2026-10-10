@@ -216,3 +216,12 @@ The desktops are not used.
 - **O5, `scan.js` hash handling:** an `--expect-hash` flag defaulting to the model's own `coreHash` (proposed; refuses a cross-core scan unless overridden), against a hard-coded new prefix.
 - **O6, the margin levels** (§4.5 item 2).
 - **O7:** whether to also record agreement per snapshot for every model (cheap), not only for the tier-B ones.
+
+**Orchestrator rulings (mac-5, 2026-10-10 ~23:10Z, before anything ran; §4.0 claims spot-checked on main `c7ad90f`: `scan.js` `EXPECT_HASH = '0f329d4e'` and the v2-only throws in `scan.js`/`opening.js`/`duckshare.js` confirmed, `margin.js` fixed `LEVELS` confirmed):**
+- O1: **arm C 2×8 is in** (the shipped shape; order A, B, C).
+- O2: the **15-level grid** of §4.1.
+- O3: post-step window **95k → 130k**.
+- O4: **`scan.js --start`** for the screen, `opening.js --start` for classification only.
+- O5: **`--expect-hash`, defaulting to the model's own `coreHash`**.
+- O6: the margin levels of §4.5 item 2, as listed.
+- O7: **agreement per snapshot for every model** (cheap; descriptive).

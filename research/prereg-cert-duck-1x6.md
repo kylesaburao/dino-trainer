@@ -90,3 +90,5 @@ Both use rules v2, the models' own rules, so no `--game`. Each appends one recor
 - **O1, the selection rule:** the largest margin among tier-B-clean seeds (proposed; picks s1). The alternative, the lowest clean seed, also picks s1.
 - **O2, 1×4 instead of, or alongside, 1×6:** 1×4 is smaller (195 params, 188 MACs) and its s1 margin (3.3e-4) is larger than 1×6-s1's. The user named 1×6, so 1×4 is not registered.
 - **O3, timing:** before or after the rules-v3 clone study. They share no seeds or offsets, but both need the Mac.
+
+**Orchestrator rulings (mac-5, 2026-10-10 ~23:10Z, before anything ran):** O1 the largest-margin rule (picks s1). O2 no 1×4 (the user named 1×6). O3 after the rules-v3 clone study, D2 quantization and the release fix, as the user's queue has it (handoff `2026-10-10T2300Z` §3).
