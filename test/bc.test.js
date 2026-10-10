@@ -713,3 +713,151 @@ test('pow2 through the CLI (bc-quantize and bc-train): config.quant records k, b
   assertPow2Grid(qb.layers, qb.params, qb.config.quant.k, 8);
   assert.deepStrictEqual(pack.unpack(pack.pack(qb).buf).params, qb.params);
 });
+
+// ---------------------------------------------------------------------------
+// Release-fix flags (research/prereg-teacher-duck-release-fix.md §4.1)
+// ---------------------------------------------------------------------------
+const { createDuckSolver } = require('./solver.js');
+const NO_NUMPY = 'python backend not tested: no numpy (set PYTHON to an interpreter with numpy, e.g. the repo\'s .venv)';
+// The real duck teacher over the opening (pterodactyls from about 450 points), one seed.
+const OPENING = { seeds: [3, 4], levels: [0], span0: 1000, span: 5000, keepBoring: 10, gameVersion: 'v2', teacher: 'duck', workers: 1 };
+async function genAt(name, o) {
+  const dir = path.join(tmp, name);
+  const manifest = await bc.generateDemos(dir, { ...o, coreHash: coreHash() });
+  fs.writeFileSync(path.join(dir, 'demos.json'), JSON.stringify(manifest));
+  return { dir, manifest, bin: fs.readFileSync(path.join(dir, 'demos.bin')) };
+}
+
+test('bc-gen scoreWindow: an all-covering window is byte-identical to none; a window keeps a strict subset', async () => {
+  const all = await genAt('win-all', { ...SMALL, workers: 1, scoreWindow: [0, 1e9] });
+  assert.strictEqual(all.manifest.sha256, SMALL_JUMP_SHA256);
+  assert.deepStrictEqual(all.manifest.scoreWindow, [0, 1e9]);
+  const part = await genAt('win-part', { ...SMALL, workers: 1, scoreWindow: [100, 200] });
+  assert.ok(part.manifest.rows > 0 && part.manifest.rows < all.manifest.rows, `${part.manifest.rows} of ${all.manifest.rows}`);
+  assert.ok(!('scoreWindow' in (await smallDemos()).manifest), 'a default manifest has no scoreWindow key');
+});
+
+test('DAgger relabel control: the duck teacher as its own student reproduces bc-gen rows byte for byte', async () => {
+  for (const [name, extra] of [['full', {}], ['window', { scoreWindow: [400, 800] }]]) {
+    const ref = await genAt(`ctl-teacher-${name}`, { ...OPENING, ...extra });
+    const dag = await genAt(`ctl-student-${name}`, { ...OPENING, ...extra, createStudent: createDuckSolver, student: { path: 'test/solver.js createDuckSolver', paramsSha256: null } });
+    assert.ok(ref.manifest.counts.rows.duck > 0, `${name}: the control must contain duck rows to bite`);
+    assert.strictEqual(dag.manifest.sha256, ref.manifest.sha256, `${name}: rows differ`);
+    assert.strictEqual(dag.manifest.source, 'dagger');
+    assert.strictEqual(dag.manifest.undefinedAir, 0);
+    assert.strictEqual(dag.manifest.studentCrashes, 0);
+    assert.ok(!('solverCrashes' in dag.manifest) && ref.manifest.solverCrashes === 0);
+  }
+});
+
+test('DAgger rollouts of a weak student: the student plays, the shadow labels, crashes are the student\'s', async () => {
+  // An actor that taps jump every other frame: it takes off whenever it lands, so most of
+  // its airborne frames follow takeoffs the shadow did not choose.
+  const hopper = () => { let k = 0; return () => ({ jump: k++ % 2 === 0, down: false }); };
+  const dag = await genAt('dag-weak', { ...OPENING, createStudent: hopper, student: { path: 'x', paramsSha256: 'y' } });
+  const ref = await genAt('dag-weak-ref', OPENING);
+  assert.strictEqual(dag.manifest.source, 'dagger');
+  assert.deepStrictEqual(dag.manifest.student, { path: 'x', paramsSha256: 'y' });
+  assert.notStrictEqual(dag.manifest.sha256, ref.manifest.sha256);
+  assert.ok(dag.manifest.undefinedAir > 0, 'airborne frames of takeoffs the shadow did not choose are dropped');
+  assert.strictEqual(dag.manifest.episodes.reduce((a, e) => a + e.undefinedAir, 0), dag.manifest.undefinedAir);
+  assert.ok(dag.manifest.studentCrashes > 0, 'the hopper crashes');
+  // A model student (plain data): the same rows through worker threads.
+  const layers = [P.OBS_DIM, 3];
+  const params = new Array(P.numParams(layers)).fill(0);
+  params[params.length - 2] = 1;   // jump bias: holds jump
+  const model = { format: P.FORMAT, layers, params, actionRepeat: 1, gameVersion: 'v2' };
+  const two = await genAt('dag-weak-w2', { ...OPENING, seeds: [3, 4], workers: 2, studentModel: model });
+  const one = await genAt('dag-weak-w1', { ...OPENING, seeds: [3, 4], workers: 1, studentModel: model });
+  assert.strictEqual(two.manifest.sha256, one.manifest.sha256);
+});
+
+test('transitionMask: grounded onsets and releases only', () => {
+  assert.strictEqual(bc.transitionMask(0, 0, 2), 1);   // onset
+  assert.strictEqual(bc.transitionMask(0, 1, 0), 2);   // release
+  assert.strictEqual(bc.transitionMask(0, 1, 1), 2);   // release into a jump
+  assert.strictEqual(bc.transitionMask(0, 1, 2), 0);   // inside a duck
+  assert.strictEqual(bc.transitionMask(0, 0, 0), 0);
+  assert.strictEqual(bc.transitionMask(0, 0, 1), 0);   // a jump takeoff is not a duck transition
+  assert.strictEqual(bc.transitionMask(1, 0, 2), 0);   // airborne
+  assert.strictEqual(bc.transitionMask(1, 1, 0), 0);
+});
+
+test('counts.js (C-a1) counts the transitions bc_train.py weights (skipped without numpy for the python half)', async (t) => {
+  const { dir } = await duckDemos();
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'research', 'scripts', 'prereg-teacher-duck-release-fix', 'counts.js'), '--demos', dir], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const c = JSON.parse(r.stdout);
+  assert.ok(c.total.onset > 0 && c.total.release > 0, JSON.stringify(c.total));
+  assert.strictEqual(c.total.release, c.total.releaseToNone + c.total.releaseToJump);
+  assert.strictEqual(c.total.rows, (await duckDemos()).manifest.rows);
+  if (!hasNumpy()) { t.skip(NO_NUMPY); return; }
+  const o = { hidden: [4], epochs: 1, batch: 64, lr: 1e-2, seed: 1, transitionWeight: 4 };
+  const p = await bc.trainPython(path.join(dir, 'demos.bin'), path.join(tmp, 'py-tw4.json'), o, ROOT);
+  assert.deepStrictEqual(p.transitions, { onset: c.total.onset, release: c.total.release, releaseToJump: c.total.releaseToJump });
+});
+
+test('python --transition-weight: 1 is identical to no flag, 4 changes the params (skipped without numpy)', async (t) => {
+  if (!hasNumpy()) { t.skip(NO_NUMPY); return; }
+  const bin = path.join((await duckDemos()).dir, 'demos.bin');
+  const o = { hidden: [8], epochs: 2, batch: 64, lr: 1e-2, seed: 1 };
+  const plain = await bc.trainPython(bin, path.join(tmp, 'tw-none.json'), o, ROOT);
+  const one = await bc.trainPython(bin, path.join(tmp, 'tw-1.json'), { ...o, transitionWeight: 1 }, ROOT);
+  const four = await bc.trainPython(bin, path.join(tmp, 'tw-4.json'), { ...o, transitionWeight: 4 }, ROOT);
+  assert.deepStrictEqual(one.params, plain.params);
+  assert.ok(!('transitions' in plain) && !('transitions' in one));
+  assert.notDeepStrictEqual(four.params, plain.params);
+});
+
+test('python --extra-demos equals training on the concatenated file (skipped without numpy)', async (t) => {
+  if (!hasNumpy()) { t.skip(NO_NUMPY); return; }
+  const a = path.join((await smallDemos()).dir, 'demos.bin'), b = path.join((await duckDemos()).dir, 'demos.bin');
+  const cat = path.join(tmp, 'cat.bin');
+  fs.writeFileSync(cat, Buffer.concat([fs.readFileSync(a), fs.readFileSync(b)]));
+  const o = { hidden: [8], epochs: 2, batch: 64, lr: 1e-2, seed: 2 };
+  const joined = await bc.trainPython(cat, path.join(tmp, 'x-cat.json'), o, ROOT);
+  const extra = await bc.trainPython(a, path.join(tmp, 'x-extra.json'), { ...o, extraDemos: [b] }, ROOT);
+  assert.deepStrictEqual(extra.params, joined.params);
+});
+
+test('cli: release-fix flags are python-only, validated, and recorded in best.json / the manifest', async (t) => {
+  const { dir: jdir } = await smallDemos();
+  const { dir: ddir } = await duckDemos();
+  for (const flag of [['--extra-demos', jdir], ['--transition-weight', '4']]) {
+    const r = cli('bc-train', '--dir', path.join(tmp, 'cli-node' + flag[0]), '--demos', jdir, '--hidden', '4', '--epochs', '1', ...flag);
+    assert.notStrictEqual(r.status, 0);
+    assert.match(r.stderr + r.stdout, /only supported with --backend python/);
+  }
+  const bad = cli('bc-gen', '--dir', path.join(tmp, 'cli-badwin'), '--seeds', '1-1', '--levels', '0', '--span0', '300', '--score-window', '800-400');
+  assert.notStrictEqual(bad.status, 0);
+  assert.match(bad.stderr + bad.stdout, /--score-window must be A-B/);
+  // bc-gen --student with a committed duck clone, in a score window.
+  const student = path.join(ROOT, 'runs', 'exp-bc-duck', 'v2-bc-duck-d2w8-s1', 'best.json');
+  const sd = path.join(tmp, 'cli-dagger');
+  const g = cli('bc-gen', '--dir', sd, '--seeds', '3-4', '--levels', '0', '--span0', '800', '--score-window', '400-800', '--teacher', 'duck', '--student', student, '--workers', '1');
+  assert.strictEqual(g.status, 0, g.stderr);
+  const m = JSON.parse(fs.readFileSync(path.join(sd, 'demos.json'), 'utf8'));
+  assert.strictEqual(m.source, 'dagger');
+  assert.strictEqual(m.student.path, path.relative(ROOT, student));
+  assert.match(m.student.paramsSha256, /^[0-9a-f]{64}$/);
+  assert.deepStrictEqual(m.scoreWindow, [400, 800]);
+  assert.ok(m.rows > 0 && m.counts.rows.duck > 0);
+  if (!hasNumpy()) { t.skip(NO_NUMPY); return; }
+  // A teacher mismatch between base and extra demos is refused.
+  const mis = cli('bc-train', '--dir', path.join(tmp, 'cli-mis'), '--demos', ddir, '--extra-demos', jdir, '--hidden', '4', '--epochs', '1', '--backend', 'python', '--target', '50', '--workers', '1');
+  assert.notStrictEqual(mis.status, 0);
+  assert.match(mis.stderr + mis.stdout, /teacher jump, base demos duck/);
+  const out = path.join(tmp, 'cli-py');
+  const r = cli('bc-train', '--dir', out, '--demos', ddir, '--extra-demos', sd, '--transition-weight', '4', '--hidden', '4', '--epochs', '1', '--batch', '64',
+    '--backend', 'python', '--target', '50', '--workers', '1');
+  assert.strictEqual(r.status, 0, r.stderr);
+  const best = JSON.parse(fs.readFileSync(path.join(out, 'best.json'), 'utf8'));
+  assert.strictEqual(best.config.extraDemos.length, 1);
+  assert.strictEqual(best.config.extraDemos[0].demosSha256, m.sha256);
+  assert.strictEqual(best.config.transitionWeight, 4);
+  assert.ok(best.config.transitions.onset > 0);
+  // The release-fix flags do not combine with distillation (teacher logits cover the base demos only).
+  const dz = cli('bc-train', '--dir', path.join(tmp, 'cli-dz'), '--demos', ddir, '--extra-demos', sd, '--distill-from', student, '--hidden', '4', '--epochs', '1', '--backend', 'python');
+  assert.notStrictEqual(dz.status, 0);
+  assert.match(dz.stderr + dz.stdout, /do not combine with --distill-from/);
+});
