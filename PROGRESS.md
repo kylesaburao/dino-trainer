@@ -153,7 +153,7 @@ Watch live with `node trainer/dashboard.js` (http://127.0.0.1:8080).
 - **Trainer:**
   - OpenAI-ES with antithetic sampling, centred ranks, Adam (lr 0.03) and L2 decay 0.005, σ = 0.1.
   - Population 128 × 4 episodes per candidate, all candidates sharing the same episode seeds within a generation.
-  - MLP 44-16-3 with tanh (771 parameters), plain Node, no dependencies.
+  - MLP with tanh, plain Node, no dependencies. The CLI default is 44-16-3 (771 parameters), which plateaus at about 1200; the shipped run uses `--hidden 32` (44-32-3, 1539 parameters).
   - Noise vectors are regenerated from per-candidate seeds in the workers and in the main thread, so only seeds and θ cross threads.
 - **Checkpoints:**
   - Written atomically: temp file, fsync, rename.
