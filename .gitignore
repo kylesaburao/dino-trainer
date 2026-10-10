@@ -4,6 +4,8 @@ runs/*/checkpoint*.json
 runs/*/*.log
 runs/*/*.lock
 runs/*/*.tmp
+# Behaviour-cloning demonstrations (regenerate with bc-gen; demos.json is committed).
+runs/*/demos.bin
 # Smoke-test runs are throwaway.
 runs/smoke*/
 .DS_Store

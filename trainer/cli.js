@@ -13,6 +13,30 @@
 //   node trainer/cli.js report [--dir runs/main]        regenerate PROGRESS.md's status block
 //   node trainer/cli.js finish [--dir runs/main] [--no-commit] [--skip-browser]
 //   node trainer/cli.js session [train options]          train, then finish (one detached command)
+//   node trainer/cli.js bc-gen   --dir runs/<name> [--seeds 1-40] [--levels 0,2000,50000,300000,900000]
+//                              [--span0 3000] [--span 5000] [--keep-boring 10] [--game v2] [--workers N] [--overwrite]
+//   node trainer/cli.js bc-train --dir runs/<name> --hidden 32,32 [--backend node|python] [--epochs 15]
+//                              [--batch 1024] [--lr 2e-3] [--seed 1] [--demos <dir or demos.json>]
+//                              [--target 1000000] [--workers N] [--wasm] [--force] [--overwrite]
+//
+// Behaviour cloning of test/solver.js (trainer/bc.js; supervised, no ES):
+//   bc-gen    plays the solver on each seed (inclusive range) from each start level, for
+//             --span0 points from 0 and --span points from the other levels, and writes
+//             demos.bin (Float32 rows [policy.observe features, label, weight]; label = the
+//             solver's jump key) and demos.json (manifest: coreHash, counts, solver crashes,
+//             sha256). Grounded no-op frames with the nearest obstacle more than 40 frames
+//             away (or none) are kept 1 in --keep-boring with that weight; the counter resets
+//             every episode, so the output is the same for any --workers.
+//   bc-train  trains a tanh MLP on the demos (--demos, default --dir) with weighted
+//             cross-entropy, sqrt-balanced class weights, Adam and a cosine learning rate,
+//             then validates it on the 25 validation seeds (full games to --target,
+//             default 1000000) and writes best.json (the same schema as ES runs, so eval
+//             and export work unchanged) and bc-metrics.jsonl (per-epoch loss and recall).
+//             --backend node (default; plain Node) or python (trainer/bc_train.py, needs
+//             numpy: the repo's .venv/bin/python, or the PYTHON env var). Each backend is
+//             deterministic per --seed on one machine; the two do not match each other.
+//             Refuses demos generated on another core hash unless --force, and an
+//             existing best.json unless --overwrite.
 //
 // Training-only curriculum (off by default; validation, held-out eval, the stop
 // check, eval and export always play full games from 0 to --target):
@@ -183,7 +207,8 @@ function parseArgs(argv) {
       out.config[BOOL_TO_KEY['--' + a.slice(5)]] = false;
     } else if (['--resume', '--force', '--overwrite', '--auto-export', '--no-commit', '--skip-browser'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = true;
-    } else if (['--workers', '--time-budget', '--dir', '--which', '--model', '--out', '--seconds', '--log-every', '--seeds', '--seed-offset'].includes(a)) {
+    } else if (['--workers', '--time-budget', '--dir', '--which', '--model', '--out', '--seconds', '--log-every', '--seeds', '--seed-offset',
+      '--levels', '--span0', '--span', '--keep-boring', '--backend', '--epochs', '--batch', '--demos'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = takesValue();
     } else {
       throw new Error(`unknown argument ${a}`);
@@ -686,12 +711,137 @@ async function benchCmd({ config: cli, opts }) {
 }
 
 // ---------------------------------------------------------------------------
+// bc-gen / bc-train: behaviour cloning of test/solver.js (trainer/bc.js)
+// ---------------------------------------------------------------------------
+const requireDir = (opts, cmd) => {
+  if (!opts.dir) throw new Error(`${cmd} needs --dir runs/<name>`);
+  return path.resolve(opts.dir);
+};
+
+function parseSeedRange(v) {
+  const m = /^(\d+)(?:-(\d+))?$/.exec(String(v));
+  if (!m) throw new Error(`--seeds must be A-B (inclusive) or a single seed, got ${v}`);
+  const a = Number(m[1]), b = m[2] !== undefined ? Number(m[2]) : a;
+  if (!(b >= a)) throw new Error(`--seeds ${v}: empty range`);
+  return Array.from({ length: b - a + 1 }, (_, i) => a + i);
+}
+
+async function bcGenCmd({ config: cli, opts }) {
+  const bc = require('./bc.js');
+  const dir = requireDir(opts, 'bc-gen');
+  const d = bc.GEN_DEFAULTS;
+  const o = {
+    seeds: parseSeedRange(opts.seeds !== undefined ? opts.seeds : '1-40'),
+    levels: opts.levels !== undefined ? opts.levels.split(',').map(Number) : d.levels,
+    span0: opts.span0 !== undefined ? Number(opts.span0) : d.span0,
+    span: opts.span !== undefined ? Number(opts.span) : d.span,
+    keepBoring: opts.keepBoring !== undefined ? Number(opts.keepBoring) : d.keepBoring,
+    gameVersion: cli.gameVersion || d.gameVersion,
+    workers: Number(opts.workers) || defaultWorkers(),
+    coreHash: coreHash(),
+  };
+  if (!GAME_VERSIONS.includes(o.gameVersion)) throw new Error(`--game must be one of ${GAME_VERSIONS.join(', ')}`);
+  if (!o.levels.every(l => Number.isInteger(l) && l >= 0)) throw new Error('--levels must be non-negative integers');
+  if (!(Number.isInteger(o.keepBoring) && o.keepBoring >= 1)) throw new Error('--keep-boring must be a positive integer');
+  if (!(o.span0 > 0 && o.span > 0)) throw new Error('--span0 and --span must be positive');
+  const manifestFile = path.join(dir, 'demos.json');
+  if (fs.existsSync(manifestFile) && !opts.overwrite) throw new Error(`${manifestFile} exists; pass --overwrite to regenerate`);
+  log(`bc-gen: dir=${dir} seeds ${o.seeds[0]}-${o.seeds[o.seeds.length - 1]} levels ${o.levels.join(',')} span0 ${o.span0} span ${o.span} ` +
+    `keep-boring ${o.keepBoring} game ${o.gameVersion} workers ${o.workers} core=${o.coreHash.slice(0, 12)}`);
+  const t0 = Date.now();
+  let lastLog = 0;
+  o.onProgress = (done, total, rows) => {
+    if (done === total || Date.now() - lastLog > 15000) { lastLog = Date.now(); log(`bc-gen: ${done}/${total} seeds, ${rows} rows`); }
+  };
+  const manifest = await require('./bc.js').generateDemos(dir, o);
+  writeJsonAtomic(manifestFile, manifest);
+  log(`bc-gen: ${manifest.rows} rows (none ${manifest.counts.rows.none}, jump ${manifest.counts.rows.jump}), ` +
+    `solver crashes ${manifest.solverCrashes}, ${((Date.now() - t0) / 1000).toFixed(1)}s -> ${path.relative(ROOT, manifestFile)}`);
+  if (manifest.solverCrashes) throw new Error(`the solver crashed in ${manifest.solverCrashes} episode(s); the demonstrations are not trustworthy`);
+}
+
+async function bcTrainCmd({ config: cli, opts }) {
+  const bc = require('./bc.js');
+  const dir = requireDir(opts, 'bc-train');
+  if (!cli.hidden) throw new Error('bc-train needs --hidden (e.g. --hidden 32,32)');
+  const backend = opts.backend || 'node';
+  if (!['node', 'python'].includes(backend)) throw new Error(`--backend must be node or python, got ${backend}`);
+  const d = bc.TRAIN_DEFAULTS;
+  const o = {
+    hidden: cli.hidden,
+    epochs: opts.epochs !== undefined ? Number(opts.epochs) : d.epochs,
+    batch: opts.batch !== undefined ? Number(opts.batch) : d.batch,
+    lr: cli.lr !== undefined ? cli.lr : d.lr,
+    seed: cli.seed !== undefined ? cli.seed : d.seed,
+  };
+  if (!o.hidden.every(h => Number.isInteger(h) && h > 0)) throw new Error('--hidden must be positive integers');
+  if (!(Number.isInteger(o.epochs) && o.epochs > 0 && Number.isInteger(o.batch) && o.batch > 0)) throw new Error('--epochs and --batch must be positive integers');
+  const target = cli.target || 1000000;
+  fs.mkdirSync(dir, { recursive: true });
+  const bestFile = path.join(dir, 'best.json');
+  if (fs.existsSync(bestFile) && !opts.overwrite) throw new Error(`${bestFile} exists; pass --overwrite to replace it`);
+  const hash = coreHash();
+  const demos = bc.resolveDemos(path.resolve(opts.demos || dir));
+  const sha = bc.checkDemos(demos, hash, !!opts.force, (m) => log(m));
+  const release = acquireLock(dir);
+  process.on('exit', release);
+  const gameVersion = demos.manifest.gameVersion;
+  log(`bc-train: dir=${dir} backend=${backend} layers=${[OBS_DIM, ...o.hidden, 3].join('-')} epochs ${o.epochs} batch ${o.batch} lr ${o.lr} seed ${o.seed} ` +
+    `demos ${path.relative(ROOT, demos.manifestFile)} (${demos.manifest.rows} rows, sha ${sha.slice(0, 12)}) core=${hash.slice(0, 12)}`);
+
+  const metricsFile = path.join(dir, 'bc-metrics.jsonl');
+  fs.rmSync(metricsFile, { force: true });
+  const onEpoch = (row) => {
+    fs.appendFileSync(metricsFile, JSON.stringify({ backend, ...row }) + '\n');
+    log(`epoch ${row.epoch}: loss ${row.loss.toFixed(4)} recall none ${row.recall.none.toFixed(4)} jump ${row.recall.jump.toFixed(4)} (${row.seconds.toFixed(1)}s)`);
+  };
+  const t0 = Date.now();
+  let result;
+  if (backend === 'node') {
+    result = bc.trainNode(bc.loadDemos(demos.binFile), { ...o, onEpoch });
+  } else {
+    const outFile = path.join(dir, `bc-python.${process.pid}.tmp`);
+    try {
+      result = await bc.trainPython(demos.binFile, outFile, o, ROOT, (line) => {
+        if (line.startsWith('{')) onEpoch(JSON.parse(line)); else if (line) log(line);
+      });
+    } finally {
+      fs.rmSync(outFile, { force: true });
+    }
+  }
+  const trainSeconds = (Date.now() - t0) / 1000;
+  const model = { format: FORMAT, layers: result.layers, params: result.params, actionRepeat: 1, gameVersion };
+
+  const valSeedList = validationSeeds(25);
+  const workers = Number(opts.workers) || defaultWorkers();
+  const pool = createPool(Math.min(workers, valSeedList.length));
+  log(`validation: ${valSeedList.length} seeds to ${target} (${gameVersion})`);
+  const scores = await scoreSeeds(pool, model, valSeedList, target, !!cli.wasm);
+  await pool.terminate();
+  const validation = valSummary(scores, target);
+  const last = result.log[result.log.length - 1];
+  const config = {
+    target, hidden: o.hidden, actionRepeat: 1, gameVersion,
+    method: 'behaviour cloning of test/solver.js (supervised; no ES)',
+    trainer: `trainer/cli.js bc-train --backend ${backend}`, backend,
+    epochs: o.epochs, batch: o.batch, lr: o.lr, seed: o.seed,
+    demos: path.relative(ROOT, demos.manifestFile), demosSha256: sha, demosRows: demos.manifest.rows,
+    trainSeconds, final: last ? { loss: last.loss, recall: last.recall } : null,
+  };
+  writeJsonAtomic(bestFile, bc.assembleBest({ layers: result.layers, params: result.params, validation, coreHash: hash, config }));
+  release();
+  log(`validation: median ${validation.median} min ${validation.min} count ${validation.count}/${valSeedList.length}; ` +
+    `trained in ${trainSeconds.toFixed(1)}s -> ${path.relative(ROOT, bestFile)}`);
+}
+
+// ---------------------------------------------------------------------------
 const ops = () => require('./ops.js');
 const COMMANDS = {
   train, eval: evalCmd, bench: benchCmd, export: exportCmd, 'export-css': exportCssCmd,
   report: (a) => ops().reportCmd(a),
   finish: (a) => ops().finishCmd(a),
   session: (a) => ops().sessionCmd(a),
+  'bc-gen': bcGenCmd, 'bc-train': bcTrainCmd,
 };
 
 async function main() {
@@ -704,7 +854,7 @@ async function main() {
   }
   const cmd = COMMANDS[args.cmd];
   if (!cmd) {
-    console.error('usage: node trainer/cli.js <train|eval|bench|export|export-css|report|finish|session> [options]  (see the header of trainer/cli.js)');
+    console.error('usage: node trainer/cli.js <train|eval|bench|export|export-css|report|finish|session|bc-gen|bc-train> [options]  (see the header of trainer/cli.js)');
     process.exit(2);
   }
   await cmd(args);

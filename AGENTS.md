@@ -34,6 +34,18 @@ nohup node trainer/cli.js train --wasm --hidden 32,32 --target 1000000 --time-bu
 kill -INT <pid>    # PID is in runs/<dir>/train.lock; saves a checkpoint and releases the lock
 ```
 
+Behaviour cloning (see "Model provenance"):
+
+```sh
+node trainer/cli.js bc-gen --dir runs/bc-<name>                                   # solver demos: seeds 1-40, about 2.1M rows, seconds
+node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32                  # node backend, about 10 s/epoch, then 25-seed validation to 1M
+node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend python # numpy backend, about 1 s/epoch
+```
+
+- `--backend python` needs `.venv` with numpy (`.venv/bin/python`); the `PYTHON` env var overrides the interpreter. A worktree has no `.venv` of its own, so set `PYTHON` there.
+- `bc-gen` writes `demos.bin` (gitignored) and `demos.json`; `bc-train` writes `best.json` and `bc-metrics.jsonl` (per-epoch loss and recall, not `metrics.jsonl`). `eval` and `export` then work as for an ES run.
+- `bc-train` refuses demos from another core hash unless `--force`. The flags are in the `trainer/cli.js` header.
+
 The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale. `runs/main` no longer exists. Pass both explicitly.
 
 - **Shipped model:** `runs/bc-v2-h32x32` (44-32-32-3).
@@ -50,11 +62,12 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 | Training signal | the solver's action on each frame (supervised, cross-entropy) | the capped game score (OpenAI-ES, no shaping) |
 | Teacher | `test/solver.js` (reads the hidden gap and the fairness lookahead) | none |
 | Inputs at play time | the 44 `observe()` features | the 44 `observe()` features |
-| Code | `research/scripts/feature-sufficiency/`: `cloneB.js gen` (demos), `trainB.py` (numpy; `.venv`), `cloneB.js roll` (rollouts) | `trainer/` |
+| Code | `trainer/bc.js` (demos, node backend, best.json), `trainer/bc_train.py` (numpy backend); `cli.js bc-gen` / `bc-train`. Prototype: `research/scripts/feature-sufficiency/` | `trainer/` |
 | Run dir | `runs/bc-v2-h32x32` (`best.json` records the method in `config`) | `runs/v2-h32x32-1m`, `runs/exp-*` |
 
-- The BC pipeline is still research scripts. It isn't wired into `trainer/cli.js`, and it needs Python with numpy. Its demonstration data is gitignored, in `runs/exp-bc-clones/scratch-features/`; `cloneB.js gen` regenerates it deterministically.
-- To ship a new BC model: write its `best.json` in a `runs/bc-*` directory, then `export --dir runs/bc-... --which best`.
+- The BC pipeline is `bc-gen` then `bc-train` (Commands above). The teacher is `test/solver.js`; demonstration features come only from `policy.observe`. Both backends run the same algorithm (a port of the prototype's `trainB.py`): the python backend reproduces the shipped clone's params exactly from the prototype's demos (`--seed 1`), and the node backend needs no dependencies but does not match it bit for bit.
+- `bc-gen` reproduces the prototype's rows (`cloneB.js gen`), except that the boring-frame counter now resets every episode, so a few down-weighted rows differ.
+- To ship a new BC model: `bc-train` into a `runs/bc-*` directory, certify it with `eval`, then `export --dir runs/bc-... --which best`.
 
 **One source of game logic.** `core.js` is the DOM-free simulation, and the trainer, tests, browser and dashboard all run it.
 - `createGame({ rng, version, hooks })` creates independent games, many per thread.
@@ -124,7 +137,7 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 - **Core hash.** It covers `core.js` and `policy.js`. Editing either one invalidates existing checkpoints, which then `--resume` only with `--force`. Use `--force` only when decisions are provably unchanged; `test/net.test.js` checks bit-identical decisions for the shipped model.
 - **Locked on resume.** `hidden`, `actionRepeat` and `gameVersion` can't change on resume; other options can be overridden.
 - **Evaluation uses the unmodified game.** No changes to CFG, physics, collision or fairness for evaluation. Any curriculum is training-only.
-- **Committed vs ignored.** In `runs/<name>/`, `best.json`, `evals.jsonl` and `metrics.*` are committed. Checkpoints, logs and locks are gitignored.
+- **Committed vs ignored.** In `runs/<name>/`, `best.json`, `evals.jsonl` and `metrics.*` are committed, and for BC runs also `demos.json` and `bc-metrics.jsonl`. Checkpoints, logs, locks and `demos.bin` are gitignored.
 
 ## Research method
 
