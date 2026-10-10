@@ -333,7 +333,7 @@ function kdText(b) {
 function kdTiles(b) {
   const d = b.distill, q = b.quant;
   return `${d ? tile('Distilled from', esc(d.from || '–'), `${esc(d.mode)}${d.mode === 'soft' ? ` · τ ${esc(d.tau)} · α ${esc(d.alpha)}` : ''}${d.layers ? ` · ${esc(layersText(d.layers))}` : ''}${d.teacherName ? ` · teacher-${esc(d.teacherName)}` : ''}${d.paramsSha256 ? ` · sha ${esc(short(d.paramsSha256))}` : ''}`) : ''}
-    ${q ? tile('Quantized', `int${esc(q.bits)}`, `${q.mode === 'ptq' ? 'post-training' : q.mode === 'qat' ? 'quantization-aware training' : esc(q.mode || '')} · ${esc(q.scheme)} scales${q.levels !== null ? ` · ${esc(q.levels)} levels` : ''}${q.biases ? ` · biases ${esc(q.biases)}` : ''}${q.from ? ` · from ${esc(q.from)}` : ''}${q.fromSha256 ? ` (sha ${esc(short(q.fromSha256))})` : ''}`) : ''}`;
+    ${q ? tile('Quantized', `int${esc(q.bits)}`, `${q.mode === 'ptq' ? 'post-training' : q.mode === 'qat' ? 'quantization-aware training' : esc(q.mode || '')} · ${q.scheme === 'pow2' ? `pow2 scales 2^-k${q.k ? `, k ${esc(q.k.join(', '))}` : ''}` : `${esc(q.scheme)} scales`}${q.levels !== null ? ` · ${esc(q.levels)} levels` : ''}${q.biases ? ` · biases ${esc(q.biases)}` : ''}${q.from ? ` · from ${esc(q.from)}` : ''}${q.fromSha256 ? ` (sha ${esc(short(q.fromSha256))})` : ''}`) : ''}`;
 }
 
 function bcChip(r) {
@@ -449,17 +449,21 @@ const SERIES = ['--series-1', '--series-2', '--series-3'];
 const pct = (v, d = 1) => Number.isFinite(v) ? (v * 100).toFixed(d) + '%' : '–';
 const short = (h) => h ? String(h).slice(0, 12) : '–';
 
-function demosCard(dm, ref, bestHash) {
-  if (!dm) return `<div class="card wide"><h2>Demonstrations</h2><div class="sub">${ref ? `Manifest ${esc(ref)} not found on this computer` : 'No demos manifest recorded'}</div></div>`;
+function demosCard(dm, ref, bestHash, title) {
+  if (!dm) return `<div class="card wide"><h2>${esc(title || 'Demonstrations')}</h2><div class="sub">${ref ? `Manifest ${esc(ref)} not found on this computer` : 'No demos manifest recorded'}</div></div>`;
   const classes = Object.keys((dm.counts && dm.counts.rows) || {});
   const cnt = classes.map(c => `${esc(c)} ${num(dm.counts.rows[c])}${dm.counts.weighted && dm.counts.weighted[c] !== dm.counts.rows[c] ? ` (weighted ${num(dm.counts.weighted[c])})` : ''}`).join(' · ');
   const hashNote = bestHash && dm.coreHash && bestHash !== dm.coreHash ? ` <span class="bad">≠ model core ${esc(short(bestHash))}</span>` : '';
-  return `<div class="card wide"><h2>Demonstrations</h2><div class="sub">${esc(dm.file)} (bc-gen manifest)</div>
+  const dagger = dm.source === 'dagger';
+  return `<div class="card wide"><h2>${esc(title || 'Demonstrations')}</h2><div class="sub">${esc(dm.file)} (bc-gen manifest${dagger ? ', DAgger rollouts' : ''})</div>
     <dl class="kv">
       <dt>Rows</dt><dd>${num(dm.rows)}</dd>
       <dt>Per class</dt><dd>${cnt || '–'}</dd>
-      <dt>Teacher</dt><dd>${esc(dm.teacherName || 'not recorded (teacher-jump)')}${dm.teacher ? ` · ${esc(dm.teacher)}` : ''}</dd>
-      <dt>Solver crashes</dt><dd class="${dm.solverCrashes ? 'bad' : ''}">${num(dm.solverCrashes)}</dd>
+      ${dagger ? `<dt>Student (played)</dt><dd>${esc((dm.student && dm.student.path) || 'not recorded')} · params ${esc(short(dm.student && dm.student.paramsSha256))}</dd>` : ''}
+      <dt>${dagger ? 'Labels (shadow teacher)' : 'Teacher'}</dt><dd>${esc(dm.teacherName || 'not recorded (teacher-jump)')}${dm.teacher ? ` · ${esc(dm.teacher)}` : ''}</dd>
+      ${dagger ? `<dt>Student crashes</dt><dd>${num(dm.studentCrashes)} · undefined airborne frames ${num(dm.undefinedAir)}</dd>`
+        : `<dt>Solver crashes</dt><dd class="${dm.solverCrashes ? 'bad' : ''}">${num(dm.solverCrashes)}</dd>`}
+      ${dm.scoreWindow ? `<dt>Score window</dt><dd>${num(dm.scoreWindow[0])}–${num(dm.scoreWindow[1])} points</dd>` : ''}
       <dt>Core hash</dt><dd>${esc(short(dm.coreHash))}${hashNote}</dd>
       <dt>Game</dt><dd>${esc(dm.gameVersion || '–')}</dd>
       <dt>Seeds · levels</dt><dd>${esc(dm.seeds || '–')} · ${esc((dm.levels || []).join(', '))} (span0 ${num(dm.span0)}, span ${num(dm.span)}, keep-boring ${num(dm.keepBoring)})</dd>
@@ -469,7 +473,7 @@ function demosCard(dm, ref, bestHash) {
 
 function evalsCard(evals) {
   if (!evals.length) return '';
-  return `<div class="card wide"><h2>Held-out evaluations</h2><div class="sub">evals.jsonl (node trainer/cli.js eval)</div>
+  return `<div class="card wide"><h2>Held-out assessments</h2><div class="sub">assess.jsonl and legacy evals.jsonl (node trainer/cli.js assess)</div>
     <div class="table-wrap"><table><thead><tr><th>time</th><th>seeds</th><th>offset</th><th>target</th><th>passed</th><th>95% CP</th><th>median</th><th>min</th></tr></thead>
     <tbody>${evals.slice().reverse().map(e => `<tr><td>${e.time ? esc(new Date(e.time).toLocaleString()) : ''}</td><td>${num(e.seeds)}</td><td>${num(e.seedOffset)}</td><td>${compact(e.target)}</td>
       <td>${e.passed !== undefined ? `${num(e.passed)}/${num(e.seeds)}` : '–'}</td><td>${e.passCI95 ? `${e.passCI95.lower.toFixed(3)}–${e.passCI95.upper.toFixed(3)}` : '–'}</td><td>${num(e.median)}</td><td>${num(e.min)}</td></tr>`).join('')}</tbody></table></div></div>`;
@@ -493,7 +497,9 @@ function renderBcDetail(d) {
         ${tile('Status', status, statusSub)}
         ${tile('Teacher', esc(b.teacher), esc((dm && dm.teacher) || 'test/solver.js'))}
         ${tile('Demonstration rows', dm ? compact(dm.rows) : '–', dm ? Object.entries(dm.counts.rows).map(([k, v]) => `${esc(k)} ${compact(v)}`).join(' · ') : 'bc-gen in progress')}
-        ${tile('Solver crashes', dm ? num(dm.solverCrashes) : '–', dm ? `core ${esc(short(dm.coreHash))}` : '', dm && dm.solverCrashes ? 'bad' : '')}
+        ${dm && dm.source === 'dagger'
+          ? tile('Student crashes', num(dm.studentCrashes), `DAgger rollouts · core ${esc(short(dm.coreHash))}`)
+          : tile('Solver crashes', dm ? num(dm.solverCrashes) : '–', dm ? `core ${esc(short(dm.coreHash))}` : '', dm && dm.solverCrashes ? 'bad' : '')}
       </div>
       <div class="charts">${demosCard(dm, null, null)}${logCard}</div>`;
     const logEl = $('#log'); logEl.scrollTop = logEl.scrollHeight;
@@ -535,6 +541,9 @@ function renderBcDetail(d) {
         <div class="snaps">${b.snapshots.map(s => `<button type="button" data-snap="${esc(s.name)}" aria-pressed="${$('#pb-which').value === s.name}">${s.epoch}</button>`).join('')}</div>
       </div>
       ${demosCard(b.demos, b.demosRef, best && best.coreHash)}
+      ${(b.extraDemos || []).map((e, i) => demosCard(e.summary, e.ref, best && best.coreHash, `Extra demonstrations ${i + 1} (--extra-demos)`)).join('')}
+      ${b.transitionWeight ? `<div class="card wide"><h2>Transition weight</h2><div class="sub">bc-train --transition-weight: duck onset and release rows weigh ${esc(String(b.transitionWeight))}×</div>
+        <dl class="kv"><dt>Rows</dt><dd>${b.transitions ? `onset ${num(b.transitions.onset)} · release ${num(b.transitions.release)} (into a jump ${num(b.transitions.releaseToJump)})` : 'not recorded (weight 1: unchanged)'}</dd></dl></div>` : ''}
       ${evalsCard(info.evals || [])}
       ${scansCard(d.scans)}
       ${logCard}
@@ -577,7 +586,7 @@ function scanTable(scans, where) {
       <td><button type="button" class="scan-toggle" data-key="${esc(where + ':' + s.id)}" aria-expanded="${open}">${esc(s.id)}</button>${s.kind === 'survey' ? ' <span class="badge">survey</span>' : ''}</td>
       <td>${model}</td>
       <td>${s.base !== null ? `${num(s.base)}+` : '–'}</td>
-      <td>${s.target ? compact(s.target) : '–'}</td>
+      <td>${s.startScore ? `<span title="every game starts at ${num(s.startScore)}">${compact(s.startScore)}→</span>` : ''}${s.target ? compact(s.target) : '–'}${s.gameVersion && s.gameVersion !== 'v2' ? ` <span class="badge">${esc(s.gameVersion)}</span>` : ''}</td>
       <td>${num(s.games)}${s.n ? '/' + num(s.n) : ''}${s.n ? `<span class="bar" aria-hidden="true"><i style="width:${(frac * 100).toFixed(1)}%"></i></span>` : ''}</td>
       <td>${num(s.passes)}</td>
       <td class="${s.failures ? 'bad' : ''}">${num(s.failures)}</td>
@@ -592,6 +601,7 @@ function scanTable(scans, where) {
     return main + `<tr class="scan-detail" data-scan="${esc(s.id)}"><td colspan="11"><dl class="kv">
       <dt>Status</dt><dd>${esc(s.state)}: ${esc(s.how)}</dd>
       <dt>${s.kind === 'survey' ? 'Teacher' : 'Model'}</dt><dd>${s.kind === 'survey' ? `test/solver.js ${esc(s.solver || '?')} (survey.js)` : esc(s.model || '–')}${s.layers ? ` · ${esc(layersText(s.layers))}` : ''}${s.gameVersion ? ` · ${esc(s.gameVersion)}` : ''}</dd>
+      <dt>Games</dt><dd class="scan-games">rules ${esc(s.gameVersion || '?')}${s.modelGameVersion && s.modelGameVersion !== s.gameVersion ? ` (cross-rules: a ${esc(s.modelGameVersion)} model)` : ''} · from ${num(s.startScore || 0)} to ${s.target ? num(s.target) : '?'} points</dd>
       <dt>Seeds</dt><dd>${s.seedRange ? `${num(s.seedRange[0])}–${num(s.seedRange[1])}` : '–'} (${num(s.games)} games${s.n ? ` of ${num(s.n)} from ${num(s.base)}` : ''}) · ${compact(s.frames)} frames</dd>
       <dt>Process</dt><dd>${s.pid !== null ? `pid ${s.pid}${s.host ? ' on ' + esc(s.host) : ''}` : 'no pid recorded'}${s.workers ? ` · ${s.workers} workers` : ''}${s.wasm ? ' · wasm' : ''}${s.coreHash ? ` · core ${esc(short(s.coreHash))}` : ''}</dd>
       <dt>Time</dt><dd>${s.startedAt ? 'started ' + esc(new Date(s.startedAt).toLocaleString()) : ''}${s.endedAt ? ' · ended ' + esc(new Date(s.endedAt).toLocaleString()) : ''}${s.seconds ? ` · ${dur(s.seconds * 1000)}` : ''} · last write ${ago(s.updated)}</dd>
@@ -699,6 +709,8 @@ const ES_WEIGHTS = [{ v: 'current', t: 'Latest checkpoint' }, { v: 'best', t: 'B
 function weightOptions(info) {
   if (info.kind === 'es') return ES_WEIGHTS;
   const o = [];
+  // DAgger demos: the student that played the rollouts comes first (the default).
+  if (info.bc && info.bc.student && info.bc.student.available) o.push({ v: 'student', t: `Student: ${info.bc.student.path}`, g: 'Student (played the rollouts)' });
   if (info.best) o.push({ v: 'best', t: 'Clone: best.json (final)', g: 'Clone' });
   for (const s of info.bc.snapshots) o.push({ v: s.name, t: `Clone: epoch ${s.epoch} snapshot`, g: 'Clone snapshots' });
   for (const f of teacher.factories) o.push({ v: 'teacher:' + f, t: `Teacher: ${teacherLabel(f)} (${f})`, g: 'Teacher (solver)' });
@@ -796,10 +808,11 @@ function playbackFrame(t) {
   nn.draw();
   const m = pb.model;
   const src = m.teacher ? `${teacherLabel(m.teacher)} (${m.teacher} from test/solver.js; privileged teacher, not a network)`
+    : m.student ? 'the student that played these DAgger rollouts (its best.json)'
     : m.epoch ? `snapshot weights from epoch ${m.epoch}`
     : m.generation === null || m.generation === undefined ? `${m.which === 'best' ? 'best' : 'latest'} weights (behaviour clone)`
     : `${m.which === 'best' ? 'best' : 'latest'} weights from generation ${m.generation}`;
-  $('#pb-caption').textContent = `game ${g.version}${g.version === 'v2' ? ` (level ${g.level.toFixed(2)})` : ''} · ` +
+  $('#pb-caption').textContent = `game ${g.version}${g.version !== 'v1' ? ` (level ${g.level.toFixed(2)}${g.superLevel > 0 ? `, v3 level ${g.superLevel.toFixed(2)}` : ''})` : ''} · ` +
     `${src} · seed ${pb.seed} · ` +
     `score ${g.score()}${g.state === 'over' ? ' · crashed, next episode…' : ''} · speed ${g.speed.toFixed(2)}` +
     (pb.behind ? ' · playback can\'t keep up at this speed' : '');

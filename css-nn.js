@@ -123,7 +123,7 @@ function frame(now) {
 
 function showStatus() {
   const eff = rate.fps * FRAME_MS / 1000;
-  $status.textContent = `game ${game.version}${game.version === 'v2' ? ` (level ${game.level.toFixed(2)})` : ''} · score ${game.score()}` +
+  $status.textContent = `game ${game.version}${game.version !== 'v1' ? ` (level ${game.level.toFixed(2)}${game.superLevel > 0 ? `, v3 level ${game.superLevel.toFixed(2)}` : ''})` : ''} · score ${game.score()}` +
     ` · ${eff.toFixed(1)}× real time` + (behind ? ` (CSS can't keep up with ${$speed.value}×)` : '') +
     ` · ${Math.round(rate.fps / actionRepeat)} CSS decisions/s`;
 }
@@ -142,6 +142,9 @@ function fail(e) {
   try {
     selfTest();
     gameVersion = cssString('--nn-game') || 'v1';
+    // ?game=v1|v2|v3 plays those rules instead of the model's own (as on index.html).
+    const asked = new URLSearchParams(location.search).get('game');
+    if (DinoCore.GAME_VERSIONS.includes(asked)) gameVersion = asked;
     actionRepeat = Math.max(1, cssNumber('--nn-action-repeat') | 0);
     if (!DinoCore.GAME_VERSIONS.includes(gameVersion)) throw new Error(`model.css is for unknown game ${gameVersion}`);
   } catch (e) {

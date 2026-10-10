@@ -53,6 +53,14 @@
 // float. QAT: each step's forward and backward use the quantized weights and the
 // gradient updates the float weights (straight-through estimator); the final params are
 // the quantized ones. The model stays dino-mlp-v1, so policy.js and CSS run it unchanged.
+// Scheme 'pow2' (all params N-bit fixed point): weights AND biases are integers q in
+// [-qmax, qmax] with ONE power-of-two scale per layer, value = q * 2^-k. k is the
+// largest integer with m * 2^k <= qmax, where m = max(|W|, |b|) over the layer (k = 0
+// for an all-zero layer; k may be negative), so no value is clipped; q = round-half-up(
+// v * 2^k) (the clamp to +-qmax never binds). QAT fake-quantizes biases too and
+// recomputes k every step; the result carries k (one integer per layer) instead of
+// scales. q * 2^-k is exact in float64 (and float32), so the saved params are the
+// fixed-point values exactly; research/scripts/prereg-distill/pack.js packs them.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -107,29 +115,65 @@ function isBoring(x, label) {
 
 // One episode: the teacher from startScore `level` for `span` points. push(x, label, weight).
 // createTeacher (a factory, as in TEACHERS) defaults to the jump teacher.
-function genEpisode(seed, level, span, keepBoring, gameVersion, push, createTeacher = resolveTeacher('jump')) {
+// ext (optional; absent = the original rule, byte for byte):
+//   scoreWindow [A, B]: keep only running frames with A <= game.score() < B. Frames outside
+//     the window are neither pushed nor counted by the boring rule.
+//   createStudent: a factory of actors (game -> keys). The student plays (its keys are
+//     applied) and the teacher becomes a shadow: one instance, queried on every frame from
+//     frame 0 on the student's trajectory, whose answer labels the row (DAgger relabelling;
+//     research/prereg-teacher-duck-release-fix.md §4.1, as diag.js's oracle trace). A shadow
+//     answer is defined on ground frames, and on airborne frames only after a takeoff the
+//     shadow itself chose (its private `hold` is set only then); other airborne frames are
+//     dropped and counted in undefinedAir. The episode ends at the student's crash or the cap.
+function genEpisode(seed, level, span, keepBoring, gameVersion, push, createTeacher = resolveTeacher('jump'), ext = null) {
   const g = Core.createGame({ rng: Core.createRng(seed), version: gameVersion, startScore: level || undefined });
   const sol = createTeacher();
   const cap = (level + span) / Core.CFG.scoreCoef;
   const x = new Float32Array(OBS_DIM);
   let boring = 0;
+  const win = ext && ext.scoreWindow;
+  const student = ext && ext.createStudent ? ext.createStudent() : null;
+  let undefinedAir = 0, jumpValid = true;
   do {
     const act = sol(g);
     const label = actionLabel(act);
-    if (g.state === 'running') {
-      P.observe(g, x);
-      if (!isBoring(x, label)) push(x, label, 1);
-      else if (boring++ % keepBoring === 0) push(x, label, keepBoring);
+    const keys = student ? student(g) : act;
+    const airborne = g.dino.jumping;
+    if (g.state === 'running' && (!win || (g.score() >= win[0] && g.score() < win[1]))) {
+      if (student && airborne && !jumpValid) undefinedAir++;
+      else {
+        P.observe(g, x);
+        if (!isBoring(x, label)) push(x, label, 1);
+        else if (boring++ % keepBoring === 0) push(x, label, keepBoring);
+      }
     }
-    g.step(act);
+    g.step(keys);
+    if (student && !airborne && g.dino.jumping) jumpValid = !!act.jump;
   } while ((g.state === 'running' || g.state === 'idle') && g.distance < cap);
-  return { crashed: g.state === 'over' };
+  return student ? { crashed: g.state === 'over', undefinedAir } : { crashed: g.state === 'over' };
 }
+
+// Duck-transition rows (bc-train --transition-weight; research/prereg-teacher-duck-release-fix.md
+// §4.1), from the row alone: grounded (x[2] = jumping is 0) and either a duck onset (x[3] =
+// ducking is 0, label 2) or a release (x[3] is 1, label not 2; includes release into a jump).
+// x[3] is the ducking state left by the previous frame's keys, so no frame order is needed.
+// trainer/bc_train.py applies the same rule. Returns 0 (none), 1 (onset) or 2 (release).
+function transitionMask(x2, x3, label) {
+  if (x2 !== 0) return 0;
+  if (x3 === 0 && label === 2) return 1;
+  if (x3 === 1 && label !== 2) return 2;
+  return 0;
+}
+
+// A student actor factory from a dino-mlp-v1 model object (best.json): policy.js createAgent.
+const studentFactory = (model) => () => { const a = P.createAgent(model); return (g) => a.act(g); };
 
 // All episodes of one seed. Returns { rows: Float32Array, episodes }. The teacher is
 // o.createTeacher if given (in-thread only: tests), else TEACHERS[o.teacher || 'jump'].
 function genSeed(seed, o) {
   const createTeacher = o.createTeacher || resolveTeacher(o.teacher || 'jump');
+  const createStudent = o.createStudent || (o.studentModel ? studentFactory(o.studentModel) : null);
+  const ext = o.scoreWindow || createStudent ? { scoreWindow: o.scoreWindow || null, createStudent } : null;
   let buf = new Float32Array(ROW * 65536), n = 0;
   const episodes = [];
   for (const level of o.levels) {
@@ -143,8 +187,8 @@ function genSeed(seed, o) {
       counts[label] += w;
       n++;
     };
-    const r = genEpisode(seed, level, level === 0 ? o.span0 : o.span, o.keepBoring, o.gameVersion, push, createTeacher);
-    episodes.push({ seed, level, rows: n - before, weighted: counts, crashed: r.crashed });
+    const r = genEpisode(seed, level, level === 0 ? o.span0 : o.span, o.keepBoring, o.gameVersion, push, createTeacher, ext);
+    episodes.push({ seed, level, rows: n - before, weighted: counts, crashed: r.crashed, ...(createStudent ? { undefinedAir: r.undefinedAir } : {}) });
   }
   return { rows: buf.slice(0, n * ROW), episodes };
 }
@@ -191,7 +235,10 @@ if (!isMainThread && workerData && workerData.bcGen) {
 
 // Write demos.bin and demos.json into dir. o: { seeds, levels, span0, span, keepBoring,
 // gameVersion, workers, coreHash, teacher (a TEACHERS name, default 'jump'),
-// createTeacher (optional factory overriding the table, workers <= 1 only: tests) }.
+// createTeacher (optional factory overriding the table, workers <= 1 only: tests),
+// scoreWindow ([A, B], optional: genEpisode), studentModel (a dino-mlp-v1 model object,
+// optional: DAgger rollouts, genEpisode) with student ({ path, paramsSha256 }, recorded),
+// createStudent (optional actor factory instead of studentModel, workers <= 1 only: tests) }.
 // Returns the manifest.
 async function generateDemos(dir, o) {
   const opt = { ...GEN_DEFAULTS, ...o };
@@ -206,8 +253,15 @@ async function generateDemos(dir, o) {
   const episodes = [];
   const weighted = [0, 0, 0], rowsByClass = [0, 0, 0];
   let rows = 0;
+  if (opt.createStudent && (opt.workers || 1) > 1) throw new Error('createStudent cannot cross worker threads; use workers 1');
+  if (opt.scoreWindow && !(Array.isArray(opt.scoreWindow) && opt.scoreWindow.length === 2 && opt.scoreWindow[0] < opt.scoreWindow[1])) {
+    throw new Error('scoreWindow must be [A, B] with A < B');
+  }
+  const dagger = !!(opt.studentModel || opt.createStudent);
   const genOpts = { levels: opt.levels, span0: opt.span0, span: opt.span, keepBoring: opt.keepBoring, gameVersion: opt.gameVersion,
-    teacher: opt.teacher, ...(opt.createTeacher ? { createTeacher: opt.createTeacher } : {}) };
+    teacher: opt.teacher, ...(opt.createTeacher ? { createTeacher: opt.createTeacher } : {}),
+    ...(opt.scoreWindow ? { scoreWindow: opt.scoreWindow } : {}),
+    ...(opt.studentModel ? { studentModel: opt.studentModel } : {}), ...(opt.createStudent ? { createStudent: opt.createStudent } : {}) };
   try {
     await genSeedsParallel(opt.seeds, genOpts, opt.workers || 1, (i, r) => {
       const bytes = Buffer.from(r.rows.buffer, r.rows.byteOffset, r.rows.byteLength);
@@ -234,10 +288,20 @@ async function generateDemos(dir, o) {
     seeds: opt.seeds, levels: opt.levels, span0: opt.span0, span: opt.span, keepBoring: opt.keepBoring,
     rows, counts: { rows: { none: rowsByClass[0], jump: rowsByClass[1], duck: rowsByClass[2] },
       weighted: { none: weighted[0], jump: weighted[1], duck: weighted[2] } },
-    solverCrashes: episodes.filter(e => e.crashed).length,
+    ...(dagger ? {} : { solverCrashes: episodes.filter(e => e.crashed).length }),
     sha256: sha.digest('hex'), createdAt: new Date().toISOString(),
-    episodes: episodes.map(e => ({ seed: e.seed, level: e.level, rows: e.rows, crashed: e.crashed })),
+    episodes: episodes.map(e => ({ seed: e.seed, level: e.level, rows: e.rows, crashed: e.crashed, ...(dagger ? { undefinedAir: e.undefinedAir } : {}) })),
   };
+  // Additive keys, present only when used (a default manifest is unchanged).
+  if (opt.scoreWindow) manifest.scoreWindow = opt.scoreWindow;
+  if (dagger) {
+    // DAgger rollouts: the student played; the teacher (teacherName) labelled as a shadow.
+    // Crashes are the student's, so they are not solverCrashes.
+    manifest.source = 'dagger';
+    manifest.student = opt.student || { path: null, paramsSha256: null };
+    manifest.studentCrashes = episodes.filter(e => e.crashed).length;
+    manifest.undefinedAir = episodes.reduce((a, e) => a + e.undefinedAir, 0);
+  }
   return manifest;
 }
 
@@ -474,8 +538,30 @@ function softTargets(Z, tau, nOut = 3) {
   return Q;
 }
 
-const QUANT_SCHEMES = ['row', 'layer'];
+const QUANT_SCHEMES = ['row', 'layer', 'pow2'];
 const quantMax = (bits) => 2 ** (bits - 1) - 1;
+
+// Largest integer k with m * 2^k <= qmax (m >= 0; 0 for m = 0). Powers of two are exact,
+// so the fix-up comparisons are exact; bc_train.py pow2_exponent is the same rule.
+function pow2Exponent(m, qmax) {
+  if (!(m > 0)) return 0;
+  let k = Math.floor(Math.log2(qmax / m));
+  while (m * 2 ** (k + 1) <= qmax) k++;
+  while (m * 2 ** k > qmax) k--;
+  return k;
+}
+
+// pow2 scheme: quantize weights and biases of every layer into out; returns k per layer.
+function quantizePow2Into(layers, params, bits, out) {
+  const qmax = quantMax(bits);
+  return layerOffsets(layers).map(({ nin, nout, w, b }) => {
+    let m = 0;
+    for (let i = w; i < b + nout; i++) m = Math.max(m, Math.abs(params[i]));
+    const k = pow2Exponent(m, qmax), up = 2 ** k, down = 2 ** -k;
+    for (let i = w; i < b + nout; i++) out[i] = Math.min(qmax, Math.max(-qmax, Math.floor(params[i] * up + 0.5))) * down;
+    return k;
+  });
+}
 function checkQuantOptions(q) {
   if (!(Number.isInteger(q.bits) && q.bits >= 2 && q.bits <= 8)) throw new Error(`--quant-bits must be an integer in 2..8, got ${q.bits}`);
   if (!QUANT_SCHEMES.includes(q.scheme)) throw new Error(`--quant-scheme must be one of ${QUANT_SCHEMES.join(', ')}, got ${q.scheme}`);
@@ -483,8 +569,10 @@ function checkQuantOptions(q) {
 
 // Quantize the weights of params (policy.createNet layout) into out (may be params);
 // biases are copied unchanged. Returns scales: one array per layer (one entry per
-// output row for 'row', one for 'layer'). See the header for the rule.
+// output row for 'row', one for 'layer'). See the header for the rule. Scheme 'pow2'
+// also quantizes the biases and returns k (one integer per layer) instead.
 function quantizeInto(layers, params, q, out) {
+  if (q.scheme === 'pow2') return quantizePow2Into(layers, params, q.bits, out);
   const qmax = quantMax(q.bits);
   const scales = [];
   for (const { nin, nout, w, b } of layerOffsets(layers)) {
@@ -510,17 +598,46 @@ function quantizeInto(layers, params, q, out) {
   return scales;
 }
 
+// { params, scales } for 'row'/'layer'; { params, k } for 'pow2'.
 function quantizeParams(layers, params, q) {
   const out = new Float64Array(params.length);
-  const scales = quantizeInto(layers, params, q, out);
-  return { params: Array.from(out), scales };
+  const r = quantizeInto(layers, params, q, out);
+  return q.scheme === 'pow2' ? { params: Array.from(out), k: r } : { params: Array.from(out), scales: r };
+}
+
+// The config.quant record for a quantized result r ({ scales } or { k }). checkQuantized
+// throws unless the params are exactly on the recorded grid, so no record is written
+// for params off it. pow2 records biases 'int', k per layer and checked: true.
+function quantRecord(layers, params, q, mode, r) {
+  const rec = q.scheme === 'pow2'
+    ? { bits: q.bits, scheme: q.scheme, mode, biases: 'int', k: r.k }
+    : { bits: q.bits, scheme: q.scheme, mode, biases: 'float', scales: r.scales };
+  rec.levels = checkQuantized(layers, params, rec);
+  if (q.scheme === 'pow2') rec.checked = true;
+  return rec;
 }
 
 // Throws unless every weight is exactly k * scale with an integer |k| <= qmax, for the
 // recorded scales. Returns the number of distinct integer levels used.
+// pow2: every weight AND bias v of layer l must be an integer in [-qmax, qmax] times
+// 2^-k[l] (k[l] an integer), exactly.
 function checkQuantized(layers, params, quant) {
   const qmax = quantMax(quant.bits);
   const levels = new Set();
+  if (quant.scheme === 'pow2') {
+    const offs = layerOffsets(layers);
+    if (!Array.isArray(quant.k) || quant.k.length !== offs.length || !quant.k.every(Number.isInteger)) throw new Error(`pow2: k must be ${offs.length} integers, got ${JSON.stringify(quant.k)}`);
+    if (params.length !== P.numParams(layers)) throw new Error(`pow2: expected ${P.numParams(layers)} params, got ${params.length}`);
+    offs.forEach(({ nout, w, b }, l) => {
+      const up = 2 ** quant.k[l];
+      for (let i = w; i < b + nout; i++) {
+        const s = params[i] * up;
+        if (!(Number.isInteger(s) && Math.abs(s) <= qmax && s / up === params[i])) throw new Error(`layer ${l} param ${i - w}: ${params[i]} is not an integer in [-${qmax}, ${qmax}] times 2^-${quant.k[l]}`);
+        levels.add(s);
+      }
+    });
+    return levels.size;
+  }
   layerOffsets(layers).forEach(({ nin, nout, w }, l) => {
     const s = quant.scales[l];
     if (!s || s.length !== (quant.scheme === 'row' ? nout : 1)) throw new Error(`layer ${l}: scales do not match scheme ${quant.scheme}`);
@@ -538,7 +655,7 @@ function checkQuantized(layers, params, quant) {
 
 // Train on data { X, y, sw, n, dim }. o: { hidden, epochs, batch, lr, seed, onEpoch,
 // distill (optional: { logits: Float64Array n x 3, mode: 'soft'|'hard', tau, alpha }),
-// quant (optional: { bits, scheme }) }. Returns { layers, params (Array), log[, scales] }.
+// quant (optional: { bits, scheme }) }. Returns { layers, params (Array), log[, scales | k] }.
 function trainNode(data, o) {
   const { X, y, sw, n, dim } = data;
   const layers = [dim, ...o.hidden, 3];
@@ -596,7 +713,7 @@ function trainNode(data, o) {
   }
   if (qparams) {
     const q = quantizeParams(layers, params, o.quant);
-    return { layers, params: q.params, log, scales: q.scales };
+    return { layers, params: q.params, log, ...(q.k ? { k: q.k } : { scales: q.scales }) };
   }
   return { layers, params: Array.from(params), log };
 }
@@ -630,8 +747,10 @@ function pythonPath(root) {
   return fs.existsSync(venv) ? venv : 'python3';
 }
 
-// Run bc_train.py on binFile; resolves to { layers, params, log }. onLine gets each stdout line.
+// Run bc_train.py on binFile; resolves to { layers, params, log[, transitions] }. onLine gets each stdout line.
 // o.snapshotDir (optional): write each epoch's params to <snapshotDir>/epoch-NN.json.
+// o.extraDemos (optional): .bin files appended, in order, after binFile.
+// o.transitionWeight (optional): multiply duck-transition rows' weights (transitionMask).
 function trainPython(binFile, outFile, o, root, onLine = () => {}) {
   const { spawn } = require('child_process');
   const args = [path.join(__dirname, 'bc_train.py'), '--demos', binFile, '--obs-dim', String(OBS_DIM), '--hidden', o.hidden.join(','),
@@ -643,6 +762,8 @@ function trainPython(binFile, outFile, o, root, onLine = () => {}) {
     if (o.distill.mode === 'soft') args.push('--tau', String(o.distill.tau), '--alpha', String(o.distill.alpha || 0));
   }
   if (o.quant) { checkQuantOptions(o.quant); args.push('--quant-bits', String(o.quant.bits), '--quant-scheme', o.quant.scheme); }
+  for (const f of o.extraDemos || []) args.push('--extra-demos', f);
+  if (o.transitionWeight !== undefined) args.push('--transition-weight', String(o.transitionWeight));
   return new Promise((resolve, reject) => {
     const child = spawn(pythonPath(root), ['-W', 'ignore', ...args], { stdio: ['ignore', 'pipe', 'inherit'] });
     let buf = '';
@@ -681,8 +802,8 @@ function assembleBest({ layers, params, validation, coreHash, config }) {
 }
 
 module.exports = {
-  DEMOS_FORMAT, ROW, GEN_DEFAULTS, TRAIN_DEFAULTS, TEACHERS, resolveTeacher, actionLabel, isBoring, genEpisode, genSeed, generateDemos, resolveDemos, checkDemos,
+  DEMOS_FORMAT, ROW, GEN_DEFAULTS, TRAIN_DEFAULTS, TEACHERS, resolveTeacher, actionLabel, isBoring, genEpisode, genSeed, studentFactory, transitionMask, generateDemos, resolveDemos, checkDemos,
   loadDemos, sha256File, layerOffsets, createTrainer, classWeights, trainNode, pythonPath, trainPython, assembleBest,
-  teacherLogits, argmaxLabels, softTargets, QUANT_SCHEMES, quantMax, checkQuantOptions, quantizeInto, quantizeParams, checkQuantized,
+  teacherLogits, argmaxLabels, softTargets, QUANT_SCHEMES, quantMax, checkQuantOptions, pow2Exponent, quantizeInto, quantizeParams, checkQuantized, quantRecord,
   writeLogits, paramsSha256,
 };

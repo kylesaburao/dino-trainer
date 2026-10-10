@@ -4,13 +4,18 @@
 // require(). The browser shell (game.js) renders the state this core exposes; the
 // trainer runs many independent games from it in one thread.
 //
-// Two game versions share these rules (createGame({ version })):
+// Three game versions share these rules (createGame({ version })):
 //   v1 - the original game: a behaviour-preserving extraction of game.js at
 //        commit 2da34de. The golden traces in test/golden/ must keep matching.
 //        Difficulty stops rising at max speed (score ~1,700).
 //   v2 - identical to v1 up to 1,000 points, then progressively harder on a log
 //        scale up to 1,000,000 points (see V2 below). Same physics, sprites,
 //        observations and fairness model, so every sequence stays survivable.
+//   v3 - identical to v2 up to 100,000 points; there the speed cap steps up, then
+//        a second log-scale segment (see V3 below) raises it toward superhuman reaction
+//        budgets, and the fairness model anchors each takeoff late in its window
+//        so the canonical (solver) action comes after the obstacle is visible.
+//        The v2 schedule of every other rule continues unchanged.
 (function (root) {
 'use strict';
 
@@ -322,7 +327,9 @@ function requirement(o, s) {
     if (a === 0 || window < o.minWindow) continue;
     const airtime = h.length + 1;
     if (!best || airtime < best.to - best.from) {
-      const t0 = tau + delta - b + window / 2;
+      // Centred in the takeoff window; rules v3 above 100k (o.late, frozen at spawn):
+    // in its last minWindow frames, so the takeoff follows the obstacle's appearance.
+    const t0 = o.late ? tau - a - o.minWindow / 2 : tau + delta - b + window / 2;
       best = { grounded: false, from: t0, to: t0 + airtime, release, minGround: o.minGround };
     }
   }
@@ -346,7 +353,7 @@ function compatible(p, q) {
 // stays at 1 after that. Each rule below interpolates from its v1 value at d = 0
 // to the v2 value at d = 1, so v2 is exactly v1 below 1,000 points.
 // ---------------------------------------------------------------------------
-const GAME_VERSIONS = ['v1', 'v2'];
+const GAME_VERSIONS = ['v1', 'v2', 'v3'];
 const V2 = {
   startScore: 1000,        // difficulty starts rising here (d = 0 below)
   endScore: 1000000,       // and is at its maximum (d = 1) from here on
@@ -361,14 +368,42 @@ const V2 = {
 };
 
 function difficulty(version, score) {
-  if (version !== 'v2' || score <= V2.startScore) return 0;
+  if ((version !== 'v2' && version !== 'v3') || score <= V2.startScore) return 0;
   return Math.min(1, Math.log10(score / V2.startScore) / Math.log10(V2.endScore / V2.startScore));
+}
+
+// ---------------------------------------------------------------------------
+// Rules v3: the v2 schedule (d above) plus a second level e that rises on a log
+// scale from 0 at 100,000 points to 1 at V3.endScore (e = log10(score / 100k) /
+// log10(endScore / 100k)) and stays at 1 after that. Only the speed cap changes:
+// it STEPS at 100k from v2's 19 to stepSpeed, then rises toward maxSpeed as
+// e^curve. Every other rule keeps following v2. research/game-v3.md has the
+// definition (a reaction budget below 150 ms) and the probe that chose these numbers.
+//
+// The step itself (createGame update()): once e > 0, obstacle spawning pauses
+// until the track is empty and the dino is on the ground; then the speed jumps
+// to the cap in one frame and spawning resumes. No obstacle placed at the old
+// speed is ever on the track at the new one, so the fairness model (whose
+// intervals are in frames, and frames per pixel change with speed) stays exact.
+// ---------------------------------------------------------------------------
+const V3 = {
+  startScore: 100000,      // e = 0 below (v3 is exactly v2 there)
+  endScore: 1000000,       // e = 1 from here on
+  stepSpeed: 41,           // speed cap just above 100k (v2 at 100k: 19)
+  maxSpeed: 60,            // speed cap at e = 1 (v2 at 1M: 22)
+  curve: 1,                // the cap moves as e^curve (1: plain log scale)
+};
+
+function superLevel(version, score) {
+  if (version !== 'v3' || score <= V3.startScore) return 0;
+  return Math.min(1, Math.log10(score / V3.startScore) / Math.log10(V3.endScore / V3.startScore));
 }
 
 const lerp = (a, b, d) => a + (b - a) * d;
 
-// The rules in force at difficulty d (v1 is always d = 0). Writes into `r`.
-function rulesAt(d, r) {
+// The rules in force at difficulty d (v1 is always d = 0) and v3 level e (0 on
+// v1 and v2, where nothing below changes). Writes into `r`.
+function rulesAt(d, r, e = 0) {
   r.level = d;
   r.maxSpeed = lerp(CFG.maxSpeed, V2.maxSpeed, d);
   r.gapCoef = lerp(CFG.gapCoef, V2.gapCoef, d);
@@ -378,6 +413,10 @@ function rulesAt(d, r) {
   r.pteroWeight = lerp(1, V2.pteroWeight, d);
   r.pteroSpeedOffset = lerp(OBSTACLE_TYPES[2].speedOffset, V2.pteroSpeedOffset, d);
   r.maxGroup = d >= V2.groupOf4Level ? 4 : 3;
+  r.superLevel = e;
+  if (e > 0) {
+    r.maxSpeed = lerp(V3.stepSpeed, V3.maxSpeed, Math.pow(e, V3.curve));
+  }
   return r;
 }
 
@@ -385,7 +424,7 @@ function rulesAt(d, r) {
 // createGame({ rng, hooks, version, startScore }): one independent game.
 //   rng   - () => [0, 1), e.g. createRng(seed). The only randomness source.
 //   hooks - optional { sound(name), night(on), gameOver(score) } for the shell.
-//   version    - 'v1' (default) or 'v2'.
+//   version    - 'v1' (default), 'v2' or 'v3'.
 //   startScore - optional: each run starts at this score (distance) with speed at
 //                that score's cap, e.g. to test or train late-game difficulty.
 // Time is injected: update(ms, now) and pressJump(now) take the clock; step()
@@ -402,10 +441,11 @@ function createGame(opts) {
   if (!GAME_VERSIONS.includes(version)) throw new Error(`unknown game version ${version}`);
   const startDistance = (opts.startScore || 0) / CFG.scoreCoef;
   const rules = rulesAt(0, {});
+  const setRules = () => rulesAt(difficulty(version, score()), rules, superLevel(version, score()));
 
   let state = 'idle';            // 'idle' | 'running' | 'over'
   let speed, distance, runTime, obstacles, history, milestone, nightMilestone;
-  // v2 only: airborne intervals still owed to obstacles that already left the
+  // v2 and v3 only: airborne intervals still owed to obstacles that already left the
   // screen ({ from, to } in absolute run frames). At v2 speeds a jump can outlast
   // the obstacle's time on screen, so placement must keep respecting it.
   let committed, runFrames;
@@ -430,7 +470,7 @@ function createGame(opts) {
 
   function reset() {
     distance = startDistance;
-    rulesAt(difficulty(version, score()), rules);
+    setRules();
     speed = startDistance > 0 ? Math.max(CFG.speed, rules.maxSpeed) : CFG.speed;
     runTime = 0;
     obstacles = [];
@@ -495,7 +535,7 @@ function createGame(opts) {
   // Push o right until its requirement is compatible with every upcoming obstacle.
   function placeFairly(o) {
     const upcoming = obstacles.map(p => requirement(p, speed)).filter(r => r && r.to > 0);
-    if (version === 'v2') {
+    if (version !== 'v1') {
       committed = committed.filter(c => c.to > runFrames);
       for (const c of committed) upcoming.push({ grounded: false, from: c.from - runFrames, to: c.to - runFrames, minGround: c.minGround });
     }
@@ -503,9 +543,9 @@ function createGame(opts) {
       const r = requirement(o, speed);
       const clash = upcoming.find(p => !compatible(p, r));
       if (!clash) {
-        // v2 only: a takeoff must still lie ahead (at v2 speeds a freshly spawned
+        // v2 and v3 only: a takeoff must still lie ahead (at v2 speeds a freshly spawned
         // obstacle can otherwise demand a jump that is already due).
-        if (version === 'v2' && !r.grounded && r.from < 1) {
+        if (version !== 'v1' && !r.grounded && r.from < 1) {
           o.x += Math.max(1, (1 - r.from) * (speed + o.speedOffset));
           continue;
         }
@@ -537,6 +577,7 @@ function createGame(opts) {
         speedOffset: t.speedOffset ? (rng() < 0.5 ? -1 : 1) * rules.pteroSpeedOffset : 0,
         minWindow: rules.minWindowFrames,
         minGround: rules.minGroundFrames,
+        late: rules.superLevel > 0,
       };
       while (o.size > 1 && !requirement(o, speed)) {
         o.size--;
@@ -565,7 +606,7 @@ function createGame(opts) {
         }
       }
     }
-    if (version === 'v2') {
+    if (version !== 'v1') {
       for (const o of obstacles) {
         if (o.x + o.w > 0) continue;
         const r = requirement(o, speed);
@@ -575,8 +616,11 @@ function createGame(opts) {
     obstacles = obstacles.filter(o => o.x + o.w > 0);
 
     const last = obstacles[obstacles.length - 1];
-    if (runTime > CFG.clearTime && (!last || last.x + last.w + last.gap < W)) spawnObstacle();
+    if (runTime > CFG.clearTime && !stepPending() && (!last || last.x + last.w + last.gap < W)) spawnObstacle();
   }
+
+  // Rules v3 only: the speed step at 100k is due but not yet taken (see V3).
+  const stepPending = () => rules.superLevel > 0 && speed < V3.stepSpeed;
 
   // -------------------------------------------------------------------------
   // Horizon: ground, clouds, night sky (state only; the shell draws it)
@@ -637,7 +681,9 @@ function createGame(opts) {
 
     runTime += ms;
     runFrames++;
-    if (version === 'v2') rulesAt(difficulty(version, score()), rules);
+    if (version !== 'v1') setRules();
+    // Rules v3: take the speed step once the track is clear and the dino has landed.
+    if (stepPending() && obstacles.length === 0 && !dino.jumping) speed = rules.maxSpeed;
     if (speed < rules.maxSpeed) speed = Math.min(rules.maxSpeed, speed + CFG.accel * dt);
     distance += speed * dt;
 
@@ -738,16 +784,20 @@ function createGame(opts) {
     get frameIndex() { return frameIndex; },
     version,
     get level() { return rules.level; },
+    get superLevel() { return rules.superLevel; },
   };
 }
 
 // Test-only access to the fairness solver. The policy must never use it
 // (test/policy.test.js checks that policy.js does not reference it).
-const _internal = { requirement, rulesAt };
+const _internal = { requirement, rulesAt, jumpArc };
+
+// The fastest pterodactyl speed offset any version can draw (rules v2 and v3: 1.6).
+const MAX_PTERO_SPEED_OFFSET = Math.max(OBSTACLE_TYPES[2].speedOffset, V2.pteroSpeedOffset);
 
 const DinoCore = {
   W, H, GROUND, FRAME_MS, PIXEL, CFG, SPRITES, STAND_TOP, DUCK_H, CLOUD_W, GROUND_TILE_W, DINO_X,
-  OBSTACLE_TYPES, RELEASE_FRAMES, GAME_VERSIONS, V2, difficulty,
+  OBSTACLE_TYPES, RELEASE_FRAMES, GAME_VERSIONS, V2, V3, difficulty, superLevel, MAX_PTERO_SPEED_OFFSET,
   createRng, createGame, spriteW, spriteH, standBox, obstacleBox, _internal,
 };
 

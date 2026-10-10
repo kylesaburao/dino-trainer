@@ -5,21 +5,27 @@
 //
 // It builds a throwaway runs/ tree in the OS temp dir, so it depends only on committed
 // files (runs/v2-es-d2w32-s1-t1m, runs/v2-bc-jump-d2w32-s1):
-//   es-run              ES run: best.json, metrics.jsonl, evals.jsonl
+//   es-run              ES run: best.json, metrics.jsonl, legacy evals.jsonl + assess.jsonl
 //   grp/bc-run          nested BC run, training: train.lock (this pid), bc-metrics.jsonl with
 //                       none/jump/duck recall, snapshots/epoch-01..02.json, best.json, and
 //                       its log next to it as grp/bc-run.log
 //   grp/v2-distill-duck-d2w32-s1-tau2   finished distilled + QAT int4 run (config.distillFrom, quant;
 //                       bc-metrics with distillLoss)
 //   grp/v2-quant-duck-d2w8-s1-int8      bc-quantize output: best.json only (quant ptq, quantFrom)
+//   grp/v2-quant-duck-d2w32-s1-int8-pow2  pow2 PTQ (real pow2 params; quant.k, biases int)
 //   grp/demos-set       nested bc-gen output, generating: demos.json (teacherName) and
 //                       demos.bin.<this pid>.tmp
+//   grp/dagger-set      nested DAgger rollouts (bc-gen --student --score-window), finished;
+//                       the student is grp/bc-old's best.json. grp/bc-run's config lists it in
+//                       extraDemos and has transitionWeight 4
 //   plain               an empty directory (listed as before)
 //   grp/scans/          scan.js / survey.js output (not a run): done.jsonl (old header without
 //                       pid, footer, seeds out of order, 2 failures; model grp/bc-run),
 //                       running.jsonl (pid = this process, partial last line; model es-run),
 //                       stalled.jsonl (pid of an exited process; model outside runs/),
-//                       survey-duck-40000000-3.jsonl (header-less survey), notes.jsonl (not a scan)
+//                       survey-duck-40000000-3.jsonl (header-less survey), notes.jsonl (not a scan),
+//                       poststep-v3.jsonl (scan.js --game v3 --start 95000 --target 130000 of a
+//                       v2 model: header game/modelGameVersion/startScore, footer, 2 failures)
 // Checks the JSON API (discovery, kinds, running detection, snapshot weights, name
 // whitelist, scans: counts, failure CI, status, owner, incremental tail), then the page: the
 // Scans table (running row live, failure scores on expand), a run's own scans, BC charts with every recall class, a BC model and a
@@ -44,12 +50,18 @@ function check(name, ok, detail = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` (${detail})` : ''}`);
 }
 
-const KD = 'grp/v2-distill-duck-d2w32-s1-tau2', PTQ = 'grp/v2-quant-duck-d2w8-s1-int8';
+const KD = 'grp/v2-distill-duck-d2w32-s1-tau2', PTQ = 'grp/v2-quant-duck-d2w8-s1-int8', POW2 = 'grp/v2-quant-duck-d2w32-s1-int8-pow2';
+const bc = require(path.join(ROOT, 'trainer', 'bc.js'));
 
 function buildFixture(dir) {
   const w = (f, s) => { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), s); };
   const src = (f) => fs.readFileSync(path.join(ROOT, f));
-  for (const f of ['best.json', 'metrics.jsonl', 'evals.jsonl']) w(`es-run/${f}`, src(`runs/v2-es-d2w32-s1-t1m/${f}`));
+  for (const f of ['best.json', 'metrics.jsonl']) w(`es-run/${f}`, src(`runs/v2-es-d2w32-s1-t1m/${f}`));
+  // Assessment records under both names: the legacy evals.jsonl (before the rename) and
+  // a newer assess.jsonl record; the dashboard merges them, legacy first.
+  w('es-run/evals.jsonl', src('runs/v2-es-d2w32-s1-t1m/assess.jsonl'));
+  w('es-run/assess.jsonl', JSON.stringify({ time: '2026-10-11T00:00:00.000Z', source: 'runs/es-run/best.json', generation: 970, target: 1000000,
+    seeds: 3, seedOffset: 999, median: 100200, min: 100100, max: 100300, passed: 0, gameVersion: 'v3', modelGameVersion: 'v2', scores: [1, 2, 3] }) + '\n');
   fs.mkdirSync(path.join(dir, 'plain'));
 
   const demosFile = path.join(dir, 'grp', 'demos-set', 'demos.json');
@@ -60,11 +72,21 @@ function buildFixture(dir) {
     solverCrashes: 0, sha256: '0'.repeat(64), createdAt: '2026-10-10T00:00:00.000Z', episodes: [],
   }));
   w(`grp/demos-set/demos.bin.${process.pid}.tmp`, '');
+  // DAgger rollouts (bc-gen --student --score-window), finished; the student is grp/bc-old.
+  const daggerFile = path.join(dir, 'grp', 'dagger-set', 'demos.json');
+  w('grp/dagger-set/demos.json', JSON.stringify({
+    format: 'dino-bc-demos-v1', file: 'demos.bin', obsDim: 44, rowFloats: 46, coreHash: 'f'.repeat(64), gameVersion: 'v2',
+    teacher: 'test/solver.js', teacherName: 'duck', seeds: [2001, 2002], levels: [0], span0: 800, span: 5000, keepBoring: 10,
+    rows: 500, counts: { rows: { none: 440, jump: 40, duck: 20 }, weighted: { none: 470, jump: 40, duck: 20 } },
+    sha256: '1'.repeat(64), createdAt: '2026-10-10T00:00:00.000Z', episodes: [], scoreWindow: [400, 800],
+    source: 'dagger', student: { path: path.join(dir, 'grp', 'bc-old', 'best.json'), paramsSha256: 'a'.repeat(64) }, studentCrashes: 7, undefinedAir: 3,
+  }));
 
   const best = JSON.parse(src('runs/v2-bc-jump-d2w32-s1/best.json'));
   best.config = { target: 1000000, hidden: [32, 32], actionRepeat: 1, gameVersion: 'v2', method: 'behaviour cloning of test/solver.js (supervised; no ES)',
     trainer: 'trainer/cli.js bc-train --backend python', backend: 'python', epochs: 3, batch: 1024, lr: 0.002, seed: 1,
-    demos: demosFile, demosRows: 1000, trainSeconds: 6, snapshots: 'grp/bc-run/snapshots' };
+    demos: demosFile, demosRows: 1000, trainSeconds: 6, snapshots: 'grp/bc-run/snapshots',
+    extraDemos: [{ demos: daggerFile, demosSha256: '1'.repeat(64), demosRows: 500 }], transitionWeight: 4, transitions: { onset: 11, release: 12, releaseToJump: 1 } };
   w('grp/bc-run/best.json', JSON.stringify(best));
   w('grp/bc-run/bc-metrics.jsonl', [0, 1].map(e => JSON.stringify({ backend: 'python', epoch: e, loss: 0.1 / (e + 1),
     recall: { none: 0.99 + e * 0.004, jump: 0.98 + e * 0.01, duck: 0.9 + e * 0.05 }, seconds: 2 + e })).join('\n') + '\n');
@@ -87,6 +109,12 @@ function buildFixture(dir) {
     trainer: 'trainer/cli.js bc-quantize', teacherName: 'duck', quantFrom: { path: 'runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json', paramsSha256: 'cd'.repeat(32) },
     quant: { bits: 8, scheme: 'row', mode: 'ptq', biases: 'float', scales: [], levels: 200 } };
   w('grp/v2-quant-duck-d2w8-s1-int8/best.json', JSON.stringify(ptq));
+  // pow2 PTQ run (all params N-bit, one 2^-k per layer): real pow2 params, so it plays.
+  const p2 = JSON.parse(src('runs/v2-bc-jump-d2w32-s1/best.json'));
+  const p2q = bc.quantizeParams(p2.layers, p2.params, { bits: 8, scheme: 'pow2' });
+  p2.params = p2q.params;
+  p2.config = { ...ptq.config, quant: bc.quantRecord(p2.layers, p2q.params, { bits: 8, scheme: 'pow2' }, 'ptq', p2q) };
+  w(`${POW2}/best.json`, JSON.stringify(p2));
 
   const hdr = (model, n, extra = {}) => JSON.stringify({ header: true, model, layers: [44, 32, 32, 3], gameVersion: 'v2', actionRepeat: 1, generation: null,
     coreHash: '0f329d4e'.padEnd(64, '0'), base: 30000000, n, target: 1000000, wasm: true, workers: 18, start: '2026-10-10T12:00:00.000Z', ...extra });
@@ -104,6 +132,13 @@ function buildFixture(dir) {
   w('grp/scans/survey-duck-40000000-3.jsonl', [[40000002, false, 1000000], [40000000, true, 655], [40000001, false, 1000000]]
     .map(([seed, crashed, score]) => JSON.stringify({ seed, crashed, score, frames: 99, downFrames: 0, obstaclesSeen: 9, obstaclesPassed: 9 })).join('\n') + '\n');
   w('grp/scans/notes.jsonl', '{"note":"not a scan"}\n');
+  // scan.js --start on rules v3 (prereg-v3-clones §4.0/§4.4 DC-post shape): a v2 model scanned with
+  // --game v3 --start 95000 --target 130000; the header carries game, modelGameVersion, startScore.
+  w('grp/scans/poststep-v3.jsonl', [JSON.stringify({ header: true, model: '/elsewhere/runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json', layers: [44, 8, 8, 3],
+    gameVersion: 'v3', actionRepeat: 1, generation: null, coreHash: '65f3546c'.padEnd(64, '0'), base: 30003000, n: 3, target: 130000, wasm: true, workers: 18,
+    start: '2026-10-10T12:00:00.000Z', pid: dead, host: os.hostname(), game: 'v3', modelGameVersion: 'v2', startScore: 95000, expectHash: '65f3546c' }),
+  ...[[30003000, 100016], [30003001, 130000], [30003002, 100500]].map(([seed, score]) => JSON.stringify({ seed, score, pass: score >= 130000, frames: 9000 })),
+  JSON.stringify({ footer: true, seconds: 3.5, end: '2026-10-10T12:00:03.500Z' })].join('\n') + '\n');
 }
 
 async function connect() {
@@ -158,13 +193,27 @@ function cdpClient(url) {
     for (let i = 0; i < 50 && !list; i++) { try { list = await (await fetch(base + '/api/runs')).json(); } catch (e) { await sleep(100); } }
     const by = Object.fromEntries((list || []).map(r => [r.name, r]));
     check('run list: top-level, nested and plain dirs; a group is not a run',
-      ['es-run', 'grp/bc-run', 'grp/bc-old', 'grp/demos-set', 'plain', KD, PTQ].every(n => by[n]) && !by.grp && list.length === 7, (list || []).map(r => r.name).join(', '));
+      ['es-run', 'grp/bc-run', 'grp/bc-old', 'grp/demos-set', 'grp/dagger-set', 'plain', KD, PTQ, POW2].every(n => by[n]) && !by.grp && list.length === 9, (list || []).map(r => r.name).join(', '));
+    const es = by['es-run'] || {};
+    check('assessments: legacy evals.jsonl and assess.jsonl merged, legacy first',
+      (es.evals || []).length === 3 && es.evals[1].seedOffset === 175 && es.evals[2].seedOffset === 999 && es.lastEval.gameVersion === 'v3',
+      JSON.stringify((es.evals || []).map(e => e.seedOffset)));
     const kd = by[KD] || {}, ptq = by[PTQ] || {};
     check('distilled QAT run: kind bc, teacher model path/sha/tau/mode, quant bits/scheme/mode',
       kd.kind === 'bc' && kd.bc.distill && kd.bc.distill.from === 'runs/exp-bc-duck/v2-bc-duck-d2w32-s1/best.json' && kd.bc.distill.tau === 2 &&
       kd.bc.distill.mode === 'soft' && kd.bc.distill.paramsSha256 === 'ab'.repeat(32) && kd.bc.quant.bits === 4 && kd.bc.quant.mode === 'qat', JSON.stringify(kd.bc && kd.bc.distill));
     check('post-training-quantized run (best.json only): kind bc, quant ptq with its source',
       ptq.kind === 'bc' && ptq.bc.quant && ptq.bc.quant.mode === 'ptq' && ptq.bc.quant.from === 'runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json' && !ptq.bc.distill);
+    const p2 = by[POW2] || {};
+    check('pow2 PTQ run: quant scheme pow2, k per layer, biases int',
+      p2.kind === 'bc' && p2.bc.quant && p2.bc.quant.scheme === 'pow2' && Array.isArray(p2.bc.quant.k) && p2.bc.quant.k.length === 3 && p2.bc.quant.biases === 'int',
+      JSON.stringify(p2.bc && p2.bc.quant));
+    const dg = by['grp/dagger-set'] || {};
+    check('DAgger demos: kind demos, stopped, source/student/score window/student crashes, student available',
+      dg.kind === 'demos' && !dg.running && dg.bc.demos.source === 'dagger' && dg.bc.demos.studentCrashes === 7 && dg.bc.demos.undefinedAir === 3 &&
+      dg.bc.demos.scoreWindow.join('-') === '400-800' && dg.bc.student && dg.bc.student.available === true, JSON.stringify(dg.bc && dg.bc.student));
+    const stu = await (await fetch(base + '/api/runs/' + encodeURIComponent('grp/dagger-set') + '/model?which=student')).json();
+    check('DAgger demos: the student model is served for playback', stu.student === true && stu.layers.join('-') === '44-32-32-3' && stu.params.length > 0);
     const bc = by['grp/bc-run'] || {}, dm = by['grp/demos-set'] || {};
     check('ES run is kind es, generation from metrics', by['es-run'] && by['es-run'].kind === 'es' && by['es-run'].generation === 970);
     const old = by['grp/bc-old'] || {};
@@ -190,10 +239,14 @@ function cdpClient(url) {
     const getScans = async () => Object.fromEntries((await (await fetch(base + '/api/scans')).json()).map(s => [s.id, s]));
     let sc = await getScans();
     const sDone = sc['grp/scans/done.jsonl'] || {}, sRun = sc['grp/scans/running.jsonl'] || {}, sStall = sc['grp/scans/stalled.jsonl'] || {};
-    const sSurv = sc['grp/scans/survey-duck-40000000-3.jsonl'] || {};
+    const sSurv = sc['grp/scans/survey-duck-40000000-3.jsonl'] || {}, sV3 = sc['grp/scans/poststep-v3.jsonl'] || {};
     check('scans: every scan.js / survey.js file found, non-scan JSONL ignored, runs list unchanged',
-      Object.keys(sc).sort().join() === ['grp/scans/done.jsonl', 'grp/scans/running.jsonl', 'grp/scans/stalled.jsonl', 'grp/scans/survey-duck-40000000-3.jsonl'].join(),
+      Object.keys(sc).sort().join() === ['grp/scans/done.jsonl', 'grp/scans/poststep-v3.jsonl', 'grp/scans/running.jsonl', 'grp/scans/stalled.jsonl', 'grp/scans/survey-duck-40000000-3.jsonl'].join(),
       Object.keys(sc).join());
+    check('scan.js --start on rules v3: rules played, model rules, start score from the header; old headers default to start 0',
+      sV3.state === 'done' && sV3.gameVersion === 'v3' && sV3.modelGameVersion === 'v2' && sV3.startScore === 95000 && sV3.target === 130000 &&
+      sV3.games === 3 && sV3.failures === 2 && sV3.failMin === 100016 && sDone.startScore === 0 && sDone.gameVersion === 'v2' && sDone.modelGameVersion === null,
+      JSON.stringify({ ...sV3, failHist: undefined }));
     const cp = clopperPearson(2, 10);
     check('complete scan: done by footer, 8/10 passes, failure scores, 95% CP on the failure rate, owner from best.json',
       sDone.state === 'done' && sDone.games === 10 && sDone.n === 10 && sDone.passes === 8 && sDone.failures === 2 && sDone.failMin === 467 &&
@@ -256,12 +309,12 @@ function cdpClient(url) {
     const loaded = new Promise((res) => cdp.on((m) => { if (m.method === 'Page.loadEventFired') res(); }));
     await send('Page.navigate', { url: base + '/' });
     await loaded;
-    await waitUntil(`document.querySelectorAll('.run-chip').length === 5`);
+    await waitUntil(`document.querySelectorAll('.run-chip').length === 9`);
 
     // Scans table: running and stalled always shown, finished ones folded; expand one.
     const scansUi = await waitUntil(`!document.getElementById('scans-card').hidden && document.querySelector('tr.scan-row[data-scan="grp/scans/running.jsonl"][data-state="running"] .dot.live')`);
     const scanText = await evaluate(`document.getElementById('scans').textContent.replace(/\\s+/g, ' ')`);
-    check('Scans section: running scan marked live, stalled listed, counts', scansUi && /1 running · 1 stalled · 2 done/.test(scanText) &&
+    check('Scans section: running scan marked live, stalled listed, counts', scansUi && /1 running · 1 stalled · 3 done/.test(scanText) &&
       !!(await evaluate(`document.querySelector('tr.scan-row[data-state="stalled"] .dot.stall')`)), scanText.slice(0, 200));
     await evaluate(`(() => { const d = document.getElementById('scans-done'); d.open = true; d.ontoggle && d.ontoggle(); })()`);
     await evaluate(`document.querySelector('#scans .scan-toggle[data-key="all:grp/scans/done.jsonl"]').click()`);
@@ -270,6 +323,13 @@ function cdpClient(url) {
     const doneRow = await evaluate(`document.querySelector('#scans tr.scan-row[data-scan="grp/scans/done.jsonl"]').textContent.replace(/\\s+/g, ' ')`);
     check('finished scan row: 8 passed, 2 failed, min failure, failure rate with CP; expands to scores and histogram',
       expanded && /10\/10 8 2 467 20\.00% \(2\.52%–55\.61%\)/.test(doneRow), doneRow);
+    await evaluate(`document.querySelector('#scans .scan-toggle[data-key="all:grp/scans/poststep-v3.jsonl"]').click()`);
+    const v3Games = await waitUntil(`(() => { const d = document.querySelector('#scans tr.scan-detail[data-scan="grp/scans/poststep-v3.jsonl"] dd.scan-games');
+      return d && /rules v3 \\(cross-rules: a v2 model\\) · from 95,000 to 130,000 points/.test(d.textContent); })()`, 5000);
+    const v3Row = await evaluate(`document.querySelector('#scans tr.scan-row[data-scan="grp/scans/poststep-v3.jsonl"]').textContent.replace(/\\s+/g, ' ')`);
+    const doneGames = await evaluate(`(document.querySelector('#scans tr.scan-detail[data-scan="grp/scans/done.jsonl"] dd.scan-games') || {}).textContent || ''`);
+    check('scan.js --start on rules v3 in the Scans section: start→target and rules badge in the row, rules and start on expand; old scan shows rules v2 from 0',
+      v3Games && /95k→130k v3 3\/3 1 2 100,016/.test(v3Row) && /^rules v2 · from 0 to 1,000,000 points$/.test(doneGames.trim()), `${v3Row} | ${doneGames}`);
     await shot('dashboard-scans.png');
 
     // BC run: charts, chip, best weights playing.
@@ -325,6 +385,24 @@ function cdpClient(url) {
     check('post-training-quantized run view: int8 PTQ tile with its source; no-training note; plays',
       await waitUntil(`__dash.pb.run === ${JSON.stringify(PTQ)} && __dash.pb.model && __dash.pb.game && __dash.pb.game.score() >= 50 &&
         /post-training · row scales/.test(document.getElementById('detail').textContent) && /post-training quantization of runs\\/exp-bc-duck\\/v2-bc-duck-d2w8-s1/.test(document.getElementById('detail').textContent)`, 15000));
+    await pick(POW2);
+    const p2k = ((by[POW2] || {}).bc || {}).quant ? by[POW2].bc.quant.k.join(', ') : 'none';
+    check('pow2 PTQ run view: int8 tile with pow2 scales, the per-layer k and int biases; plays',
+      await waitUntil(`__dash.pb.run === ${JSON.stringify(POW2)} && __dash.pb.model && __dash.pb.game && __dash.pb.game.score() >= 50 &&
+        document.getElementById('detail').textContent.includes(${JSON.stringify(`post-training · pow2 scales 2^-k, k ${p2k}`)}) && /biases int/.test(document.getElementById('detail').textContent)`, 15000));
+    // DAgger demos: student named, student crashes (not solver crashes), score window; the student plays by default.
+    await pick('grp/dagger-set');
+    const dagOk = await waitUntil(`__dash.pb.run === 'grp/dagger-set' && __dash.pb.model && __dash.pb.model.student === true && __dash.pb.game`, 10000);
+    const dagText = await evaluate(`document.getElementById('detail').textContent`);
+    const dagOpts = await evaluate(`[...document.querySelectorAll('#pb-which option')].map(o => o.value)`);
+    check('DAgger demos view: student, shadow-teacher labels, student crashes, score window; student playback first',
+      dagOk && /Student \(played\)/.test(dagText) && /Student crashes/.test(dagText) && !/Solver crashes/.test(dagText) && /400–800 points/.test(dagText) &&
+      dagOpts[0] === 'student' && dagOpts.includes('teacher:createDuckSolver'), dagOpts.join());
+    // BC run with --extra-demos and --transition-weight: both listed.
+    await pick('grp/bc-run');
+    check('BC view lists the extra demos and the transition weight',
+      await waitUntil(`(() => { const t = document.getElementById('detail').textContent;
+        return /Extra demonstrations 1 \\(--extra-demos\\)/.test(t) && /DAgger rollouts/.test(t) && /weigh 4×/.test(t) && /onset 11/.test(t); })()`, 10000));
 
     // ES run: unchanged view and playback.
     await setSpeed(16);
@@ -333,7 +411,7 @@ function cdpClient(url) {
     const esOpts = await evaluate(`[...document.querySelectorAll('#pb-which option')].map(o => o.value + '=' + o.textContent).join()`);
     check('ES run renders (fitness/validation charts, original weights menu)', esView && esOpts === 'current=Latest checkpoint,best=Best (validation)', esOpts);
     check('ES view: evals table and the running scan of its model',
-      await evaluate(`!!document.querySelector('#run-scans tr.scan-row.running[data-scan="grp/scans/running.jsonl"]') && /Held-out evaluations/.test(document.getElementById('detail').textContent)`));
+      await evaluate(`!!document.querySelector('#run-scans tr.scan-row.running[data-scan="grp/scans/running.jsonl"]') && /Held-out assessments/.test(document.getElementById('detail').textContent)`));
     check('ES model plays', await waitUntil(`__dash.pb.game && __dash.pb.game.score() >= 100`, 20000));
     await shot('dashboard-es.png');
 

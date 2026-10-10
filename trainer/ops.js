@@ -7,7 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
-const { ROOT, readJson, pidAlive, writeAtomic } = require('./store.js');
+const { ROOT, readJson, pidAlive, writeAtomic, ASSESS_FILES, readAssessLines } = require('./store.js');
 
 const PROGRESS = path.join(ROOT, 'PROGRESS.md');
 const BEGIN = '<!-- auto-status:begin -->';
@@ -37,7 +37,7 @@ function buildStatus(dir, extra = {}) {
     last = r;
     if (!top || r.fitMax > top.fitMax) top = r;
   }
-  const evals = lines(path.join(dir, 'evals.jsonl')).map(l => JSON.parse(l));
+  const evals = readAssessLines(dir).map(l => JSON.parse(l));
   const bestRel = rel(path.join(dir, 'best.json'));
   const held = [...evals].reverse().find(e => e.source === bestRel && best && e.generation === best.generation)
     || [...evals].reverse().find(e => e.source === bestRel) || null;
@@ -130,7 +130,7 @@ async function finishCmd({ config, opts }) {
   if (!fs.existsSync(path.join(dir, 'best.json'))) throw new Error(`no ${rel(path.join(dir, 'best.json'))}: nothing to evaluate or export`);
 
   const ev = await evalHeldOut({ dir, which: 'best', workers: opts.workers }, config.target);
-  say(`held-out eval of best (gen ${ev.generation}, cap ${ev.target}): median ${ev.median}, min ${ev.min}, max ${ev.max}`);
+  say(`held-out assessment of best (gen ${ev.generation}, cap ${ev.target}): median ${ev.median}, min ${ev.min}, max ${ev.max}`);
   const ex = exportModel({ dir, which: 'best' });
   say(`exported ${ex.data.source} (gen ${ex.data.generation}) -> ${ex.file}`);
 
@@ -148,7 +148,7 @@ async function finishCmd({ config, opts }) {
 
   if (opts.noCommit) { say('not committing (--no-commit)'); return; }
   if (!browserOk) { say('NOT committing: the browser check failed (see above)'); process.exitCode = 1; return; }
-  const paths = ['model.js', 'model.css', 'PROGRESS.md', ...['best.json', 'metrics.jsonl', 'metrics.csv', 'evals.jsonl']
+  const paths = ['model.js', 'model.css', 'PROGRESS.md', ...['best.json', 'metrics.jsonl', 'metrics.csv', ...ASSESS_FILES]
     .map(f => rel(path.join(dir, f))).filter(f => fs.existsSync(path.join(ROOT, f)))];
   const git = (...a) => spawnSync('git', a, { cwd: ROOT, encoding: 'utf8' });
   const ignored = new Set(git('check-ignore', ...paths).stdout.split('\n').filter(Boolean));

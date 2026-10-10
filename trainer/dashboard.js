@@ -10,17 +10,23 @@
 // bc-gen temp file (demos.bin.<pid>.tmp). A top-level directory whose only training
 // output is in its subdirectories is a group, not a run; any other top-level directory
 // is listed as before.
-//   ES runs (train): metrics.jsonl by generation, checkpoint.json, best.json, evals.jsonl,
+//   ES runs (train): metrics.jsonl by generation, checkpoint.json, best.json, assess.jsonl (+ legacy evals.jsonl),
 //     train.lock and the newest *.log; unchanged from the ES-only dashboard.
 //   Behaviour-cloning runs (bc-train; bc-metrics.jsonl, or best.json whose config.method
 //     says behaviour cloning): per-epoch loss, recall for every class key in the rows, and
 //     seconds per epoch; the demos manifest (config.demos, or the bc-train log line while
-//     training); best.json's validation; evals.jsonl; snapshots/epoch-NN.json. Teacher =
+//     training); best.json's validation; assess.jsonl / evals.jsonl; snapshots/epoch-NN.json. Teacher =
 //     config.teacherName / the manifest's teacherName, else teacher-jump. Distilled runs
 //     (config.distillFrom) and quantized runs (config.quant: bc-train --quant-bits, or
 //     bc-quantize with config.quantFrom) also carry bc.distill / bc.quant (teacher model
-//     path, sha256, tau, mode, alpha; bits, scheme, levels, source), live from the log line.
+//     path, sha256, tau, mode, alpha; bits, scheme, levels, source; k per layer for
+//     scheme pow2), live from the log line.
 //   Demos runs (bc-gen; demos.json only): the manifest summary and teacher playback.
+//     DAgger rollouts (bc-gen --student; manifest source 'dagger'): the student is named,
+//     its crashes are shown as student crashes (not solver crashes), and playback offers the
+//     student model first ('student', from the manifest's student.path). A --score-window is
+//     shown. BC runs trained with --extra-demos list each extra manifest, and
+//     --transition-weight with its row counts.
 // Running = train.lock with a live pid (train, bc-train), or a bc-gen temp file
 // demos.bin.<pid>.tmp with a live pid (bc-gen takes no lock). A nested run with no *.log
 // of its own shows <group>/<run>.log (where detached runs often log).
@@ -41,7 +47,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { pidAlive, ROOT } = require('./store.js');
+const { pidAlive, ROOT, ASSESS_FILES, readAssessLines } = require('./store.js');
 const { listScans } = require('./scans.js');
 
 const args = process.argv.slice(2);
@@ -141,7 +147,7 @@ function esInfo(name) {
   const best = bestSummary(dir);
   const metrics = readLines(path.join(dir, 'metrics.jsonl'));
   const last = metrics.length ? JSON.parse(metrics[metrics.length - 1]) : null;
-  const evals = readLines(path.join(dir, 'evals.jsonl')).map(l => { const e = JSON.parse(l); delete e.scores; return e; });
+  const evals = readAssessLines(dir).map(l => { const e = JSON.parse(l); delete e.scores; return e; });
   const updated = Math.max(...['metrics.jsonl', 'checkpoint.json', 'train.lock'].map(f => mtime(path.join(dir, f))));
   return {
     name,
@@ -196,7 +202,15 @@ function demosSummary(file) {
     solverCrashes: m.solverCrashes, coreHash: m.coreHash, gameVersion: m.gameVersion, createdAt: m.createdAt,
     seeds: Array.isArray(m.seeds) && m.seeds.length ? `${m.seeds[0]}-${m.seeds[m.seeds.length - 1]}` : null,
     levels: m.levels, span0: m.span0, span: m.span, keepBoring: m.keepBoring, sha256: m.sha256,
+    // Release-fix keys (bc-gen --score-window / --student; absent in older manifests).
+    scoreWindow: m.scoreWindow || null, source: m.source || 'teacher', student: m.student || null,
+    studentCrashes: m.studentCrashes, undefinedAir: m.undefinedAir,
   };
+}
+
+// The student model file of a DAgger demos manifest (path relative to the repo that made it).
+function studentFile(dm) {
+  return dm && dm.source === 'dagger' && dm.student && dm.student.path ? resolveDemos(dm.student.path) : null;
 }
 
 function snapshotList(dir) {
@@ -217,9 +231,10 @@ function quantSummary(cfg, live) {
   if (cfg && cfg.quant) {
     const q = cfg.quant;
     return { bits: q.bits, scheme: q.scheme, mode: q.mode, levels: q.levels ?? null, biases: q.biases || null,
-      from: cfg.quantFrom ? cfg.quantFrom.path : null, fromSha256: cfg.quantFrom ? cfg.quantFrom.paramsSha256 : null };
+      from: cfg.quantFrom ? cfg.quantFrom.path : null, fromSha256: cfg.quantFrom ? cfg.quantFrom.paramsSha256 : null,
+      ...(Array.isArray(q.k) ? { k: q.k } : {}) };
   }
-  return live && live.quant ? { ...live.quant, levels: null, biases: 'float', from: null, fromSha256: null } : null;
+  return live && live.quant ? { ...live.quant, levels: null, biases: live.quant.scheme === 'pow2' ? 'int' : 'float', from: null, fromSha256: null } : null;
 }
 
 function bcInfo(name, kind) {
@@ -230,12 +245,12 @@ function bcInfo(name, kind) {
   const cfg = (best && best.config) || null;
   const rows = readLines(path.join(dir, 'bc-metrics.jsonl')).map(l => JSON.parse(l));
   const last = rows.length ? rows[rows.length - 1] : null;
-  const evals = readLines(path.join(dir, 'evals.jsonl')).map(l => { const e = JSON.parse(l); delete e.scores; return e; });
+  const evals = readAssessLines(dir).map(l => { const e = JSON.parse(l); delete e.scores; return e; });
   const live = !cfg && kind === 'bc' ? trainLine(name) : null;
   const demosFile = kind === 'demos' ? path.join(dir, 'demos.json') : resolveDemos((cfg && cfg.demos) || (live && live.demos));
   const demos = demosSummary(demosFile);
   const layers = best ? best.layers : live && live.layers ? live.layers.split('-').map(Number) : null;
-  const updated = Math.max(...['bc-metrics.jsonl', 'best.json', 'train.lock', 'demos.json', 'evals.jsonl'].map(f => mtime(path.join(dir, f))),
+  const updated = Math.max(...['bc-metrics.jsonl', 'best.json', 'train.lock', 'demos.json', ...ASSESS_FILES].map(f => mtime(path.join(dir, f))),
     ...listDir(dir).filter(e => GEN_TMP.test(e.name)).map(e => mtime(path.join(dir, e.name))));
   // teacherName is additive (duck generation); runs without it are the jump generation.
   const teacher = (cfg && cfg.teacherName) || (best && best.teacherName) || (demos && demos.teacherName) || 'teacher-jump';
@@ -261,6 +276,12 @@ function bcInfo(name, kind) {
       epochsDone: rows.length,
       demos,
       demosRef: (cfg && cfg.demos) || (live && live.demos) || null,
+      // bc-train --extra-demos / --transition-weight (absent for runs that did not use them).
+      extraDemos: ((cfg && cfg.extraDemos) || []).map(e => ({ ref: e.demos, summary: demosSummary(resolveDemos(e.demos)) })),
+      transitionWeight: (cfg && cfg.transitionWeight) || null,
+      transitions: (cfg && cfg.transitions) || null,
+      // DAgger demos: the student that played the rollouts, if its best.json is on this computer.
+      student: demos && demos.source === 'dagger' ? { ...(demos.student || {}), available: !!studentFile(demos) } : null,
       snapshots: snapshotList(dir),
       distill: distillSummary(cfg, live),
       quant: quantSummary(cfg, live),
@@ -306,6 +327,11 @@ function runModel(name, which) {
     const demos = best ? null : demosSummary(resolveDemos((trainLine(name) || {}).demos));
     return s && { format: 'dino-mlp-v1', layers: s.layers, actionRepeat: 1, gameVersion: (best && best.gameVersion) || (demos && demos.gameVersion) || 'v2',
       params: s.params, generation: null, epoch: s.epoch, which };
+  }
+  if (which === 'student') {
+    const f = studentFile(demosSummary(path.join(dir, 'demos.json')));
+    const b = f && readJson(f);
+    return b && { format: b.format, layers: b.layers, actionRepeat: b.actionRepeat, gameVersion: b.gameVersion || 'v1', params: b.params, generation: null, which, student: true };
   }
   if (which === 'best') {
     const b = readJson(path.join(dir, 'best.json'));
@@ -360,7 +386,7 @@ const server = http.createServer((req, res) => {
       if (!listRunNames().includes(name)) return send(res, 404, 'text/plain', 'no such run');
       if (m[2]) {
         const w = url.searchParams.get('which') || '';
-        const model = runModel(name, w === 'best' || /^epoch-\d+$/.test(w) ? w : 'current');
+        const model = runModel(name, w === 'best' || w === 'student' || /^epoch-\d+$/.test(w) ? w : 'current');
         return model ? send(res, 200, 'application/json', JSON.stringify(model)) : send(res, 404, 'text/plain', 'no weights yet');
       }
       const info = runInfo(name);

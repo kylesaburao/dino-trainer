@@ -10,7 +10,7 @@ const { FRAME_MS } = DinoCore;
 const renderer = DinoRender.createRenderer(document.getElementById('game'));
 
 // ---------------------------------------------------------------------------
-// Game version: ?game=v1|v2 in the URL, else the version the shipped model was
+// Game version: ?game=v1|v2|v3 in the URL, else the version the shipped model was
 // trained on (so AI mode plays the game it learned), else v2. See core.js.
 // ---------------------------------------------------------------------------
 const MODEL = typeof DINO_MODEL !== 'undefined' ? DINO_MODEL : null;

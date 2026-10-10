@@ -5,7 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 
-const GOLDEN_DIR = path.join(__dirname, 'golden');
+const GOLDEN_DIR = path.join(__dirname, 'golden');          // rules v1, from baseline 2da34de
+const GOLDEN_V2_DIR = path.join(__dirname, 'golden-v2');    // rules v2, from 10cd0e0 (record-golden-v2.js)
 const STATE_CODES = { idle: 0, running: 1, over: 2 };
 const TYPE_CODES = { small: 0, large: 1, ptero: 2 };
 
@@ -31,14 +32,14 @@ function fieldName(i) {
 // Inputs are one char per frame: bit 0 = jump held, bit 1 = down held.
 const decodeKeys = (ch) => { const c = ch.charCodeAt(0) - 48; return { jump: !!(c & 1), down: !!(c & 2) }; };
 
-function writeTrace(trace) {
-  fs.mkdirSync(GOLDEN_DIR, { recursive: true });
-  fs.writeFileSync(path.join(GOLDEN_DIR, trace.name + '.json.gz'), zlib.gzipSync(JSON.stringify(trace), { level: 9 }));
+function writeTrace(trace, dir = GOLDEN_DIR) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, trace.name + '.json.gz'), zlib.gzipSync(JSON.stringify(trace), { level: 9 }));
 }
 
-function readTraces() {
-  return fs.readdirSync(GOLDEN_DIR).filter(f => f.endsWith('.json.gz')).sort()
-    .map(f => JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(GOLDEN_DIR, f))).toString()));
+function readTraces(dir = GOLDEN_DIR) {
+  return fs.readdirSync(dir).filter(f => f.endsWith('.json.gz')).sort()
+    .map(f => JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(dir, f))).toString()));
 }
 
-module.exports = { snapshot, fieldName, decodeKeys, writeTrace, readTraces, GOLDEN_DIR };
+module.exports = { snapshot, fieldName, decodeKeys, writeTrace, readTraces, GOLDEN_DIR, GOLDEN_V2_DIR };

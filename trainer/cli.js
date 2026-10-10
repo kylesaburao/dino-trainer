@@ -4,8 +4,13 @@
 //
 //   node trainer/cli.js train  [--target 10000] [--resume [--force]] [--workers N]
 //                              [--time-budget MIN] [--generations N] [--dir runs/main] ...
-//   node trainer/cli.js eval   [--dir runs/main] [--which best|current] [--model model.js] [--target N]
-//                              [--seeds 25] [--seed-offset 0] [--wasm]
+//   node trainer/cli.js assess [--dir runs/main] [--which best|current] [--model model.js] [--target N]
+//                              [--seeds 25] [--seed-offset 0] [--wasm] [--game v1|v2|v3]
+//             held-out assessment; appends to <run>/assess.jsonl (older runs also have
+//             evals.jsonl, from before the rename; readers merge both). `eval` is a
+//             deprecated alias that prints a notice.
+//             --game plays those rules instead of the model's own gameVersion (a cross-rules
+//             assessment, e.g. a v2 model on rules v3: it warns, and the record notes both).
 //   node trainer/cli.js bench  [--seconds 3] [--workers N] [--hidden 16] [--wasm]
 //   node trainer/cli.js export [--dir runs/main] [--which best|current] [--out model.js]
 //                              (also writes model.css next to it: the same weights for index-css.html)
@@ -15,13 +20,14 @@
 //   node trainer/cli.js session [train options]          train, then finish (one detached command)
 //   node trainer/cli.js bc-gen   --dir runs/<name> [--seeds 1-40] [--levels 0,2000,50000,300000,900000]
 //                              [--span0 3000] [--span 5000] [--keep-boring 10] [--game v2] [--workers N] [--overwrite]
-//                              [--teacher jump|duck]
+//                              [--teacher jump|duck] [--score-window A-B] [--student <best.json>]
 //   node trainer/cli.js bc-train --dir runs/<name> --hidden 32,32 [--backend node|python] [--epochs 15]
 //                              [--batch 1024] [--lr 2e-3] [--seed 1] [--demos <dir or demos.json>]
 //                              [--target 1000000] [--workers N] [--wasm] [--force] [--overwrite] [--snapshots]
 //                              [--distill-from <best.json> [--distill-mode soft|hard] [--tau 1] [--alpha 0]]
-//                              [--quant-bits N [--quant-scheme row|layer]]
-//   node trainer/cli.js bc-quantize --from <best.json> --dir runs/<name> --quant-bits N [--quant-scheme row|layer]  (refuses another core hash unless --force)
+//                              [--quant-bits N [--quant-scheme row|layer|pow2]]
+//                              [--extra-demos <dir>[,<dir>...]] [--transition-weight W]
+//   node trainer/cli.js bc-quantize --from <best.json> --dir runs/<name> --quant-bits N [--quant-scheme row|layer|pow2]  (refuses another core hash unless --force)
 //                              [--target 1000000] [--workers N] [--wasm] [--overwrite]
 //
 // Behaviour cloning of test/solver.js (trainer/bc.js; supervised, no ES):
@@ -37,7 +43,7 @@
 //   bc-train  trains a tanh MLP on the demos (--demos, default --dir) with weighted
 //             cross-entropy, sqrt-balanced class weights, Adam and a cosine learning rate,
 //             then validates it on the 25 validation seeds (full games to --target,
-//             default 1000000) and writes best.json (the same schema as ES runs, so eval
+//             default 1000000) and writes best.json (the same schema as ES runs, so assess
 //             and export work unchanged; config.teacherName from the demos manifest, 'jump'
 //             if absent) and bc-metrics.jsonl (per-epoch loss and recall; recall.duck only
 //             when the demos have duck rows).
@@ -65,12 +71,38 @@
 //             stay float. The saved params are the float64 q * scale (still dino-mlp-v1), and
 //             config.quant records bits, scheme, mode 'qat', the scales and the levels used;
 //             the write fails unless every weight is exactly an integer times its scale.
+//             --quant-scheme pow2: ALL params N-bit fixed point. Weights and biases are
+//             integers in [-qmax, qmax] times one power-of-two scale 2^-k per layer, k the
+//             largest integer with max(|W|, |b|) * 2^k <= qmax (so nothing clips), q =
+//             round-half-up(v * 2^k); QAT fake-quantizes biases too, k recomputed every
+//             step. config.quant = {bits, scheme 'pow2', mode, biases 'int', k (per layer),
+//             levels, checked: true}; the write fails unless every weight and bias is
+//             exactly such an integer times 2^-k. research/scripts/prereg-distill/pack.js
+//             verifies a best.json and writes the packed N-bit form.
 //   bc-quantize post-training quantization of --from (a best.json) with the same rule,
 //             into a new run dir: best.json (config.quant mode 'ptq', quantFrom {path,
 //             paramsSha256}), after the same 25-seed validation. No training, no bc-metrics.
+//   Release-fix flags (research/prereg-teacher-duck-release-fix.md §4.1; each off by default,
+//   and absent they leave demos and params byte-identical):
+//   bc-gen --score-window A-B  keep only running frames with A <= score < B (before the
+//             boring rule: frames outside neither are kept nor advance its counter). Use with
+//             --levels 0: a non-zero level starts at max speed. The manifest records scoreWindow.
+//   bc-gen --student <best.json>  DAgger rollouts: the student model plays, and the --teacher
+//             solver labels each frame as a shadow queried from frame 0 on the student's
+//             trajectory (airborne frames after a takeoff the shadow did not choose are dropped,
+//             counted as undefinedAir). The manifest records source 'dagger', the student path
+//             and params sha256, studentCrashes (not solverCrashes) and undefinedAir.
+//   bc-train --extra-demos <dir>[,<dir>...]  (python backend only) append those demos' rows,
+//             in order, after --demos; each must match its rules and teacher and pass the
+//             core-hash and sha checks. config.extraDemos records them.
+//   bc-train --transition-weight W  (python backend only) multiply the weight of duck-transition
+//             rows (grounded; onset: not ducking, label duck; release: ducking, label not duck)
+//             by W, after the class weights. config.transitionWeight and config.transitions
+//             (row counts) record it; W = 1 skips the code path. Neither combines with
+//             --distill-from (its teacher logits cover the base demos only) for now.
 //
-// Training-only curriculum (off by default; validation, held-out eval, the stop
-// check, eval and export always play full games from 0 to --target):
+// Training-only curriculum (off by default; validation, held-out assessment, the stop
+// check, assess and export always play full games from 0 to --target):
 //   --window POINTS       training episodes cover a window of this many points;
 //                         fitness = mean over episodes of (score - start) / span, capped at 1,
 //                         where span = the episode's cap - start (see --start-zero-cap)
@@ -143,7 +175,7 @@
 //                         in the training, validation and held-out workers. Decisions are
 //                         bit-identical to policy.js (test/wasm-net.test.js), so results do not
 //                         change; fails at startup if the runtime has no wasm SIMD. Also
-//                         accepted by eval and bench. The browser always uses policy.js.
+//                         accepted by assess and bench. The browser always uses policy.js.
 // Boolean options can be turned off on --resume with --no-<option>. Everything except
 // --hidden, --action-repeat and --game can change on --resume.
 //
@@ -164,7 +196,7 @@ const {
   gatedAdaptWindow, emptyAdaptAcc, geomeanFitness, splitFolded, clopperPearson, drawGeneration,
 } = require('./rules.js');
 const { createPool, defaultWorkers } = require('./pool.js');
-const { ROOT, coreHash, writeAtomic, writeJsonAtomic, readJson, acquireLock } = require('./store.js');
+const { ROOT, coreHash, writeAtomic, writeJsonAtomic, readJson, acquireLock, ASSESS_FILE } = require('./store.js');
 
 const CHECKPOINT_FORMAT = 'dino-es-checkpoint-v1';
 
@@ -257,7 +289,8 @@ function parseArgs(argv) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = true;
     } else if (['--workers', '--time-budget', '--dir', '--which', '--model', '--out', '--seconds', '--log-every', '--seeds', '--seed-offset',
       '--levels', '--span0', '--span', '--keep-boring', '--backend', '--epochs', '--batch', '--demos', '--teacher',
-      '--distill-from', '--tau', '--distill-mode', '--alpha', '--quant-bits', '--quant-scheme', '--from'].includes(a)) {
+      '--distill-from', '--tau', '--distill-mode', '--alpha', '--quant-bits', '--quant-scheme', '--from',
+      '--extra-demos', '--transition-weight', '--score-window', '--student'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = takesValue();
     } else {
       throw new Error(`unknown argument ${a}`);
@@ -487,7 +520,7 @@ async function train({ config: cli, opts }) {
       const s = summary(scores);
       const passed = scores.filter(x => x >= config.target).length;
       st.heldOut = { generation: best.generation, target: config.target, ...s, seeds: seeds.length, attempt, played: scores.length, passed };
-      log(`held-out eval of best (gen ${best.generation}): median ${s.median} min ${s.min} max ${s.max}`);
+      log(`held-out assessment of best (gen ${best.generation}): median ${s.median} min ${s.min} max ${s.max}`);
       return s.median >= config.target ? `held-out median ${s.median} >= target ${config.target}` : null;
     }
     const r = await sequentialAllPass(score, seeds, workers, config.target);
@@ -647,7 +680,7 @@ async function train({ config: cli, opts }) {
 }
 
 // ---------------------------------------------------------------------------
-// Model loading for eval / export
+// Model loading for assess / export
 // ---------------------------------------------------------------------------
 function loadModel(opts) {
   if (opts.model) {
@@ -675,14 +708,21 @@ function loadModel(opts) {
   throw new Error(`--which must be best or current`);
 }
 
-// Held-out eval (--seeds held-out seeds, default 25, starting at index --seed-offset,
-// default 0); appends to the run's evals.jsonl. The train stop check uses the first
+// Held-out assessment (`assess`; --seeds held-out seeds, default 25, starting at index
+// --seed-offset, default 0); appends to the run's assess.jsonl (ASSESS_FILE). The train stop check uses the first
 // N (default 25) held-out seeds and, under allpass, may retry until they pass, so a
-// certification eval of such a run should skip them: --seed-offset 25. Returns the
+// certification assessment of such a run should skip them: --seed-offset 25. Returns the
 // record, with the seeds that reached the target (passed) and the two-sided 95%
 // Clopper-Pearson interval for the pass rate.
-async function evalHeldOut(opts, targetOverride, wasm = false) {
-  const { model, source, target: savedTarget } = loadModel(opts);
+async function evalHeldOut(opts, targetOverride, wasm = false, gameOverride) {
+  const loaded = loadModel(opts);
+  const { source, target: savedTarget } = loaded;
+  const modelGame = loaded.model.gameVersion || 'v1';
+  if (gameOverride && !GAME_VERSIONS.includes(gameOverride)) throw new Error(`--game must be one of ${GAME_VERSIONS.join(', ')}`);
+  const model = gameOverride ? { ...loaded.model, gameVersion: gameOverride } : loaded.model;
+  if (gameOverride && gameOverride !== modelGame) {
+    console.warn(`WARNING: cross-rules assessment: a ${modelGame} model on rules ${gameOverride}`);
+  }
   const target = targetOverride || savedTarget || DEFAULTS.target;
   const workers = Number(opts.workers) || defaultWorkers();
   const offset = opts.seedOffset !== undefined ? Number(opts.seedOffset) : 0;
@@ -695,15 +735,17 @@ async function evalHeldOut(opts, targetOverride, wasm = false) {
   const s = summary(scores);
   const passed = scores.filter(x => x >= target).length;
   const record = { time: ts(), source: path.relative(ROOT, source), generation: model.generation ?? null, target, seeds: seeds.length, seedOffset: offset, ...s, passed, passCI95: clopperPearson(passed, seeds.length), scores };
+  if (gameOverride) Object.assign(record, { gameVersion: gameOverride, modelGameVersion: modelGame });
   record.seconds = (Date.now() - t0) / 1000;
-  if (!opts.model) fs.appendFileSync(path.join(path.dirname(source), 'evals.jsonl'), JSON.stringify(record) + '\n');
+  if (!opts.model) fs.appendFileSync(path.join(path.dirname(source), ASSESS_FILE), JSON.stringify(record) + '\n');
   return record;
 }
 
 async function evalCmd({ config: cli, opts }) {
-  const record = await evalHeldOut(opts, cli.target, !!cli.wasm);
+  const record = await evalHeldOut(opts, cli.target, !!cli.wasm, cli.gameVersion);
   const ci = record.passCI95;
-  console.log(`held-out eval (${record.seeds} seeds${record.seedOffset ? ` from index ${record.seedOffset}` : ''}, cap ${record.target}) of ${record.source}:`);
+  const rules = record.gameVersion && record.gameVersion !== record.modelGameVersion ? `, ${record.modelGameVersion} model on rules ${record.gameVersion}` : '';
+  console.log(`held-out assessment (${record.seeds} seeds${record.seedOffset ? ` from index ${record.seedOffset}` : ''}, cap ${record.target}${rules}) of ${record.source}:`);
   console.log(`  median ${record.median}  min ${record.min}  max ${record.max}  (${record.seconds.toFixed(1)}s)`);
   console.log(`  passed ${record.passed}/${record.seeds}; pass rate 95% Clopper-Pearson [${ci.lower.toFixed(4)}, ${ci.upper.toFixed(4)}]`);
   console.log(`  scores ${record.scores.join(' ')}`);
@@ -815,10 +857,24 @@ async function bcGenCmd({ config: cli, opts }) {
   if (!o.levels.every(l => Number.isInteger(l) && l >= 0)) throw new Error('--levels must be non-negative integers');
   if (!(Number.isInteger(o.keepBoring) && o.keepBoring >= 1)) throw new Error('--keep-boring must be a positive integer');
   if (!(o.span0 > 0 && o.span > 0)) throw new Error('--span0 and --span must be positive');
+  if (opts.scoreWindow !== undefined) {
+    const m = /^(\d+)-(\d+)$/.exec(opts.scoreWindow);
+    if (!m || !(Number(m[1]) < Number(m[2]))) throw new Error(`--score-window must be A-B with integers A < B, got ${opts.scoreWindow}`);
+    o.scoreWindow = [Number(m[1]), Number(m[2])];
+  }
+  if (opts.student !== undefined) {
+    const file = path.resolve(opts.student);
+    const model = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (model.format !== FORMAT || !Array.isArray(model.layers) || model.layers[0] !== OBS_DIM) throw new Error(`--student ${opts.student}: not a ${FORMAT} model with ${OBS_DIM} inputs`);
+    if ((model.gameVersion || 'v1') !== o.gameVersion) throw new Error(`--student ${opts.student}: trained for rules ${model.gameVersion}, demos are ${o.gameVersion}`);
+    o.studentModel = { format: model.format, layers: model.layers, params: model.params, actionRepeat: model.actionRepeat || 1, gameVersion: model.gameVersion };
+    o.student = { path: path.relative(ROOT, file), paramsSha256: require('crypto').createHash('sha256').update(JSON.stringify(model.params)).digest('hex') };
+  }
   const manifestFile = path.join(dir, 'demos.json');
   if (fs.existsSync(manifestFile) && !opts.overwrite) throw new Error(`${manifestFile} exists; pass --overwrite to regenerate`);
   log(`bc-gen: dir=${dir} seeds ${o.seeds[0]}-${o.seeds[o.seeds.length - 1]} levels ${o.levels.join(',')} span0 ${o.span0} span ${o.span} ` +
-    `keep-boring ${o.keepBoring} game ${o.gameVersion} teacher ${o.teacher} workers ${o.workers} core=${o.coreHash.slice(0, 12)}`);
+    `keep-boring ${o.keepBoring} game ${o.gameVersion} teacher ${o.teacher} workers ${o.workers} core=${o.coreHash.slice(0, 12)}` +
+    `${o.scoreWindow ? ` score-window ${o.scoreWindow.join('-')}` : ''}${o.student ? ` student ${o.student.path} (params ${o.student.paramsSha256.slice(0, 12)}; teacher labels as a shadow)` : ''}`);
   const t0 = Date.now();
   let lastLog = 0;
   o.onProgress = (done, total, rows) => {
@@ -828,7 +884,8 @@ async function bcGenCmd({ config: cli, opts }) {
   writeJsonAtomic(manifestFile, manifest);
   log(`bc-gen: ${manifest.rows} rows (none ${manifest.counts.rows.none}, jump ${manifest.counts.rows.jump}` +
     `${manifest.counts.rows.duck ? `, duck ${manifest.counts.rows.duck}` : ''}), ` +
-    `solver crashes ${manifest.solverCrashes}, ${((Date.now() - t0) / 1000).toFixed(1)}s -> ${path.relative(ROOT, manifestFile)}`);
+    `${manifest.source === 'dagger' ? `student crashes ${manifest.studentCrashes}, undefined airborne frames ${manifest.undefinedAir}` : `solver crashes ${manifest.solverCrashes}`}, ` +
+    `${((Date.now() - t0) / 1000).toFixed(1)}s -> ${path.relative(ROOT, manifestFile)}`);
   if (manifest.solverCrashes) throw new Error(`the solver crashed in ${manifest.solverCrashes} episode(s); the demonstrations are not trustworthy`);
 }
 
@@ -859,7 +916,7 @@ function parseDistill(opts) {
   return { mode, tau, alpha, abs, model };
 }
 
-// --quant-bits N [--quant-scheme row|layer]; null when off.
+// --quant-bits N [--quant-scheme row|layer|pow2]; null when off.
 function parseQuant(opts, bc) {
   if (opts.quantBits === undefined) {
     if (opts.quantScheme !== undefined) throw new Error('--quant-scheme needs --quant-bits');
@@ -887,6 +944,17 @@ async function bcTrainCmd({ config: cli, opts }) {
   if (opts.snapshots && backend !== 'python') throw new Error('--snapshots is only supported with --backend python');
   const dz = parseDistill(opts);
   const quant = parseQuant(opts, bc);
+  for (const f of ['extraDemos', 'transitionWeight']) {
+    if (opts[f] !== undefined && backend !== 'python') throw new Error(`--${f.replace(/[A-Z]/g, c => '-' + c.toLowerCase())} is only supported with --backend python`);
+  }
+  let transitionWeight;
+  if (opts.transitionWeight !== undefined) {
+    transitionWeight = Number(opts.transitionWeight);
+    if (!(Number.isFinite(transitionWeight) && transitionWeight > 0)) throw new Error(`--transition-weight must be a positive number, got ${opts.transitionWeight}`);
+  }
+  // Teacher logits are computed on the base demos only, so the release-fix flags do not combine
+  // with distillation yet (quantization is fine).
+  if (dz && (opts.extraDemos !== undefined || transitionWeight !== undefined)) throw new Error('--extra-demos and --transition-weight do not combine with --distill-from');
   const d = bc.TRAIN_DEFAULTS;
   const o = {
     hidden: cli.hidden,
@@ -904,6 +972,16 @@ async function bcTrainCmd({ config: cli, opts }) {
   const hash = coreHash();
   const demos = bc.resolveDemos(path.resolve(opts.demos || dir));
   const sha = bc.checkDemos(demos, hash, !!opts.force, (m) => log(m));
+  // --extra-demos: each must match the base set (rules, features, teacher) and pass checkDemos.
+  const extras = (opts.extraDemos === undefined ? [] : String(opts.extraDemos).split(',').filter(Boolean)).map((p) => {
+    const e = bc.resolveDemos(path.resolve(p));
+    const eSha = bc.checkDemos(e, hash, !!opts.force, (m) => log(m));
+    const tn = (m) => m.teacherName || 'jump';
+    if (e.manifest.gameVersion !== demos.manifest.gameVersion) throw new Error(`--extra-demos ${p}: rules ${e.manifest.gameVersion}, base demos ${demos.manifest.gameVersion}`);
+    if (tn(e.manifest) !== tn(demos.manifest)) throw new Error(`--extra-demos ${p}: teacher ${tn(e.manifest)}, base demos ${tn(demos.manifest)}`);
+    return { ...e, sha: eSha };
+  });
+  if (opts.extraDemos !== undefined && !extras.length) throw new Error('--extra-demos needs at least one demos dir');
   const release = acquireLock(dir);
   process.on('exit', release);
   const snapshotDir = opts.snapshots ? path.join(dir, 'snapshots') : null;
@@ -912,6 +990,8 @@ async function bcTrainCmd({ config: cli, opts }) {
   if (dz && dz.model.gameVersion && dz.model.gameVersion !== gameVersion) throw new Error(`--distill-from: teacher plays ${dz.model.gameVersion}, demos are ${gameVersion}`);
   log(`bc-train: dir=${dir} backend=${backend} layers=${[OBS_DIM, ...o.hidden, 3].join('-')} epochs ${o.epochs} batch ${o.batch} lr ${o.lr} seed ${o.seed} ` +
     `demos ${path.relative(ROOT, demos.manifestFile)} (${demos.manifest.rows} rows, sha ${sha.slice(0, 12)}) core=${hash.slice(0, 12)}` +
+    extras.map(e => ` extra-demos ${path.relative(ROOT, e.manifestFile)} (${e.manifest.rows} rows, sha ${e.sha.slice(0, 12)})`).join('') +
+    `${transitionWeight !== undefined ? ` transition-weight ${transitionWeight}` : ''}` +
     `${dz ? distillText(dz) : ''}${quant ? quantText(quant) : ''}`);
   // Teacher logits on every demo row, straight from the Float32 rows (no Float64 copy).
   let logits = null;
@@ -943,6 +1023,8 @@ async function bcTrainCmd({ config: cli, opts }) {
     const logitsFile = path.join(dir, `teacher-logits.${process.pid}.tmp`);
     try {
       if (dz) { bc.writeLogits(logitsFile, logits); extra.distill = { logitsFile, mode: dz.mode, tau: dz.tau, alpha: dz.alpha }; }
+      if (extras.length) extra.extraDemos = extras.map(e => e.binFile);
+      if (transitionWeight !== undefined) extra.transitionWeight = transitionWeight;
       result = await bc.trainPython(demos.binFile, outFile, { ...o, ...(snapshotDir ? { snapshotDir } : {}), ...extra }, ROOT, (line) => {
         if (line.startsWith('{')) onEpoch(JSON.parse(line)); else if (line) log(line);
       });
@@ -954,10 +1036,7 @@ async function bcTrainCmd({ config: cli, opts }) {
   logits = null;
   const trainSeconds = (Date.now() - t0) / 1000;
   let quantConfig = null;
-  if (quant) {
-    quantConfig = { bits: quant.bits, scheme: quant.scheme, mode: 'qat', biases: 'float', scales: result.scales };
-    quantConfig.levels = bc.checkQuantized(result.layers, result.params, quantConfig);   // throws unless exactly k * scale
-  }
+  if (quant) quantConfig = bc.quantRecord(result.layers, result.params, quant, 'qat', result);   // throws unless exactly on the grid
   const model = { format: FORMAT, layers: result.layers, params: result.params, actionRepeat: 1, gameVersion };
 
   const valSeedList = validationSeeds(25);
@@ -979,6 +1058,8 @@ async function bcTrainCmd({ config: cli, opts }) {
     ...(snapshotDir ? { snapshots: path.relative(ROOT, snapshotDir) } : {}),
     ...(dz ? distillConfig(dz, bc) : {}),
     ...(quantConfig ? { quant: quantConfig } : {}),
+    ...(extras.length ? { extraDemos: extras.map(e => ({ demos: path.relative(ROOT, e.manifestFile), demosSha256: e.sha, demosRows: e.manifest.rows })) } : {}),
+    ...(transitionWeight !== undefined ? { transitionWeight, ...(result.transitions ? { transitions: result.transitions } : {}) } : {}),
   };
   writeJsonAtomic(bestFile, bc.assembleBest({ layers: result.layers, params: result.params, validation, coreHash: hash, config }));
   release();
@@ -1008,8 +1089,7 @@ async function bcQuantizeCmd({ config: cli, opts }) {
   const gameVersion = src.gameVersion || (src.config && src.config.gameVersion) || 'v2';
   log(`bc-quantize: dir=${dir} from=${path.relative(ROOT, abs)} layers=${src.layers.join('-')}${quantText(quant)}`);
   const q = bc.quantizeParams(src.layers, src.params, quant);
-  const quantConfig = { bits: quant.bits, scheme: quant.scheme, mode: 'ptq', biases: 'float', scales: q.scales };
-  quantConfig.levels = bc.checkQuantized(src.layers, q.params, quantConfig);
+  const quantConfig = bc.quantRecord(src.layers, q.params, quant, 'ptq', q);
   let changed = 0, maxErr = 0;
   q.params.forEach((v, i) => { if (v !== src.params[i]) changed++; maxErr = Math.max(maxErr, Math.abs(v - src.params[i])); });
   log(`bc-quantize: ${changed}/${q.params.length} params changed, max |change| ${maxErr.toExponential(3)}, ${quantConfig.levels} integer levels`);
@@ -1037,8 +1117,13 @@ async function bcQuantizeCmd({ config: cli, opts }) {
 
 // ---------------------------------------------------------------------------
 const ops = () => require('./ops.js');
+// `eval` is the deprecated name of `assess` (renamed 2026-10-10, user order); same options.
+const evalAlias = (a) => {
+  console.error('note: `eval` is deprecated; use `node trainer/cli.js assess` (same options)');
+  return evalCmd(a);
+};
 const COMMANDS = {
-  train, eval: evalCmd, bench: benchCmd, export: exportCmd, 'export-css': exportCssCmd,
+  train, assess: evalCmd, eval: evalAlias, bench: benchCmd, export: exportCmd, 'export-css': exportCssCmd,
   report: (a) => ops().reportCmd(a),
   finish: (a) => ops().finishCmd(a),
   session: (a) => ops().sessionCmd(a),
@@ -1055,7 +1140,7 @@ async function main() {
   }
   const cmd = COMMANDS[args.cmd];
   if (!cmd) {
-    console.error('usage: node trainer/cli.js <train|eval|bench|export|export-css|report|finish|session|bc-gen|bc-train|bc-quantize> [options]  (see the header of trainer/cli.js)');
+    console.error('usage: node trainer/cli.js <train|assess|bench|export|export-css|report|finish|session|bc-gen|bc-train|bc-quantize> [options]  (see the header of trainer/cli.js)');
     process.exit(2);
   }
   await cmd(args);

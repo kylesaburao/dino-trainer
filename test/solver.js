@@ -6,10 +6,17 @@
 // the whole frame nearest the centre of its takeoff window, using that
 // obstacle's frozen requirement (release frame), and stay grounded otherwise.
 // If the fairness model is right, this never crashes.
-const { _internal: { requirement }, standBox, obstacleBox, STAND_TOP, GROUND, DUCK_H, W } = require('../core.js');
+const { _internal: { requirement, jumpArc }, standBox, obstacleBox, STAND_TOP, GROUND, DUCK_H, W, MAX_PTERO_SPEED_OFFSET } = require('../core.js');
 
 const NONE = { jump: false, down: false }, JUMP = { jump: true, down: false };
 const FRONT = standBox(STAND_TOP).x + standBox(STAND_TOP).w;
+
+// Lookahead prune: an obstacle with tau > horizon cannot be due (takeoff from <= 0.5).
+// Every takeoff lies within the longest airtime before tau (from >= tau - b, b <= airtime;
+// rules-v3 late anchors are later still), so any horizon >= that airtime is exact. The
+// longest airtime is ~33 frames at every speed (jumpVelocity grows with speed, but
+// maxJumpY / dropVel cap the arc), so the horizon is 80 frames on rules v1, v2 and v3.
+const horizon = (speed) => Math.max(80, jumpArc(speed, Infinity).length + 2);
 
 function createSolver() {
   let hold = 0;                  // frames the jump key stays down after the press frame
@@ -27,10 +34,11 @@ function createSolver() {
     }
     if (game.keys.jump) return NONE;
     let next = null, nextFrom = Infinity;
+    const far = horizon(game.speed);
     for (const o of game.obstacles) {
       const v = game.speed + o.speedOffset;
       const tau = (obstacleBox(o).x - FRONT) / v;
-      if (tau > 80) continue;                         // takeoff is far away (from <= tau)
+      if (tau > far) continue;                        // takeoff is far away (from <= tau)
       const r = requirement(o, game.speed);
       if (!r || r.grounded || r.to <= 0) continue;
       if (r.from < nextFrom) { next = r; nextFrom = r.from; }
@@ -61,7 +69,7 @@ function createSolver() {
 // DOWN); conflicts (a takeoff came due during a duck; expected 0).
 const DOWN = { jump: false, down: true };
 const DUCK_MARGIN = 1;          // frames of extra duck before and after the predicted overlap
-const MAX_PTERO_OFFSET = 1.6;   // the largest pterodactyl speedOffset (rules v2); bounds newcomers
+const MAX_PTERO_OFFSET = MAX_PTERO_SPEED_OFFSET;   // the largest pterodactyl speedOffset (1.6 on rules v2 and v3); bounds newcomers
 
 // The ducking hitbox, as core.js dinoBox() builds it (core.js does not export it).
 const duckBox = (dino) => ({ x: dino.x + 4, y: GROUND - DUCK_H + 4, w: 50, h: 18 });
@@ -117,11 +125,12 @@ function createDuckSolver() {
     for (;;) {
       if (!ducking && game.keys.jump) return NONE;
       let next = null, nextFrom = Infinity, nextO = null;
+      const far = horizon(game.speed);
       for (const o of game.obstacles) {
         if (plan.get(o) === 'duck') continue;
         const v = game.speed + o.speedOffset;
         const tau = (obstacleBox(o).x - FRONT) / v;
-        if (tau > 80) continue;
+        if (tau > far) continue;
         const r = requirement(o, game.speed);
         if (!r || r.grounded || r.to <= 0) continue;
         if (r.from < nextFrom) { next = r; nextFrom = r.from; nextO = o; }
