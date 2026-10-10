@@ -1,6 +1,6 @@
 # Pre-registration: `teacher-duck`, step 2. Can a clone learn to jump *and* duck, as reliably as the jump generation?
 
-Status: **registered (mac-4 review applied), 2026-10-10, pending the step-1 gate.** Author: a mac-4 subagent; review: mac-4. Written on main `a53fc30` (core hash `0f329d4e3493…`).
+Status: **registered (mac-4 review applied), 2026-10-10; step-1 gate passed; results recorded (see Results at the end).** Author: a mac-4 subagent; review: mac-4. Written on main `a53fc30` (core hash `0f329d4e3493…`).
 Continues `research/prereg-teacher-duck.md` (step 1). Context: `research/follow-up-questions.md` Q2 (steps 2 and 3 of its "cheapest discriminating sequence"), AGENTS.md "Naming scheme", "Research method", the BC pipeline and the dashboard invariant. The orchestrator's rulings on the draft's open choices are in §11.
 
 **User's order (verbatim):** "To be clear, I want the new solver to use both jump and duck." `teacher-duck` (`test/solver.js` `createDuckSolver`, merged in `9616c3b`) jumps cacti and low pterodactyls, stays grounded under high ones, ducks under mid ones, and falls back to the planned jump where a duck cannot fit. The clone trains on three classes: none (0), jump (1), duck (2).
@@ -346,3 +346,110 @@ For each duck clone, and for the jump twin where marked:
 9. **Observability bars:** kept (pass ≤ 0.5 %, fail ≥ 2 %, mask control ≥ 10×). The gate moves to held-out seeds 41–60, because the bars were set after seeing seeds 1–40.
 10. **Extra demos with fallbacks:** decided after step 1, once its fallback counts are known (§5.1 step 5).
 11. **Step 1 in its row 3** (fallback ≥ 10 %): wait for the user.
+
+## Results (2026-10-10, mac executor, branch `wt/exp-bc-duck`)
+**Provenance.** Code: main `5fd8248`, with no change to `core.js`, `policy.js`, `test/solver.js` or `trainer/`. This branch adds only the analysis helpers `research/scripts/prereg-teacher-duck-step2/{release,pair,duckrun}.js`. Core hash `0f329d4e3493f794daf9cf2d013bd7927b51ff848efed768922a10b582c7410e` (every scan header). Step-1 result commit `5fd8248`. Python backend `/Users/kyle/Desktop/dino-game/.venv/bin/python` with `OMP_NUM_THREADS=2 VECLIB_MAXIMUM_THREADS=2`. Runs from the worktree `.claude/worktrees/agent-a0e89a1383966479d`, under `runs/exp-bc-duck/<arm>`; the dashboard (`--port 8095 --runs <worktree>/runs`) lists all seven arms and both demo dirs, the arms with `teacherName` duck. One heavy job at a time. No held-out eval offsets spent; no `export`/`finish`/`session`/`--auto-export`; root `model.js`/`model.css` untouched.
+
+### §2 gates
+All met: step 1 passed (0/5,000 crashes, fallback 0/41,372,227, `5fd8248`); `6ef29c2`; `90f129e`; no other heavy job running. **Step 1 reports 0 fallbacks, so §5.1 step 4 (the fallback-visibility replay, OPEN-3) is void and §11 item 10 (extra fallback demos, OPEN-10) is moot. Neither was run.**
+
+### §5.0 tool and plumbing controls: all pass
+| Control | Result |
+|---|---|
+| C-tools (`selftest.js`) | 4/4 ok: teacher 1,625/1,625 ducked, 9,396 DOWN frames; jump clone d2-w8-s1 1,625/1,625 jumped, 0 ducked; diag default byte-identical; diag `--teacher duck` gives `(iii)` on 30,003,071 and 30,003,596 |
+| C-jump-sha | `bc-gen` with the default teacher: 2,096,268 rows, sha256 `3a67bfd4e109d6bbee7a6eb21b6fa7922eb254cc0fc92dc7695538a222bcfd09`, byte-identical to `runs/exp-bc-e2e` |
+| C-jump-params | `bc-train --backend python --seed 1 --hidden 32,32` on those demos: all 2,595 params identical to `runs/exp-bc-e2e/py-s1` (validation 25/25) |
+| C-duck-rows | `bc-gen --teacher duck`: 2,062,427 rows, sha256 `363872f61a785729820c3729eda3c6261a91b19fc32598baf620679ee0149ea7`, identical to the premise probe |
+
+### §5.1 demos and the observability gate
+- **Training demos** (`runs/exp-bc-duck/demos`, seeds 1–40):
+  - rows: none 1,817,370, jump 203,379, duck 41,678;
+  - weighted: 1,924,245 / 203,379 / 41,678; weighted duck share 1.921 %, duck/jump 0.205;
+  - teacher crashes 0; fallbacks 0 of 7,244 mid pterodactyls (`duckdemo-premise.js` on the same rows).
+- **Held-out demos** (`runs/exp-bc-duck/heldout-demos`, seeds 41–60):
+  - 1,031,320 rows: none 908,229, jump 101,876, duck 21,215; weighted none 961,545;
+  - weighted duck share 1.956 %; sha256 `814c0686107f9a5933a668a56260adac908b171cf37528c3d3bbb749297ae4ea`;
+  - the jump-generation baseline is `runs/exp-bc-sweep/heldout-demos` (sha `dcf49f2f…`).
+- **Gate** (`conflicts.js`, weighted, split `all`; outputs in `runs/exp-bc-duck/obs/`):
+
+| Demos | Grid | Mask | Irred. none | Irred. jump | Irred. duck | Pair n/d | Pair j/d |
+|---|---|---|---|---|---|---|---|
+| duck held-out 41–60 | 1e-3 | — | 0.0033 % | 0.0304 % | **0.0424 %** | **0.0801 %** | 0 (no jump weight with a mid pterodactyl nearest) |
+| duck held-out 41–60 | 1e-3 | height + box y | 0.0806 % | 1.7767 % | **5.5951 %** | 6.7122 % | 0 |
+| duck held-out 41–60 | 1e-2 | — | 0.0762 % | 0.3131 % | 1.4377 % | 1.9703 % | 0 |
+| jump held-out 41–60 (baseline) | 1e-3 | — | 0.0026 % | 0.0332 % | — | — | — |
+| jump held-out 41–60 (baseline) | 1e-3 | height + box y | 0.0922 % | 1.7231 % | — | — | — |
+| jump held-out 41–60 (baseline) | 1e-2 | — | 0.0769 % | 0.3075 % | — | — | — |
+| duck training 1–40 (descriptive) | 1e-3 | — | 0.0044 % | 0.0266 % | 0.0792 % | 0.1224 % | 0 |
+
+  - **The probe is valid:** the mask raises irreducible duck 132× (bar ≥ 10×).
+  - **Observability PASSES:** 0.0424 % ≤ 0.5 % and 0.0801 % ≤ 1 %. The j/d condition is vacuous. The airborne split has 0 conflicts.
+- **Fallback coverage (§5.1 step 5), fixed before the scans.** Step 1 had 0 fallbacks in 5,000 full games, so the expected number of untrained fallback states per 1,000-game tier-B scan is **0**. Demos: 0/7,244.
+- **Release timing (§5.1 step 6), descriptive.**
+  - Pair none/duck in the `ducking` split: 0.2905 % held-out (training 0.4804 %).
+  - `release.js` counts the rows with the ducking flag and label none: 2,823 held-out release rows. Slot 1 is present on only 6 of them, with x feature 0.786–0.830 (none below 0.03 or 0.10). The slot-0 x median is −0.120.
+  - So the release is cued by the pterodactyl leaving the standing box, and the 18 px threshold of the wider box **never binds in the demos**. This is a coverage note for class (iv), consistent with 0 fallbacks.
+
+### §5.2–5.3 clones (15 epochs, batch 1,024, lr 2e-3, default class weights, `--snapshots --wasm`)
+**Tier B** ran on seeds 30,003,000–30,003,999 to 1M with `scan.js --wasm`. Every scan file (the duck arms, the new twin and the sweep twins) passed the contiguity check: 1,000 contiguous seed rows, header base 30,003,000, footer present.
+
+**Clopper–Pearson bounds:** 0/1,000 gives a one-sided 95 % upper bound of 0.299 %; 0/2,000 pooled, one-sided 0.150 %; 25/25, one-sided 11.3 %. Intervals for non-zero counts are two-sided 95 %.
+
+**McNemar:** exact and one-sided (H1: the duck clone fails more), per seed against its twin and pooled per arm (2,000 pairs).
+
+| Arm | Final train loss | Tier A | Tier B failures | Held-out recallDuck (ep 15) | duckPredShare [none, jump, duck] | Train recall.duck | Duck share in play (10 games; teacher 1.000) | DOWN frames / teacher's | Min margin | Twin min margin | McNemar b / c, p |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| A d2w32-s1 | 0.0044 | 25/25 | **0/1,000** | 0.99995 | [4.7e-5, 0, 0.99995] | 1.0000 | **1.000** (82,614/82,614; 10/10 games) | 1.026 | 2.04e-3 | 1.20e-4 (sweep d2-w32-s1) | 0 / 0, 1 |
+| A d2w32-s2 | 0.0133 | **20/25** (min 516) | **204/1,000** (20.4 %, CP 17.9–23.0 %) | 1.0000 | [0, 0, 1] | 1.0000 | 1.000 (65,949/65,949; 8 full games; 2 crashed, at 572 and 502) | — | 4.82e-4 | 2.79e-5 (new twin) | 204 / 0, 3.9e-62 |
+| B d2w8-s1 | 0.0141 | 25/25 | **0/1,000** | 1.0000 | [0, 0, 1] | 1.0000 | **1.000** (10/10) | 1.128 | 5.61e-4 | 1.64e-4 | 0 / 0, 1 |
+| B d2w8-s2 | 0.0141 | 25/25 | **0/1,000** | 1.0000 | [0, 0, 1] | 1.0000 | **1.000** (10/10) | 1.127 | 3.58e-4 | 9.92e-5 | 0 / 0, 1 |
+| C d1w8-s1 | 0.0190 | 25/25 | **0/1,000** | 0.99981 | [1.9e-4, 0, 0.99981] | 1.0000 | **1.000** (10/10) | 1.151 | 1.82e-4 | 2.47e-5 | 0 / 0, 1 |
+| C d1w8-s2 | 0.0183 | 25/25 | **0/1,000** | 1.0000 | [0, 0, 1] | 1.0000 | **1.000** (10/10) | 1.146 | **7.57e-5** | 5.48e-4 | 0 / 0, 1 |
+| twin jump-d2w32-s2 | 0.0057 | 25/25 | **0/1,000** | 0 | [0, 1, 0] | — | 0 (82,614 jumped) | 0 | **2.79e-5** | — | — |
+
+- **Pooled per arm:**
+  - **A: b = 204, c = 0, p = 3.9e-62** (204/2,000, CP 8.9–11.6 %);
+  - B: b = 0, c = 0, p = 1 (0/2,000, ≤ 0.150 %);
+  - C: b = 0, c = 0, p = 1 (0/2,000, ≤ 0.150 %).
+- **Teacher reference** (`duckshare.js --teacher duck`, 10 games): 82,614/82,614 ducked, 431,019 DOWN frames, counter control passes. No arm ever pressed DOWN while airborne (downAir 0 everywhere), and no arm had a duckable obstacle classed mixed or crashed.
+- **Tier-B harness control:** the new jump twin `jump-d2w32-s2` scored 0/1,000 and 25/25, so A-s2's failures are not a harness artefact.
+
+**A-s2 failures (§5.3 step 6), from `diag.js --teacher duck` and a hand review** (`runs/exp-bc-duck/diag/d2w32-s2.json`, and `…-duckrun.json` from `duckrun.js`):
+- All 204 get `classHint` **(ii) duck-through-takeoff**.
+  - In every one, the last effective disagreements are model duck against teacher jump, and the dino dies while ducking (`last30` is `duckx30` in all 204).
+  - fallbackFrames 0 and downAir 0. The shadow solver passes all 204 seeds.
+  - Killers: cacti in 201 (small×2 44, small×3 37, small 35, large×2 33, large 30, large×3 22), a low pterodactyl in 3. Scores 479–767, median 562.
+- **Hand review:** in **every** case the final DOWN run began with a **mid pterodactyl nearest** and passed under it, then **never released**. DOWN stayed held for 57–134 frames (median 63) into the next obstacle; the teacher's duck lasts about 6 frames.
+  - So these are a duck-specific stuck-duck (late-release) mode. The fixed hint order classes it (ii), and its content also matches (iv).
+  - All 204 are duck-specific. None is jump-type or (v).
+
+### §7 readings applied
+- **Gates and controls:** all pass. Observability **passes** and the probe is valid, so training went ahead.
+- **Arm A (d2w32): reliability bar not met** (row "≥ 1 tier-B failure, or tier A < 25/25").
+  - Pooled b = 204 ≥ 5: **significantly worse than the jump twin** (one-sided p = 3.9e-62).
+  - All the failures are duck-specific, so **the third class costs reliability (H-unreliable) at d2w32**. Training seed 2 drives it.
+  - **No ship candidate from arm A.** Seed 1 alone is reliable and ducks, but the arm reading needs both seeds.
+  - "Margins" row: neither seed is below 0.5× its twin or below 5.8e-5.
+- **Arm B (d2w8): reliable and ducks, so H-learn holds** for d2w8 (scope §10). Its margins are 3.4× and 3.6× the twins'. No flag.
+- **Arm C (d1w8): reliable and ducks, so H-learn holds** for d1w8.
+  - The arm-C CSS row (margin < 5.8e-5) does **not** apply: 1.82e-4 and 7.57e-5.
+  - **The "Margins" row applies to d1w8-s2:** 7.57e-5 is below 0.5× its twin's 5.48e-4, so **the third class thins margins** at that shape and seed. Flag it for CSS fidelity. It is not a reliability failure.
+- **Fallback row ((v)):** does not apply. 0 fallback states were expected and 0 observed.
+- **"Held-out duck recall < 99 %" row:** does not apply (all ≥ 99.98 %).
+- **"Arms disagree": the result is shape-dependent.**
+  - The smallest arm that is reliable and ducks is **C (d1w8, 44-8-3)**. It is the potential ship candidate, with the d1w8-s2 margin flag. B (d2w8) is next.
+  - Shipping still needs §10: the user's approval, certification from offset 325, `export-css` plus the browser check, and a decision-log entry.
+
+### Surprises (not readings)
+- **A-s2 is the shipped shape, but its training converged to a 3× higher loss:** 0.0133, against 0.0044 for s1 and 0.0057 for its jump twin. Yet held-out duck recall was 1.0000 and agreement 99.60 %.
+  - So per-frame agreement did not reveal the stuck-duck mode, as the T2 row anticipated for the jump generation.
+  - The release decision has very few rows (2,823 held-out release frames), which may make it fragile across training seeds.
+- **Every duck clone holds DOWN 3–15 % longer than the teacher** (DOWN-frame ratio 1.026–1.151). This does no harm in B and C.
+- **The new jump twin `jump-d2w32-s2` has a min margin of 2.79e-5**, itself below the 5.8e-5 CSS flag.
+
+### Committed files
+- `runs/exp-*/` is gitignored, so these were added with `git add -f`:
+  - `runs/exp-bc-duck/{demos,heldout-demos}/demos.json`;
+  - `best.json` and `bc-metrics.jsonl` for the six duck arms and `jump-d2w32-s2`.
+- There is no `evals.jsonl`. `eval` was not run, because it spends held-out offsets and certification is out of scope.
+- Scans, diag, obs, duckshare, margins, agreement output and logs stay local in `runs/exp-bc-duck/`.
