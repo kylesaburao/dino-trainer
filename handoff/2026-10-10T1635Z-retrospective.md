@@ -113,3 +113,71 @@ Operating rules for the orchestrator:
   - a static check of whether the current policies ever duck under low pterodactyls.
 - **Plateau:** stop tuning tie mechanics. Use seed racing (K = 2–3, about 1,500 generations) as the default exploration lever, and treat escape as time-to-event.
 - **Run B′ and the layer sweep** must each pre-register their decision, positive control, horizon and seed count (§4) before launch. Run every experiment with `--wasm` once it is merged.
+
+## 6. Scientific method and pruning the search space without false negatives
+
+The search space (algorithm knobs × curriculum × features × shapes × seeds) is too large to explore by trial runs. The goal is to design tests whose results **rule out whole regions** for now, and to record each ruling-out narrowly enough that a test that was wrong, under-powered or mis-scoped doesn't permanently close a valuable region. Today's errors (§2.1, §2.2) were exactly cases where a missing or invalid test let effort go into a region that a cheap test would have pruned, or would have shown had to stay open.
+
+### 6.1 Working method: hypothesis-driven, strong inference
+- **State competing hypotheses explicitly**, with predictions that differ. Example: the 500–700-point wall comes from one of
+  - H1: missing information in the features;
+  - H2: a search difficulty (the policy could represent it but ES hasn't found it);
+  - H3: an untrained skill (it never ducks), because the training distribution rarely shows low pterodactyls.
+
+  This is Platt's "strong inference" (Science, 1964): devise the *crucial experiment* whose outcome excludes one or more hypotheses, run it, and recurse.
+- **Make every hypothesis falsifiable** by writing down beforehand what result would refute it. A hypothesis that survives every possible outcome is not being tested.
+- **Each run must be able to discriminate.** Before a run, list the hypotheses still alive and the result each predicts. If every live hypothesis predicts the same result, the run is uninformative; redesign it or skip it.
+
+### 6.2 Pruning tools (cheapest first)
+1. **Bounds and back-of-envelope checks** (Fermi or Amdahl reasoning). These rule out directions with no runs at all.
+   - Today: GPU and Rust were pruned by episode seriality and the MLP's share of runtime.
+   - `actionRepeat` was bounded at 1.67×.
+   - Cutting training episodes early can save at most about 8%.
+2. **Static probes on frozen artefacts.** Measure a response curve (σ → tie fraction, features → separability) on saved θ, with no training.
+   - Seconds to minutes.
+   - It would have pruned the monotone-σ controller before any code was written.
+3. **Oracle and upper-bound tests.** Give a component privileged help and see whether the *ceiling* moves.
+   - Example: an oracle feature computed from forbidden state.
+   - If even the oracle doesn't help, the direction is pruned conditionally.
+   - If it does help, measure how much of that gain the allowed features recover.
+4. **Necessary-condition tests.** If an approach can only work when Y holds, test Y cheaply first.
+   - Example: behaviour-clone initialisation only pays off if a clone on these features survives past 700 points in rollouts.
+5. **Ablation and sufficiency.** Remove one component, or isolate it, to find which knobs matter.
+   - **Factorial or fractional-factorial screening** (Plackett–Burman) tests many knobs at once across few runs, at the cost of confounding higher-order interactions; say which interactions are assumed negligible.
+6. **Dose–response sweeps instead of single points.** A single σ or decay setting can sit at a bad spot on a U-shaped curve and falsely null the knob.
+7. **Sequential designs.** Successive halving or racing, using **time-to-event** outcomes (plateau escape, passing the wall) and early stopping of arms that are clearly losing, with a stated stopping rule.
+8. **Paired designs.** Use the same seeds across arms (common random numbers) to cut variance, so fewer runs reach the same power.
+
+### 6.3 Safeguards against false nulls
+
+A pruned branch is a claim and can be wrong. Before declaring "doesn't work":
+
+1. **Test validity (positive control inside the pruning test).** Could this test have shown success if the idea worked? The 400-generation replay couldn't: the known-good arm needs about 780 generations. So its null meant nothing.
+2. **Power.** What effect size could the test detect? Report the null as "no effect larger than X detected", with a confidence interval, never as "no effect".
+   - Use equivalence tests (TOST) when the claim really is "no meaningful difference".
+3. **Scope.** Record the exact conditions:
+   - shape, seeds, horizon, σ, decay and game version;
+   - the code commit;
+   - the outcome metric.
+
+   The null holds **only within that scope**. Extrapolating it to other shapes or phases needs its own argument.
+4. **Concept vs implementation.** Distinguish "this specific design or parametrisation failed" from "the idea fails". The tie-rate integral controller failed; the general idea of adjusting σ on ties did not (CMA-ES's one-shot flat-fitness bump with a reset is untested).
+5. **Chaos and n.** One run per arm can't null an effect smaller than about 5–7× in time, given between-seed sd(ln T) of about 0.4–0.7.
+6. **Reopen triggers.** Each pruned branch records what new evidence would reopen it. Revisit pruned branches whenever an upstream fact changes, such as new features, a new curriculum, another shape, or `--wasm` making longer horizons affordable.
+7. **Don't let a proxy veto the real objective.** If the pruning test measures a proxy (escape gen, BC accuracy, separability), check that the proxy plausibly predicts the real outcome: a fresh held-out pass rate to 1M. Example: BC accuracy is not the test; rollout survival is. A poor clone doesn't null feature changes, because the solver uses hidden information (the imitation gap).
+
+### 6.4 Pruned-branch register (status at 16:35Z; keep this table updated in each handoff)
+
+| Branch | Verdict | Scope of evidence | Power / validity caveat | Reopen if… |
+|---|---|---|---|---|
+| Tie-rate σ controller, integral form (`ln σ += K(q − q*)`) | **pruned (this design)** | q* 0.2/0.35, σmax 0.3/1.0, 32,32 and 32,32,32, seeds 1–3, 400 generations, mid + decoupled 0.01 | Mechanism understood (q(σ) is U-shaped); not a power issue | a σ rule that targets only *unsaturated, above-first-obstacle* ties, or one with a reset (CMA flat-fitness style) |
+| `--stall-rule` (skip mode) | **pruned at wd 0.01** | 32,32, seeds 1–3, 900 generations | Escaped once at wd 0.1 (n = 1, archived §6.1) | a non-skipping inflate mode; a different decay |
+| Tie hygiene (mid + decoupled) as a *plateau-escape* lever | **no effect detected** | 32,32, 3 seeds per arm, 900 generations | Weak (n = 3, censored); only large effects could be seen | any arm whose escape rate clearly beats the 25%-by-900 baseline over ≥ 10 seeds |
+| Decoupled wd 0.1 | **disfavoured** (slows the climb 3–6×) | Run A vs hygiene s3 and shipped, n = 1 each | Different seeds | paired runs show no difference |
+| GPU / Rust port | **pruned by bounds** | Episodes up to 1.9M sequential frames; MLP is 80% of the cost | Bound argument, not measured | much shorter episodes (≤ 1e5 frames) or a much larger population |
+| `actionRepeat` 2 | **pruned** | ≤ 1.67× bound; it breaks the solver's 1-frame guarantee | — | v2 minimum window frames change |
+| Early termination of training candidates | **pruned** | ≤ 1–8% saving | — | — |
+| Feature change in `policy.js` | **OPEN, under test** | Feature-sufficiency probes in flight | A BC rollout failure is not a null (imitation gap) | — |
+| Behaviour-clone-from-solver initialisation | **OPEN** | Literature only (`research/demo-bootstrapped-es.md`) | Necessary condition: a clone survives past 700 in rollouts | — |
+| Curriculum targeting the 400–800-point zone | **OPEN** | Gated curriculum merged, untrained | — | — |
+| Seed racing (K = 2–3, ~1,500 generations) | **adopted as the default plateau lever** | 12 seeds, hygiene arm | Kaplan–Meier, CIs wide | escape-rate data on other shapes |
