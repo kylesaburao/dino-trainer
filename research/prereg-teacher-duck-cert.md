@@ -66,3 +66,38 @@ For each duck arm that passes 150/150, run the decision log's browser check on t
 - Scope: rules v2, target 1M, full games from 0, `--wasm` (bit-identical to JS), the two d2w8 training seeds, held-out offsets 325–474.
 - A null (150/150 everywhere) is conditional on 150 seeds: it excludes failure rates above about 2 % per arm, not smaller ones. It reopens with more fresh offsets (from 475).
 - Commits: the three `evals.jsonl` (the two under `runs/exp-*` with `git add -f`) and this file.
+
+## Results (2026-10-10, mac subagent, branch `wt/cert-duck-d2w8`)
+**Provenance.** Registered in `1a1baf2` (on main `8e98dfa`); evals committed in `d8665f0`. No change to `core.js`, `policy.js`, `test/solver.js` or `trainer/` on this branch. Core hash `0f329d4e3493…` (current `coreHash()` and all three `best.json`). Rules v2, target 1,000,000, `--wasm`, held-out offsets 325–474 (seeds 3,182,883,642 … 3,381,787,671). The three evals ran one at a time, in the registered order, with only the two dashboards otherwise running. Raw output is local (scratchpad); the records are the last line of each `evals.jsonl`.
+
+### Certification (offsets 325–474, 150 seeds, paired)
+| Arm | Run dir | Passed | 95 % CP pass rate (two-sided) | One-sided 95 % upper bound on failure | Failures | Min score | Wall |
+|---|---|---|---|---|---|---|---|
+| duck s1 (44-8-8-3) | `runs/exp-bc-duck/d2w8-s1` | **150/150** | 0.9757–1.000 | 1.98 % | none | 1,000,000 | 12.4 s |
+| duck s2 (44-8-8-3) | `runs/exp-bc-duck/d2w8-s2` | **150/150** | 0.9757–1.000 | 1.98 % | none | 1,000,000 | 13.4 s |
+| jump, shipped (44-32-32-3) | `runs/bc-v2-h32x32` | **150/150** | 0.9757–1.000 | 1.98 % | none | 1,000,000 | 26.0 s |
+
+**McNemar (exact, one-sided, H1 "the duck clone fails more"):**
+| Pair | b (only duck fails) | c (only jump fails) | Concordant failures | p |
+|---|---|---|---|---|
+| duck s1 vs jump | 0 | 0 | 0 | 1 |
+| duck s2 vs jump | 0 | 0 | 0 | 1 |
+
+The positive control (the jump arm) passed 150/150, as on 175–324. The shipped clone's held-out record is now 325/325 on offsets 0–24, 175–324 and 325–474.
+
+### CSS gate (`test/browser-check.js`, each duck model exported into this worktree only)
+`trainer/store.js` `ROOT` was re-checked before each export: `/Users/kyle/Desktop/dino-game/.claude/worktrees/agent-aceb6b8ae5aa15fef`. After each run, `git checkout -- model.js model.css` and `git status` was clean; `git diff main -- model.js model.css` is empty.
+
+| Arm | Browser checks | CSS frames compared | Disagreements | Score reached | `model.css` id |
+|---|---|---|---|---|---|
+| duck s1 | **38/38** | 1,124 | **0** | 190 | `na-28a0ff7c2bb9f637` |
+| duck s2 | **38/38** | 1,076 | **0** | 182 | `na-f5a2122fad734b6c` |
+
+No non-CSS check failed with a duck model (sections 1–4 all pass). As registered (§4), the comparisons stopped at scores 190 and 182, below the speed at which pterodactyls spawn, so **no duck-class (class 2) decision was compared**. The indirect evidence for ducks remains step 2's margins (5.61e-4 and 3.58e-4, above the 5.8e-5 flag).
+
+### §5 readings applied
+- **Row 1 applies: every arm 150/150, CSS 0 disagreements on both duck arms.** Reading: **equal reliability** at the resolution of 150 seeds (each arm's failure rate ≤ 1.98 %, one-sided 95 %); McNemar b = c = 0, p = 1 for both duck arms, **no evidence of a difference in either direction**. This is a tie, not a win: the duck clones are not shown to be more reliable than the shipped jump clone. **The difference is a behaviour change only: the clone ducks** (step 2: duck share 1.000 on both seeds).
+- **"CSS passes" row:** no CSS/JS divergence over the opening frames; class 2 not exercised by this check. This is a scope limit for any ship proposal.
+- No failure row applies (no duck failure, no jump failure, no concordant failure, no CSS failure, no non-CSS failure).
+- **Next: the user decides whether to ship a d2w8 duck clone.** If yes, a separate step: export, `export-css`, browser check, update `test/net.test.js`'s pinned model, and an AGENTS.md decision-log entry. A CSS comparison that reaches pterodactyls would close the class-2 gap and is worth registering before or with that step.
+- **Held-out offsets 325–474 are now spent. The next fresh offset is 475.**
