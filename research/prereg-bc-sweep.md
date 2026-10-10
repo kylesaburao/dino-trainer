@@ -42,11 +42,13 @@ Every primary metric is a count or a deterministic function of (configuration, t
 **Held-out demonstration agreement:**
 - The data comes from `bc-gen` over **seeds 41–60** with the default levels and spans: 20 seeds, disjoint from the training demos' 1–40.
 - The metric is the weighted fraction of frames where argmax(model) equals the solver's label. Also report recall for "none" and "jump" separately.
-- Compute it on each epoch's snapshot (§5).
+- Compute it on each epoch's snapshot (§5). A numpy evaluator is fine, but spot-check it against `policy.js` argmax on a few thousand rows per configuration.
 
 **Game reliability (fixed seed sets):**
 - **Tier A:** validation, 25 full v2 games to 1M (bc-train's own validation).
 - **Tier B:** the 1,000-game scan (§5).
+
+**Effort-to-criterion is measured within one 15-epoch cosine schedule, not as a minimal budget.** A snapshot at epoch 4 is a model mid-schedule, at high learning rate.
 
 **Thresholds T1 and T2:** T1 = 99.5% and T2 = 99.8% held-out agreement.
 - **Positive control for the thresholds:** the shipped configuration (d2 w32, seed 1) must reach both within its 15 epochs.
@@ -64,7 +66,7 @@ These are reported but never used to rank configurations or to make decisions.
   1. Check that `bc-train --backend python`, `export --out <scratch>` and `trainer/css-model.js` handle d = 1 and d = 64 at w = 8 on tiny demos, and that `css-nn.js` evaluates the CSS output to the same decisions as `policy.js`. Report anything shape-specific; don't patch the CSS code here.
   2. Measure the CSS recalc time per decision for d2 w32 against d2 w8 (`prereg-bc-shapes.md` §3.2 method).
   3. Time one epoch of d64 w64 to size the parallelism.
-- **Snapshots:** add an opt-in `--snapshots` flag to `bc-train --backend python`. It writes each epoch's params to `<dir>/snapshots/epoch-NN.json`.
+- **Snapshots** (a trainer change: implemented, reviewed and merged on its own branch **before** the sweep runs from main): add an opt-in `--snapshots` flag to `bc-train --backend python`. It writes each epoch's params to `<dir>/snapshots/epoch-NN.json`.
   - Off by default.
   - The Node backend rejects it with a clear error.
   - It must not change training: the d2 w32 seed-1 params with `--snapshots` must equal `runs/exp-bc-e2e/py-s1`'s params exactly. **That is the harness positive control.**
@@ -76,14 +78,18 @@ These are reported but never used to rank configurations or to make decisions.
   - `OMP_NUM_THREADS=2 VECLIB_MAXIMUM_THREADS=2` for every job, so results don't depend on the thread count;
   - run dirs `runs/exp-bc-sweep/d<d>-w<w>-s<seed>`.
 
+  - Pass `--wasm` to every `bc-train`, so its validation uses the wasm path.
+  - Run small configurations in parallel with `--workers 4` for their validation. Train the heavy ones (w64 at d ≥ 8, w32 at d ≥ 16, w16 at d64) serially and last, with the full pool.
+
   Run several jobs in parallel, at most `floor(cores / 2)` at a time, because the measurements are time-independent. Run each job's tier-A validation with few workers, or after training. CPU-seconds will be inflated under load, which is why they are secondary.
 - **Tier B (scan):** 1,000 full v2 games to 1M on **seeds 30,003,000–30,003,999** (`research/scripts/prereg-bc-robustness/scan.js --wasm`). Scan every configuration that:
   - passes tier A at 25/25;
   - **and** has ≤ 2× the shipped model's MACs (≤ 5,056).
 
-  A full game costs about MACs × 1.94M, so bigger nets are scanned only on request; each would take hours. Also train seed 2 for every configuration that enters tier B, and scan it too.
+  A full game costs about MACs × 1.94M, so bigger nets are scanned only on request; each would take hours. Train and scan seed 2 **only for the S2 candidates**: configurations in tier B with fewer MACs than d2 w32 (< 2,528), i.e. w8 at all depths, w16 at d ≤ 4 and w32 at d1. Only the ship decision needs the replicate. For the other configurations, the tier-B figure is one seed and is labelled that way.
   - **Tier-B positive control:** the shipped configuration's seed-1 model from this sweep (equal to `py-s1`) scores 0/1,000 here.
-- **Report** (append to this file as "Results"):
+- **CSS sizes:** generate `model.css` for every configuration to record its bytes. d64 w64 is about 10 MB. Load it in a browser only for the Step 0 shapes (d1 and d64 at w8, plus d2 w32 and d2 w8 for timing).
+- **Report:** a standalone `research/bc-sweep-report.md`. It opens with the time-independence statement, and this file's "Results" section points to it. Contents:
   - one table with every metric in §4 per configuration;
   - plots or tables of agreement against FLOPs per configuration (learning curves on a FLOP axis);
   - the Pareto frontier of reliability against MACs per decision, and of reliability against training FLOPs to T2.
@@ -96,6 +102,7 @@ These are reported but never used to rank configurations or to make decisions.
 | A configuration fails tier A, or doesn't reach T1 within 15 epochs | **Untrainable at the shipped hyperparameters** (scoped: plain tanh MLP, this init, 15 epochs, lr 2e-3, seed 1). Not "too small" or "too deep" in general. Reopen with a depth- or width-scaled schedule as a separately registered step |
 | Tier A passes at d ≥ 16 but agreement or tier B degrades with depth | H-depth supported at that depth, at these hyperparameters |
 | **S2:** some configurations with fewer MACs than d2 w32 have 0/1,000 on both seeds | **The smallest-MACs one is the ship candidate.** Break ties by the larger min top-2 logit margin over 600k frames of its own play. Then apply `prereg-bc-shapes.md`: its gate (a speed gain, or ≤ half the `model.css` bytes); its certification on held-out offsets 325–474, paired with the shipped clone (the next fresh offset is then 475); its CSS agreement check on a scratch page; and its readings |
+| A configuration passes tier B but never reaches T2 | Demonstration agreement is not the reliability bottleneck at that size. Report its effort-to-T1 only. This is not a failure |
 | No smaller configuration passes tier B on both seeds | The shipped shape stays. Record the smallest passing shapes and their failures |
 
 **Power and scope.** 0/1,000 bounds a model's per-game failure rate below 0.3% (one-sided 95%), and 0/2,000 over two seeds below 0.15%. Tier A (25 games) bounds it only below about 11%. Large nets that pass only tier A are reported as "tier A only".
@@ -105,4 +112,4 @@ Scope: v2, the 44 features, the demos from seeds 1–40 with default `bc-gen` se
 ## 7. Cost estimate (to be replaced by Step 0's timing)
 - **Training:** the total training FLOPs over the grid are dominated by w64 at d32–64. At 15 epochs × 2.1M rows, d64 w64 costs about 6 × 261k × 31.4M ≈ 4.9e13 FLOPs. That is about 10–20 min per job at numpy speed with 2 threads. The other 27 configurations together cost roughly as much again. With parallel jobs, about 30–60 min.
 - **Tier A:** games are about MACs × 1.94M multiply-adds. d64 w64 is about 5e11 per game, so 25 games on 18 workers take minutes to tens of minutes. The largest few dominate.
-- **Tier B:** about 3 min per 1,000 games for small nets. About 15 models (both seeds) gives about 45–60 min.
+- **Tier B:** if every capped configuration passes tier A, that is 16 configurations at seed 1 plus 11 at seed 2 plus the control, about 28 scans. At 3–5 min each (d64 w8 is about 1.7× the shipped cost per frame), **about 1.5–2.5 h**.
