@@ -61,7 +61,7 @@ node trainer/dashboard.js --runs /path/to/runs   # read runs from another direct
 - The dashboard is read-only. It only reads files in each run directory, so it is safe to leave running alongside a trainer.
 - It lists the runs under `runs/`, with live training curves, evaluations and game playback of a run's model.
 - To view a remote machine's dashboard, forward the port, for example `ssh -L 8080:127.0.0.1:8080 <host>`.
-- **Current coverage:** ES runs are shown (`metrics.jsonl`, `checkpoint.json`, `best.json`, `evals.jsonl`). Support for behaviour-cloning runs (`bc-metrics.jsonl` with per-class recall, demo manifests, and solver playback for both teachers) is in progress on branch `wt/dashboard-bc`. Every training run is meant to appear on the dashboard (AGENTS.md "Invariants to preserve").
+- It shows every run under `runs/`, including nested `runs/<group>/<run>` dirs: ES runs (`metrics.jsonl`, checkpoints, evals) and behaviour-cloning runs (`bc-metrics.jsonl` with recall per class, the teacher name, demo manifests, and snapshot epochs you can play). The playback menu also lists every solver in `test/solver.js` (`createSolver`, `createDuckSolver`), so you can watch either teacher play. Reload the page to pick up new solvers.
 
 ## Tests
 
