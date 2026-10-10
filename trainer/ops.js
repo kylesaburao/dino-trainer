@@ -58,8 +58,11 @@ function buildStatus(dir, extra = {}) {
     ['Game version', `${cfg.gameVersion || 'v1'}`],
     ['Target / metric', `${target ?? '–'}; median score over the 25 held-out seeds, episodes capped at the target`],
     ['Generation / cumulative wall time', `${gen} / ${mins(wall)}`],
-    ['Best training score', top ? `${top.fitMax.toFixed(1)} (best candidate's mean capped score, gen ${top.generation})` : '–'],
-    ['Best validation median', best ? `${best.validation.median} (min ${best.validation.min}, max ${best.validation.max}) at gen ${best.generation}` : '–'],
+    ['Best training score', !top ? '–' : cfg.window > 0
+      ? `${top.fitMax.toFixed(3)} (best candidate's mean window progress in [0, 1] over its curriculum episodes, gen ${top.generation})`
+      : `${top.fitMax.toFixed(1)} (best candidate's mean capped score, gen ${top.generation})`],
+    ['Best validation median', best ? `${best.validation.median} (min ${best.validation.min}, max ${best.validation.max}` +
+      `${best.validation.count !== undefined ? `, ${best.validation.count} reached target` : ''}) at gen ${best.generation}` : '–'],
     ['Held-out median / min / max', heldText],
     ['Throughput', last ? `${last.fps.toLocaleString('en-US')} frames/s (last generation), ${ck && ck.workers ? ck.workers : '?'} workers` : '–'],
     ['Model in model.js', (() => { try { const m = require(path.join(ROOT, 'model.js')); delete require.cache[path.join(ROOT, 'model.js')]; return `${m.source}, generation ${m.generation}`; } catch (e) { return '–'; } })()],

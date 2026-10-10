@@ -11,3 +11,5 @@ runs/smoke*/
 runs/h16/
 runs/exp-*/
 runs/v2-h16/
+# Local Python analysis environment.
+.venv/

@@ -51,12 +51,13 @@ function listRuns() {
 }
 
 // Metrics for charts; long runs are thinned to ~maxPoints, always keeping
-// validation rows and the latest row.
+// validation rows (unless validation is folded into every generation: valFrames > 0)
+// and the latest row.
 function runMetrics(name, maxPoints = 1500) {
   const rows = readLines(path.join(RUNS, name, 'metrics.jsonl')).map(l => JSON.parse(l));
   if (rows.length <= maxPoints) return rows;
   const step = Math.ceil(rows.length / maxPoints);
-  return rows.filter((r, i) => i % step === 0 || r.valMedian !== null || i === rows.length - 1);
+  return rows.filter((r, i) => i % step === 0 || (r.valMedian !== null && !r.valFrames) || i === rows.length - 1);
 }
 
 function logTail(name, n = 40) {

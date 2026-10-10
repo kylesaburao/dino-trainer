@@ -5,6 +5,7 @@
 //   node trainer/cli.js train  [--target 10000] [--resume [--force]] [--workers N]
 //                              [--time-budget MIN] [--generations N] [--dir runs/main] ...
 //   node trainer/cli.js eval   [--dir runs/main] [--which best|current] [--model model.js] [--target N]
+//                              [--seeds 25] [--seed-offset 0]
 //   node trainer/cli.js bench  [--seconds 3] [--workers N]
 //   node trainer/cli.js export [--dir runs/main] [--which best|current] [--out model.js]
 //                              (also writes model.css next to it: the same weights for index-css.html)
@@ -12,6 +13,56 @@
 //   node trainer/cli.js report [--dir runs/main]        regenerate PROGRESS.md's status block
 //   node trainer/cli.js finish [--dir runs/main] [--no-commit] [--skip-browser]
 //   node trainer/cli.js session [train options]          train, then finish (one detached command)
+//
+// Training-only curriculum (off by default; validation, held-out eval, the stop
+// check, eval and export always play full games from 0 to --target):
+//   --window POINTS       training episodes cover a window of this many points;
+//                         fitness = mean over episodes of (score - start) / span, capped at 1,
+//                         where span = the episode's cap - start (see --start-zero-cap)
+//   --start-zero-frac F   share of training episodes that start at 0 (default 0.5)
+//   --start-min POINTS    lowest late start level (default 2000)
+//   --start-dist log|points  late starts log-uniform in [start-min, target - window]
+//                         (default), or uniform in points on [start-min, target) with
+//                         the window clipped at target (span = target - start)
+//   --start-zero-cap P    start-0 episodes end at P points (default: --window as first set)
+//   --window-adapt        after each generation, window x1.5 if >60% of late windows
+//                         were passed, /1.5 if <30%; clamped to [5000, target]. Needs
+//                         --start-dist points. The current window is checkpointed.
+// These can be changed (or the curriculum turned on/off) on --resume.
+//
+// Selection and stopping:
+//   --select median|count   best = highest validation median (default), or highest
+//                         (seeds reaching target, mean ln(1+score)); at full count a tie
+//                         also replaces best (prefer the newest all-pass θ)
+//   --stop-rule median|allpass[:N]  held-out check when the validation median reaches
+//                         target, stop on held-out median >= target (default); or when
+//                         every validation seed passes, stop when all N (default 25)
+//                         held-out seeds pass, played in rounds of --workers seeds and
+//                         abandoned at the first round with a failure.
+//                         Either rule never re-tests a best already tested at this target.
+//   --val-seeds N         validation seeds (default 25; the first 25 are always the same)
+//   --eval-when-fit-max   also validate in any generation whose best candidate reached
+//                         target (with the curriculum: passed a window ending at target)
+//   --fold-validation     validate every generation inside the generation's worker batch;
+//                         this scores the pre-update θ, so it is labelled generation g-1
+// ES:
+//   --rank-ties index|mid   centred-rank tie breaking (default index; mid gives tied
+//                         antithetic pairs zero weight)
+//   --decay coupled|decoupled  coupled (default): --weight-decay is L2 inside Adam's
+//                         gradient; decoupled (AdamW): θ *= 1 - lr * weight-decay after
+//                         each step, so use a larger value (~0.1)
+//   --stall-rule          if >50% of antithetic pairs tie, skip the Adam step and widen
+//                         sigma x1.5 for the next generation (at most 4x); reset when not
+//   --sigma-scale none|fanin  per-parameter sigma: fanin scales layer l's weights by
+//                         sqrt(44 / fanIn_l) (biases keep sigma)
+//   --sigma-anneal        sigma *= 0.8 (floor --sigma-min, default 0.02, at most every 10
+//                         generations) while >25% of start-0 candidate episodes end below
+//                         200 points but the latest validation min is >= 200. The current
+//                         sigma is checkpointed; an explicit --sigma on resume overrides it.
+//   --pair-episodes       each antithetic pair plays its own episode seeds (and starts);
+//                         gradient weights are pair fitness differences / std (ARS V1)
+// Boolean options can be turned off on --resume with --no-<option>. Everything except
+// --hidden, --action-repeat and --game can change on --resume.
 //
 // train --auto-export re-exports model.js (and refreshes the report) on every
 // new best validation score; --log-every SEC throttles per-generation log lines.
@@ -23,8 +74,12 @@ const path = require('path');
 const { CFG, createRng, GAME_VERSIONS } = require('../core.js');
 const { FORMAT, OBS_DIM, numParams, initParams } = require('../policy.js');
 const { modelToCss } = require('./css-model.js');
-const { runEpisode, median, trainSeed, VALIDATION_SEEDS, EVAL_SEEDS } = require('./env.js');
-const { gaussian, esGradient, adamStep } = require('./es.js');
+const { runEpisode, median, windowFitness, validationSeeds, evalSeeds } = require('./env.js');
+const { gaussian, sigmaVector, esGradient, adamStep } = require('./es.js');
+const {
+  valSummary, isBetter, parseStopRule, wantHeldOut, sequentialAllPass, tiedPairs, stallUpdate, annealUpdate, adaptWindow,
+  splitFolded, clopperPearson, drawGeneration,
+} = require('./rules.js');
 const { createPool, defaultWorkers } = require('./pool.js');
 const { ROOT, coreHash, writeAtomic, writeJsonAtomic, readJson, acquireLock } = require('./store.js');
 
@@ -45,7 +100,29 @@ const DEFAULTS = {
   generations: Infinity,  // stop once this many generations are done in total
   seed: 1,                // trainer RNG seed (init, noise seeds, training seeds)
   gameVersion: 'v2',      // game rules trained and evaluated on (core.js GAME_VERSIONS)
+  window: 0,              // curriculum: training episode window in points (0 = off: full games)
+  startZeroFrac: 0.5,     // curriculum: share of training episodes starting at 0
+  startMin: 2000,         // curriculum: lowest late start level (natural speed has settled by here)
+  startDist: 'log',       // curriculum: late start distribution (log | points)
+  startZeroCap: null,     // curriculum: end of start-0 episodes (null: the window when first set)
+  windowAdapt: false,     // curriculum: adapt the window to the late-window pass rate
+  select: 'median',       // best-model selection (median | count)
+  stopRule: 'median',     // held-out stop rule (median | allpass[:N])
+  valSeeds: 25,           // validation seeds
+  evalWhenFitMax: false,  // also validate when a candidate reached the target
+  foldValidation: false,  // validate every generation inside the training batch
+  rankTies: 'index',      // centred-rank ties (index | mid)
+  decay: 'coupled',       // weight decay (coupled L2 | decoupled AdamW)
+  stallRule: false,       // skip the step and widen sigma when most pairs tie
+  sigmaScale: 'none',     // per-parameter sigma (none | fanin)
+  sigmaAnneal: false,     // shrink sigma while perturbed candidates crash in the opening
+  sigmaMin: 0.02,         // sigma-anneal floor
+  pairEpisodes: false,    // per-pair episode seeds with pair-difference weights
 };
+// Keys added after the first checkpoints: backfilled from DEFAULTS when resuming
+// checkpoints that predate them (their defaults reproduce the old behaviour).
+const BACKFILL = ['window', 'startZeroFrac', 'startMin', 'startDist', 'startZeroCap', 'windowAdapt', 'select', 'stopRule',
+  'valSeeds', 'evalWhenFitMax', 'foldValidation', 'rankTies', 'decay', 'stallRule', 'sigmaScale', 'sigmaAnneal', 'sigmaMin', 'pairEpisodes'];
 // Settings that change the parameter layout or the policy's behaviour cannot change on resume.
 const STRUCTURAL = ['hidden', 'actionRepeat', 'gameVersion'];
 
@@ -55,6 +132,16 @@ const FLAG_TO_KEY = {
   '--sigma': ['sigma', Number], '--lr': ['lr', Number], '--weight-decay': ['weightDecay', Number],
   '--checkpoint-every': ['checkpointEvery', Number], '--eval-every': ['evalEvery', Number],
   '--generations': ['generations', Number], '--seed': ['seed', Number], '--game': ['gameVersion', String],
+  '--window': ['window', Number], '--start-zero-frac': ['startZeroFrac', Number], '--start-min': ['startMin', Number],
+  '--start-dist': ['startDist', String], '--start-zero-cap': ['startZeroCap', Number],
+  '--select': ['select', String], '--stop-rule': ['stopRule', String], '--val-seeds': ['valSeeds', Number],
+  '--rank-ties': ['rankTies', String], '--decay': ['decay', String], '--sigma-scale': ['sigmaScale', String],
+  '--sigma-min': ['sigmaMin', Number],
+};
+// Boolean config options: --x sets true, --no-x sets false.
+const BOOL_TO_KEY = {
+  '--window-adapt': 'windowAdapt', '--eval-when-fit-max': 'evalWhenFitMax', '--fold-validation': 'foldValidation',
+  '--stall-rule': 'stallRule', '--sigma-anneal': 'sigmaAnneal', '--pair-episodes': 'pairEpisodes',
 };
 
 function parseArgs(argv) {
@@ -69,15 +156,51 @@ function parseArgs(argv) {
     if (FLAG_TO_KEY[a]) {
       const [key, parse] = FLAG_TO_KEY[a];
       out.config[key] = parse(takesValue());
+    } else if (BOOL_TO_KEY[a]) {
+      out.config[BOOL_TO_KEY[a]] = true;
+    } else if (a.startsWith('--no-') && BOOL_TO_KEY['--' + a.slice(5)]) {
+      out.config[BOOL_TO_KEY['--' + a.slice(5)]] = false;
     } else if (['--resume', '--force', '--overwrite', '--auto-export', '--no-commit', '--skip-browser'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = true;
-    } else if (['--workers', '--time-budget', '--dir', '--which', '--model', '--out', '--seconds', '--log-every'].includes(a)) {
+    } else if (['--workers', '--time-budget', '--dir', '--which', '--model', '--out', '--seconds', '--log-every', '--seeds', '--seed-offset'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = takesValue();
     } else {
       throw new Error(`unknown argument ${a}`);
     }
   }
   return out;
+}
+
+const oneOf = (c, key, flag, values) => {
+  if (!values.includes(c[key])) throw new Error(`${flag} must be one of ${values.join(', ')}, got ${c[key]}`);
+};
+
+// The curriculum is off when window is 0/absent; when on, late starts must be at levels
+// where natural speed has settled, and (log starts) every window must fit below target.
+function checkCurriculum(c) {
+  if (!(c.window > 0)) return;
+  oneOf(c, 'startDist', '--start-dist', ['log', 'points']);
+  if (!(c.startZeroFrac >= 0 && c.startZeroFrac <= 1)) throw new Error('--start-zero-frac must be in [0, 1]');
+  if (!(c.startMin >= 2000)) throw new Error('--start-min must be >= 2000 (below that, natural speed is still ramping)');
+  if (c.startDist === 'log' && c.startZeroFrac < 1 && c.startMin + c.window > c.target) {
+    throw new Error(`--start-min + --window (${c.startMin + c.window}) must not exceed --target (${c.target})`);
+  }
+  if (c.startDist === 'points' && c.startZeroFrac < 1 && c.startMin >= c.target) throw new Error('--start-min must be below --target');
+  if (c.window > c.target) throw new Error('--window must not exceed --target');
+  if (!(c.startZeroCap > 0 && c.startZeroCap <= c.target)) throw new Error('--start-zero-cap must be in (0, target]');
+  if (c.windowAdapt && c.startDist !== 'points') throw new Error('--window-adapt needs --start-dist points');
+}
+
+function checkConfig(c) {
+  if (!GAME_VERSIONS.includes(c.gameVersion)) throw new Error(`--game must be one of ${GAME_VERSIONS.join(', ')}`);
+  oneOf(c, 'select', '--select', ['median', 'count']);
+  parseStopRule(c.stopRule);
+  oneOf(c, 'rankTies', '--rank-ties', ['index', 'mid']);
+  oneOf(c, 'decay', '--decay', ['coupled', 'decoupled']);
+  oneOf(c, 'sigmaScale', '--sigma-scale', ['none', 'fanin']);
+  if (!(Number.isInteger(c.valSeeds) && c.valSeeds > 0)) throw new Error('--val-seeds must be a positive integer');
+  if (c.sigmaAnneal && !(c.sigmaMin > 0)) throw new Error('--sigma-min must be > 0');
+  checkCurriculum(c);
 }
 
 const layersOf = (config) => [OBS_DIM, ...config.hidden, 3];
@@ -127,13 +250,18 @@ async function train({ config: cli, opts }) {
       const saved = k === 'gameVersion' ? ck.config[k] || 'v1' : ck.config[k];
       if (k in cli && JSON.stringify(cli[k]) !== JSON.stringify(saved)) throw new Error(`--${k} cannot change on resume`);
     }
-    config = { ...ck.config, gameVersion: ck.config.gameVersion || 'v1', ...cli };
+    const backfill = Object.fromEntries(BACKFILL.filter(k => !(k in ck.config)).map(k => [k, DEFAULTS[k]]));
+    config = { ...ck.config, gameVersion: ck.config.gameVersion || 'v1', ...backfill, ...cli };
     if (config.generations === null) config.generations = Infinity;
     st = {
       generation: ck.generation, theta: Float64Array.from(ck.theta),
       adam: { t: ck.adam.t, m: Float64Array.from(ck.adam.m), v: Float64Array.from(ck.adam.v) },
       rngState: ck.rngState, best: ck.best, cumulativeMs: ck.cumulativeMs, lastValidated: ck.lastValidated ?? -1,
       heldOut: ck.heldOut || null,
+      // Adaptive state (absent in older checkpoints): explicit flags override the saved values.
+      sigma: 'sigma' in cli || ck.sigma == null ? config.sigma : ck.sigma,
+      stallMult: ck.stallMult ?? 1, annealedAt: ck.annealedAt ?? null, lastValMin: ck.lastValMin ?? null,
+      window: 'window' in cli || ck.window == null ? config.window : ck.window,
     };
     log(`resuming ${ckptFile} at generation ${st.generation}`);
   } else {
@@ -149,9 +277,13 @@ async function train({ config: cli, opts }) {
       generation: 0, theta,
       adam: { t: 0, m: new Float64Array(theta.length), v: new Float64Array(theta.length) },
       rngState: rng.getState(), best: null, cumulativeMs: 0, lastValidated: -1, heldOut: null,
+      sigma: config.sigma, stallMult: 1, annealedAt: null, lastValMin: null, window: config.window,
     };
     for (const f of ['metrics.jsonl', 'metrics.csv']) fs.rmSync(path.join(dir, f), { force: true });
   }
+  // The start-0 episode cap is fixed when the curriculum is first set, so it stays put
+  // while --window-adapt moves the window.
+  if (config.window > 0 && config.startZeroCap == null) config.startZeroCap = config.window;
 
   const layers = layersOf(config);
   const workers = Number(opts.workers) || defaultWorkers();
@@ -160,7 +292,9 @@ async function train({ config: cli, opts }) {
   let lastCommitAt = startedAt;
   const committedMs = () => st.cumulativeMs + (Date.now() - lastCommitAt);
 
-  if (!GAME_VERSIONS.includes(config.gameVersion)) throw new Error(`--game must be one of ${GAME_VERSIONS.join(', ')}`);
+  checkConfig(config);
+  const stopRule = parseStopRule(config.stopRule);
+  const valSeedList = validationSeeds(config.valSeeds);
   log(`train: dir=${dir} game=${config.gameVersion} workers=${workers} params=${numParams(layers)} layers=${layers.join('-')} core=${hash.slice(0, 12)}`);
   log(`watch it live: node trainer/dashboard.js  ->  http://127.0.0.1:8080  (run from ${ROOT})`);
   log(`config ${JSON.stringify(config)}${budgetMs < Infinity ? ` time-budget=${opts.timeBudget}min` : ''}`);
@@ -174,6 +308,7 @@ async function train({ config: cli, opts }) {
       layers, theta: Array.from(st.theta),
       adam: { t: st.adam.t, m: Array.from(st.adam.m), v: Array.from(st.adam.v) },
       rngState: st.rngState, best: st.best, lastValidated: st.lastValidated, heldOut: st.heldOut,
+      sigma: st.sigma, stallMult: st.stallMult, annealedAt: st.annealedAt, lastValMin: st.lastValMin, window: st.window,
       cumulativeMs: committedMs(), workers,
     });
     if (reason !== 'periodic') log(`checkpoint saved: generation ${st.generation} (${reason}) -> ${ckptFile}`);
@@ -194,27 +329,59 @@ async function train({ config: cli, opts }) {
   const metricsJsonl = path.join(dir, 'metrics.jsonl');
   const metricsCsv = path.join(dir, 'metrics.csv');
   const CSV_COLS = ['generation', 'time', 'genMs', 'cumulativeMs', 'fitMean', 'fitMedian', 'fitMax', 'fitMin',
-    'valMedian', 'valMin', 'valMax', 'bestValMedian', 'frames', 'fps', 'sigma', 'lr', 'thetaNorm'];
+    'valMedian', 'valMin', 'valMax', 'bestValMedian', 'frames', 'fps', 'sigma', 'lr', 'thetaNorm',
+    'valCount', 'valMeanLog', 'valGeneration', 'valFrames', 'bestValCount', 'tiedPairs', 'stepSkipped', 'sigmaEff', 'window'];
   if (!fs.existsSync(metricsCsv)) fs.writeFileSync(metricsCsv, CSV_COLS.join(',') + '\n');
+  // A resumed run keeps its file's header (older runs have fewer columns).
+  const csvCols = fs.readFileSync(metricsCsv, 'utf8').split('\n', 1)[0].split(',');
+  const modelOf = (params) => ({ layers, params, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion });
 
-  async function validate() {
-    const model = { layers, params: st.theta, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion };
-    const scores = await scoreSeeds(pool, model, VALIDATION_SEEDS, config.target);
-    const s = summary(scores);
-    st.lastValidated = st.generation;
-    if (!st.best || s.median > st.best.valMedian) {
-      st.best = { generation: st.generation, valMedian: s.median, valMin: s.min, valMax: s.max, params: Array.from(st.theta) };
+  // Record a validation of params (labelled generation gen); replaces best if it is better.
+  function recordValidation(scores, params, gen) {
+    const s = valSummary(scores, config.target);
+    st.lastValidated = gen;
+    st.lastValMin = s.min;
+    if (isBetter(s, st.best, config.select, scores.length)) {
+      st.best = { generation: gen, valMedian: s.median, valMin: s.min, valMax: s.max, valCount: s.count, valMeanLog: s.meanLog, params: Array.from(params) };
       writeJsonAtomic(bestFile, {
         format: FORMAT, layers, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion, params: st.best.params,
-        generation: st.generation, validation: s, coreHash: hash, config,
+        generation: gen, validation: s, coreHash: hash, config,
       });
       if (opts.autoExport) {
         const out = exportModel({ dir, which: 'best' });
-        log(`new best (validation median ${s.median}, gen ${st.generation}): exported ${out.file}`);
+        log(`new best (validation median ${s.median}, count ${s.count}/${scores.length}, gen ${gen}): exported ${out.file}`);
         require('./ops.js').writeReport(dir);
       }
     }
-    return s;
+    return { ...s, generation: gen };
+  }
+  async function validate() {
+    const scores = await scoreSeeds(pool, modelOf(st.theta), valSeedList, config.target);
+    return recordValidation(scores, st.theta, st.generation);
+  }
+
+  // Held-out check of best. Returns a stop reason or null; records the attempt in st.heldOut.
+  async function heldOutCheck() {
+    const best = st.best;
+    const attempt = ((st.heldOut && st.heldOut.attempt) || 0) + 1;
+    const seeds = evalSeeds(stopRule.seeds);
+    const score = (chunk) => scoreSeeds(pool, modelOf(best.params), chunk, config.target);
+    if (stopRule.kind === 'median') {
+      const scores = await score(seeds);
+      const s = summary(scores);
+      const passed = scores.filter(x => x >= config.target).length;
+      st.heldOut = { generation: best.generation, target: config.target, ...s, seeds: seeds.length, attempt, played: scores.length, passed };
+      log(`held-out eval of best (gen ${best.generation}): median ${s.median} min ${s.min} max ${s.max}`);
+      return s.median >= config.target ? `held-out median ${s.median} >= target ${config.target}` : null;
+    }
+    const r = await sequentialAllPass(score, seeds, workers, config.target);
+    st.heldOut = {
+      generation: best.generation, target: config.target, ...summary(r.scores), seeds: seeds.length, attempt,
+      played: r.played, passed: r.passed, firstFailSeed: r.firstFailSeed,
+    };
+    log(`held-out attempt ${attempt} of best (gen ${best.generation}): ${r.passed}/${r.played} played seeds passed` +
+      (r.pass ? ` - all ${seeds.length} pass` : `, first failure seed ${r.firstFailSeed} (aborted after ${r.played} of ${seeds.length})`));
+    return r.pass ? `held-out ${r.passed}/${seeds.length} seeds reached target ${config.target}` : null;
   }
 
   const logEveryMs = (opts.logEvery !== undefined ? Number(opts.logEvery) : 15) * 1000;
@@ -227,55 +394,101 @@ async function train({ config: cli, opts }) {
     const t0 = Date.now();
     const rng = createRng(st.rngState);
     const half = config.popSize / 2;
-    const noiseSeeds = Array.from({ length: half }, () => Math.floor(rng() * 4294967296));
-    const episodeSeeds = Array.from({ length: config.episodes }, () => trainSeed(rng));
+    const cur = config.window > 0 ? { ...config, window: st.window } : null;
+    const { noiseSeeds, pairEp } = drawGeneration(rng, config, cur);
     const jobs = [];
-    for (const s of noiseSeeds) jobs.push({ noiseSeed: s, sign: 1, seeds: episodeSeeds }, { noiseSeed: s, sign: -1, seeds: episodeSeeds });
-    const setup = { theta: st.theta, layers, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion, sigma: config.sigma, target: config.target };
-    const results = await pool.run(setup, jobs);
+    for (let k = 0; k < half; k++) {
+      const { seeds, starts, caps } = pairEp[k];
+      for (const sign of [1, -1]) jobs.push(starts ? { noiseSeed: noiseSeeds[k], sign, seeds, starts, caps } : { noiseSeed: noiseSeeds[k], sign, seeds });
+    }
+    // Folded validation: the pre-update θ on the validation seeds, full games (sign 0 = θ itself).
+    if (config.foldValidation) for (const s of valSeedList) jobs.push({ noiseSeed: 0, sign: 0, seeds: [s] });
+    const sigmaEff = st.sigma * st.stallMult;
+    const sigma = sigmaVector(layers, sigmaEff, config.sigmaScale);
+    const setup = { theta: st.theta, layers, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion, sigma, target: config.target };
+    const { train: results, val: valResults } = splitFolded(await pool.run(setup, jobs), config.popSize);
 
     // Fitness: mean capped score, using fractional distance for a finer signal.
-    const fitness = results.map(r => r.distances.reduce((a, d) => a + Math.min(d * CFG.scoreCoef, config.target), 0) / r.distances.length);
+    // With the curriculum: mean progress through each episode's span, in [0, 1].
+    let latePassed = 0, lateTotal = 0, reachedTarget = false;
+    const zeroStartScores = [];
+    const fitness = results.map((r, i) => {
+      const { starts, caps } = pairEp[i >> 1];
+      if (!starts) {
+        zeroStartScores.push(...r.scores);
+        return r.distances.reduce((a, d) => a + Math.min(d * CFG.scoreCoef, config.target), 0) / r.distances.length;
+      }
+      return r.distances.reduce((a, d, j) => {
+        const f = windowFitness(d, starts[j], caps[j] - starts[j]);
+        if (starts[j] === 0) zeroStartScores.push(r.scores[j]);
+        else { lateTotal++; if (f === 1) latePassed++; }
+        if (f === 1 && caps[j] >= config.target) reachedTarget = true;
+        return a + f;
+      }, 0) / r.distances.length;
+    });
     const frames = results.reduce((a, r) => a + r.frames, 0);
-    const grad = esGradient(noiseSeeds, fitness, st.theta.length, config.sigma);
+    const valFrames = valResults.reduce((a, r) => a + r.frames, 0);
+    const tied = tiedPairs(fitness);
+    const stall = config.stallRule ? stallUpdate(st.stallMult, tied / half) : { skip: false, stallMult: st.stallMult };
     const theta = Float64Array.from(st.theta);
     const adam = { t: st.adam.t, m: Float64Array.from(st.adam.m), v: Float64Array.from(st.adam.v) };
-    adamStep(theta, grad, adam, config.lr, config.weightDecay);
+    if (!stall.skip) {
+      const grad = esGradient(noiseSeeds, fitness, st.theta.length, sigma,
+        { ties: config.rankTies, weights: config.pairEpisodes ? 'pairdiff' : 'ranks' });
+      adamStep(theta, grad, adam, config.lr, config.weightDecay, config.decay);
+    }
 
     // Commit (synchronous: a signal handler cannot observe a half-updated state).
     const genMs = Date.now() - t0;
+    const preTheta = st.theta;
     st.theta = theta;
     st.adam = adam;
     st.rngState = rng.getState();
     st.generation++;
+    st.stallMult = stall.stallMult;
+    if (cur && config.windowAdapt && lateTotal > 0) st.window = adaptWindow(st.window, latePassed / lateTotal, config.target);
+    let val = null;
+    if (config.foldValidation) val = recordValidation(valResults.map(r => r.scores[0]), preTheta, st.generation - 1);
     st.cumulativeMs += Date.now() - lastCommitAt;
     lastCommitAt = Date.now();
 
-    let val = null;
-    if (st.generation % config.evalEvery === 0) val = await validate();
-    if (val && val.median >= config.target) {
-      const heldOut = summary(await scoreSeeds(pool, { layers, params: st.best.params, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion }, EVAL_SEEDS, config.target));
-      st.heldOut = { generation: st.best.generation, target: config.target, ...heldOut };
-      log(`held-out eval of best (gen ${st.best.generation}): median ${heldOut.median} min ${heldOut.min} max ${heldOut.max}`);
-      if (heldOut.median >= config.target) stopReason = `held-out median ${heldOut.median} >= target ${config.target}`;
-    }
-
     const sorted = [...fitness].sort((a, b) => a - b);
+    const fitMax = sorted[sorted.length - 1];
+    if (!config.foldValidation) {
+      const fitHit = config.evalWhenFitMax && (cur ? reachedTarget : fitMax >= config.target);
+      if (st.generation % config.evalEvery === 0 || fitHit) val = await validate();
+    }
+    if (config.sigmaAnneal) {
+      const a = annealUpdate({ sigma: st.sigma, annealedAt: st.annealedAt },
+        { zeroStartScores, valMin: st.lastValMin, generation: st.generation, sigmaMin: config.sigmaMin });
+      if (a.sigma !== st.sigma) log(`sigma anneal: ${st.sigma} -> ${a.sigma} at gen ${st.generation}`);
+      st.sigma = a.sigma;
+      st.annealedAt = a.annealedAt;
+    }
+    if (wantHeldOut(stopRule, val, st.best, st.heldOut, config.target, valSeedList.length)) stopReason = await heldOutCheck();
+
     const row = {
       generation: st.generation, time: ts(), genMs, cumulativeMs: st.cumulativeMs,
       fitMean: fitness.reduce((a, b) => a + b, 0) / fitness.length, fitMedian: median(sorted),
-      fitMax: sorted[sorted.length - 1], fitMin: sorted[0],
+      fitMax, fitMin: sorted[0],
       valMedian: val ? val.median : null, valMin: val ? val.min : null, valMax: val ? val.max : null,
       bestValMedian: st.best ? st.best.valMedian : null,
-      frames, fps: Math.round(frames / (genMs / 1000)), sigma: config.sigma, lr: config.lr,
+      frames, fps: Math.round((frames + valFrames) / (genMs / 1000)), sigma: st.sigma, lr: config.lr,
       thetaNorm: Math.sqrt(st.theta.reduce((a, x) => a + x * x, 0)),
+      valCount: val ? val.count : null, valMeanLog: val ? val.meanLog : null, valGeneration: val ? val.generation : null,
+      valFrames, bestValCount: st.best ? st.best.valCount ?? null : null,
+      tiedPairs: tied, stepSkipped: stall.skip, sigmaEff, window: cur ? cur.window : null,
     };
     fs.appendFileSync(metricsJsonl, JSON.stringify(row) + '\n');
-    fs.appendFileSync(metricsCsv, CSV_COLS.map(k => row[k] ?? '').join(',') + '\n');
+    fs.appendFileSync(metricsCsv, csvCols.map(k => row[k] ?? '').join(',') + '\n');
     if (val || Date.now() - lastGenLog >= logEveryMs || stopReason) {
       lastGenLog = Date.now();
-      log(`gen ${row.generation}: fit mean ${fmt(row.fitMean)} max ${fmt(row.fitMax)}` +
-      (val ? ` | val median ${val.median} (best ${st.best.valMedian} @ gen ${st.best.generation})` : '') +
+      const fitFmt = cur ? (x) => x.toFixed(3) : fmt; // curriculum fitness is window progress in [0, 1]
+      log(`gen ${row.generation}: fit mean ${fitFmt(row.fitMean)} max ${fitFmt(row.fitMax)}` +
+      (val ? ` | val median ${val.median} count ${val.count}/${valSeedList.length}${config.foldValidation ? ` (θ of gen ${val.generation})` : ''}` +
+        ` (best ${st.best.valMedian} @ gen ${st.best.generation})` : '') +
+      (config.stallRule || config.rankTies !== 'index' ? ` | tied ${tied}/${half}${stall.skip ? ' step skipped' : ''}` : '') +
+      (cur && config.windowAdapt ? ` | window ${st.window}` : '') +
       ` | ${frames} frames in ${(genMs / 1000).toFixed(1)}s (${row.fps} fps)`);
     }
 
@@ -284,7 +497,7 @@ async function train({ config: cli, opts }) {
 
   if (st.lastValidated !== st.generation) {
     const val = await validate();
-    log(`final validation: median ${val.median} (best ${st.best.valMedian} @ gen ${st.best.generation})`);
+    log(`final validation: median ${val.median} count ${val.count}/${valSeedList.length} (best ${st.best.valMedian} @ gen ${st.best.generation})`);
   }
   saveCheckpoint(stopReason);
   await pool.terminate();
@@ -321,17 +534,25 @@ function loadModel(opts) {
   throw new Error(`--which must be best or current`);
 }
 
-// Held-out eval (25 EVAL_SEEDS); appends to the run's evals.jsonl. Returns the record.
+// Held-out eval (--seeds held-out seeds, default 25, starting at index --seed-offset,
+// default 0); appends to the run's evals.jsonl. The train stop check uses the first
+// N (default 25) held-out seeds and, under allpass, may retry until they pass, so a
+// certification eval of such a run should skip them: --seed-offset 25. Returns the
+// record, with the seeds that reached the target (passed) and the two-sided 95%
+// Clopper-Pearson interval for the pass rate.
 async function evalHeldOut(opts, targetOverride) {
   const { model, source, target: savedTarget } = loadModel(opts);
   const target = targetOverride || savedTarget || DEFAULTS.target;
   const workers = Number(opts.workers) || defaultWorkers();
-  const pool = workers > 1 ? createPool(Math.min(workers, EVAL_SEEDS.length)) : null;
+  const offset = opts.seedOffset !== undefined ? Number(opts.seedOffset) : 0;
+  const seeds = evalSeeds(offset + (opts.seeds !== undefined ? Number(opts.seeds) : 25)).slice(offset);
+  const pool = workers > 1 ? createPool(Math.min(workers, seeds.length)) : null;
   const t0 = Date.now();
-  const scores = await scoreSeeds(pool, model, EVAL_SEEDS, target);
+  const scores = await scoreSeeds(pool, model, seeds, target);
   if (pool) await pool.terminate();
   const s = summary(scores);
-  const record = { time: ts(), source: path.relative(ROOT, source), generation: model.generation ?? null, target, seeds: EVAL_SEEDS.length, ...s, scores };
+  const passed = scores.filter(x => x >= target).length;
+  const record = { time: ts(), source: path.relative(ROOT, source), generation: model.generation ?? null, target, seeds: seeds.length, seedOffset: offset, ...s, passed, passCI95: clopperPearson(passed, seeds.length), scores };
   record.seconds = (Date.now() - t0) / 1000;
   if (!opts.model) fs.appendFileSync(path.join(path.dirname(source), 'evals.jsonl'), JSON.stringify(record) + '\n');
   return record;
@@ -339,8 +560,10 @@ async function evalHeldOut(opts, targetOverride) {
 
 async function evalCmd({ config: cli, opts }) {
   const record = await evalHeldOut(opts, cli.target);
-  console.log(`held-out eval (${EVAL_SEEDS.length} seeds, cap ${record.target}) of ${record.source}:`);
+  const ci = record.passCI95;
+  console.log(`held-out eval (${record.seeds} seeds${record.seedOffset ? ` from index ${record.seedOffset}` : ''}, cap ${record.target}) of ${record.source}:`);
   console.log(`  median ${record.median}  min ${record.min}  max ${record.max}  (${record.seconds.toFixed(1)}s)`);
+  console.log(`  passed ${record.passed}/${record.seeds}; pass rate 95% Clopper-Pearson [${ci.lower.toFixed(4)}, ${ci.upper.toFixed(4)}]`);
   console.log(`  scores ${record.scores.join(' ')}`);
 }
 

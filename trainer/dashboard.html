@@ -291,6 +291,7 @@ function renderDetail(d) {
   const last = info.last || {};
   const cfg = info.config || {};
   const target = cfg.target;
+  const windowed = cfg.window > 0;   // curriculum fitness is window progress in [0, 1], not points
   const val = metrics.filter(r => r.valMedian !== null && r.valMedian !== undefined);
   const status = info.running
     ? `<span class="status-live">● Running</span>` : '○ Stopped';
@@ -310,7 +311,7 @@ function renderDetail(d) {
     <div class="charts">
       <div class="card wide">
         <h2>Population fitness</h2>
-        <div class="sub">Capped score per candidate, averaged over its training episodes</div>
+        <div class="sub">${windowed ? 'Window progress (0–1) per candidate, averaged over its curriculum training episodes' : 'Capped score per candidate, averaged over its training episodes'}</div>
         <div class="legend"><span><i style="background:var(--series-1)"></i>Mean</span><span><i style="background:var(--series-2)"></i>Best candidate</span></div>
         <div class="chart" id="c-fit"></div>
       </div>
@@ -334,7 +335,7 @@ function renderDetail(d) {
           <summary>Table view (last 25 generations) and config</summary>
           <div class="table-wrap"><table>
             <thead><tr><th>gen</th><th>fit mean</th><th>fit max</th><th>val median</th><th>frames/s</th><th>gen time</th></tr></thead>
-            <tbody>${metrics.slice(-25).reverse().map(r => `<tr><td>${r.generation}</td><td>${num(r.fitMean, 1)}</td><td>${num(r.fitMax, 1)}</td><td>${r.valMedian === null ? '' : num(r.valMedian)}</td><td>${compact(r.fps)}</td><td>${(r.genMs / 1000).toFixed(1)}s</td></tr>`).join('')}</tbody>
+            <tbody>${metrics.slice(-25).reverse().map(r => `<tr><td>${r.generation}</td><td>${num(r.fitMean, windowed ? 3 : 1)}</td><td>${num(r.fitMax, windowed ? 3 : 1)}</td><td>${r.valMedian === null ? '' : num(r.valMedian)}</td><td>${compact(r.fps)}</td><td>${(r.genMs / 1000).toFixed(1)}s</td></tr>`).join('')}</tbody>
           </table></div>
           <p class="cfg">${esc(JSON.stringify(cfg))}${info.checkpoint ? `<br>core ${esc((info.checkpoint.coreHash || '').slice(0, 12))}` : ''}</p>
         </details>
