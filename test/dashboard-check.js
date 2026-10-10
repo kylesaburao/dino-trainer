@@ -5,7 +5,7 @@
 //
 // It builds a throwaway runs/ tree in the OS temp dir, so it depends only on committed
 // files (runs/v2-es-d2w32-s1-t1m, runs/v2-bc-jump-d2w32-s1):
-//   es-run              ES run: best.json, metrics.jsonl, evals.jsonl
+//   es-run              ES run: best.json, metrics.jsonl, legacy evals.jsonl + assess.jsonl
 //   grp/bc-run          nested BC run, training: train.lock (this pid), bc-metrics.jsonl with
 //                       none/jump/duck recall, snapshots/epoch-01..02.json, best.json, and
 //                       its log next to it as grp/bc-run.log
@@ -51,7 +51,12 @@ const bc = require(path.join(ROOT, 'trainer', 'bc.js'));
 function buildFixture(dir) {
   const w = (f, s) => { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), s); };
   const src = (f) => fs.readFileSync(path.join(ROOT, f));
-  for (const f of ['best.json', 'metrics.jsonl', 'evals.jsonl']) w(`es-run/${f}`, src(`runs/v2-es-d2w32-s1-t1m/${f}`));
+  for (const f of ['best.json', 'metrics.jsonl']) w(`es-run/${f}`, src(`runs/v2-es-d2w32-s1-t1m/${f}`));
+  // Assessment records under both names: the legacy evals.jsonl (before the rename) and
+  // a newer assess.jsonl record; the dashboard merges them, legacy first.
+  w('es-run/evals.jsonl', src('runs/v2-es-d2w32-s1-t1m/assess.jsonl'));
+  w('es-run/assess.jsonl', JSON.stringify({ time: '2026-10-11T00:00:00.000Z', source: 'runs/es-run/best.json', generation: 970, target: 1000000,
+    seeds: 3, seedOffset: 999, median: 100200, min: 100100, max: 100300, passed: 0, gameVersion: 'v3', modelGameVersion: 'v2', scores: [1, 2, 3] }) + '\n');
   fs.mkdirSync(path.join(dir, 'plain'));
 
   const demosFile = path.join(dir, 'grp', 'demos-set', 'demos.json');
@@ -167,6 +172,10 @@ function cdpClient(url) {
     const by = Object.fromEntries((list || []).map(r => [r.name, r]));
     check('run list: top-level, nested and plain dirs; a group is not a run',
       ['es-run', 'grp/bc-run', 'grp/bc-old', 'grp/demos-set', 'plain', KD, PTQ, POW2].every(n => by[n]) && !by.grp && list.length === 8, (list || []).map(r => r.name).join(', '));
+    const es = by['es-run'] || {};
+    check('assessments: legacy evals.jsonl and assess.jsonl merged, legacy first',
+      (es.evals || []).length === 3 && es.evals[1].seedOffset === 175 && es.evals[2].seedOffset === 999 && es.lastEval.gameVersion === 'v3',
+      JSON.stringify((es.evals || []).map(e => e.seedOffset)));
     const kd = by[KD] || {}, ptq = by[PTQ] || {};
     check('distilled QAT run: kind bc, teacher model path/sha/tau/mode, quant bits/scheme/mode',
       kd.kind === 'bc' && kd.bc.distill && kd.bc.distill.from === 'runs/exp-bc-duck/v2-bc-duck-d2w32-s1/best.json' && kd.bc.distill.tau === 2 &&
@@ -350,7 +359,7 @@ function cdpClient(url) {
     const esOpts = await evaluate(`[...document.querySelectorAll('#pb-which option')].map(o => o.value + '=' + o.textContent).join()`);
     check('ES run renders (fitness/validation charts, original weights menu)', esView && esOpts === 'current=Latest checkpoint,best=Best (validation)', esOpts);
     check('ES view: evals table and the running scan of its model',
-      await evaluate(`!!document.querySelector('#run-scans tr.scan-row.running[data-scan="grp/scans/running.jsonl"]') && /Held-out evaluations/.test(document.getElementById('detail').textContent)`));
+      await evaluate(`!!document.querySelector('#run-scans tr.scan-row.running[data-scan="grp/scans/running.jsonl"]') && /Held-out assessments/.test(document.getElementById('detail').textContent)`));
     check('ES model plays', await waitUntil(`__dash.pb.game && __dash.pb.game.score() >= 100`, 20000));
     await shot('dashboard-es.png');
 

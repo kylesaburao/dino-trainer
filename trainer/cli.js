@@ -4,10 +4,13 @@
 //
 //   node trainer/cli.js train  [--target 10000] [--resume [--force]] [--workers N]
 //                              [--time-budget MIN] [--generations N] [--dir runs/main] ...
-//   node trainer/cli.js eval   [--dir runs/main] [--which best|current] [--model model.js] [--target N]
+//   node trainer/cli.js assess [--dir runs/main] [--which best|current] [--model model.js] [--target N]
 //                              [--seeds 25] [--seed-offset 0] [--wasm] [--game v1|v2|v3]
+//             held-out assessment; appends to <run>/assess.jsonl (older runs also have
+//             evals.jsonl, from before the rename; readers merge both). `eval` is a
+//             deprecated alias that prints a notice.
 //             --game plays those rules instead of the model's own gameVersion (a cross-rules
-//             evaluation, e.g. a v2 model on rules v3: it warns, and the record notes both).
+//             assessment, e.g. a v2 model on rules v3: it warns, and the record notes both).
 //   node trainer/cli.js bench  [--seconds 3] [--workers N] [--hidden 16] [--wasm]
 //   node trainer/cli.js export [--dir runs/main] [--which best|current] [--out model.js]
 //                              (also writes model.css next to it: the same weights for index-css.html)
@@ -174,7 +177,7 @@ const {
   gatedAdaptWindow, emptyAdaptAcc, geomeanFitness, splitFolded, clopperPearson, drawGeneration,
 } = require('./rules.js');
 const { createPool, defaultWorkers } = require('./pool.js');
-const { ROOT, coreHash, writeAtomic, writeJsonAtomic, readJson, acquireLock } = require('./store.js');
+const { ROOT, coreHash, writeAtomic, writeJsonAtomic, readJson, acquireLock, ASSESS_FILE } = require('./store.js');
 
 const CHECKPOINT_FORMAT = 'dino-es-checkpoint-v1';
 
@@ -497,7 +500,7 @@ async function train({ config: cli, opts }) {
       const s = summary(scores);
       const passed = scores.filter(x => x >= config.target).length;
       st.heldOut = { generation: best.generation, target: config.target, ...s, seeds: seeds.length, attempt, played: scores.length, passed };
-      log(`held-out eval of best (gen ${best.generation}): median ${s.median} min ${s.min} max ${s.max}`);
+      log(`held-out assessment of best (gen ${best.generation}): median ${s.median} min ${s.min} max ${s.max}`);
       return s.median >= config.target ? `held-out median ${s.median} >= target ${config.target}` : null;
     }
     const r = await sequentialAllPass(score, seeds, workers, config.target);
@@ -685,10 +688,10 @@ function loadModel(opts) {
   throw new Error(`--which must be best or current`);
 }
 
-// Held-out eval (--seeds held-out seeds, default 25, starting at index --seed-offset,
-// default 0); appends to the run's evals.jsonl. The train stop check uses the first
+// Held-out assessment (`assess`; --seeds held-out seeds, default 25, starting at index
+// --seed-offset, default 0); appends to the run's assess.jsonl (ASSESS_FILE). The train stop check uses the first
 // N (default 25) held-out seeds and, under allpass, may retry until they pass, so a
-// certification eval of such a run should skip them: --seed-offset 25. Returns the
+// certification assessment of such a run should skip them: --seed-offset 25. Returns the
 // record, with the seeds that reached the target (passed) and the two-sided 95%
 // Clopper-Pearson interval for the pass rate.
 async function evalHeldOut(opts, targetOverride, wasm = false, gameOverride) {
@@ -698,7 +701,7 @@ async function evalHeldOut(opts, targetOverride, wasm = false, gameOverride) {
   if (gameOverride && !GAME_VERSIONS.includes(gameOverride)) throw new Error(`--game must be one of ${GAME_VERSIONS.join(', ')}`);
   const model = gameOverride ? { ...loaded.model, gameVersion: gameOverride } : loaded.model;
   if (gameOverride && gameOverride !== modelGame) {
-    console.warn(`WARNING: cross-rules evaluation: a ${modelGame} model on rules ${gameOverride}`);
+    console.warn(`WARNING: cross-rules assessment: a ${modelGame} model on rules ${gameOverride}`);
   }
   const target = targetOverride || savedTarget || DEFAULTS.target;
   const workers = Number(opts.workers) || defaultWorkers();
@@ -714,7 +717,7 @@ async function evalHeldOut(opts, targetOverride, wasm = false, gameOverride) {
   const record = { time: ts(), source: path.relative(ROOT, source), generation: model.generation ?? null, target, seeds: seeds.length, seedOffset: offset, ...s, passed, passCI95: clopperPearson(passed, seeds.length), scores };
   if (gameOverride) Object.assign(record, { gameVersion: gameOverride, modelGameVersion: modelGame });
   record.seconds = (Date.now() - t0) / 1000;
-  if (!opts.model) fs.appendFileSync(path.join(path.dirname(source), 'evals.jsonl'), JSON.stringify(record) + '\n');
+  if (!opts.model) fs.appendFileSync(path.join(path.dirname(source), ASSESS_FILE), JSON.stringify(record) + '\n');
   return record;
 }
 
@@ -722,7 +725,7 @@ async function evalCmd({ config: cli, opts }) {
   const record = await evalHeldOut(opts, cli.target, !!cli.wasm, cli.gameVersion);
   const ci = record.passCI95;
   const rules = record.gameVersion && record.gameVersion !== record.modelGameVersion ? `, ${record.modelGameVersion} model on rules ${record.gameVersion}` : '';
-  console.log(`held-out eval (${record.seeds} seeds${record.seedOffset ? ` from index ${record.seedOffset}` : ''}, cap ${record.target}${rules}) of ${record.source}:`);
+  console.log(`held-out assessment (${record.seeds} seeds${record.seedOffset ? ` from index ${record.seedOffset}` : ''}, cap ${record.target}${rules}) of ${record.source}:`);
   console.log(`  median ${record.median}  min ${record.min}  max ${record.max}  (${record.seconds.toFixed(1)}s)`);
   console.log(`  passed ${record.passed}/${record.seeds}; pass rate 95% Clopper-Pearson [${ci.lower.toFixed(4)}, ${ci.upper.toFixed(4)}]`);
   console.log(`  scores ${record.scores.join(' ')}`);
@@ -1052,8 +1055,13 @@ async function bcQuantizeCmd({ config: cli, opts }) {
 
 // ---------------------------------------------------------------------------
 const ops = () => require('./ops.js');
+// `eval` is the deprecated name of `assess` (renamed 2026-10-10, user order); same options.
+const evalAlias = (a) => {
+  console.error('note: `eval` is deprecated; use `node trainer/cli.js assess` (same options)');
+  return evalCmd(a);
+};
 const COMMANDS = {
-  train, eval: evalCmd, bench: benchCmd, export: exportCmd, 'export-css': exportCssCmd,
+  train, assess: evalCmd, eval: evalAlias, bench: benchCmd, export: exportCmd, 'export-css': exportCssCmd,
   report: (a) => ops().reportCmd(a),
   finish: (a) => ops().finishCmd(a),
   session: (a) => ops().sessionCmd(a),
@@ -1070,7 +1078,7 @@ async function main() {
   }
   const cmd = COMMANDS[args.cmd];
   if (!cmd) {
-    console.error('usage: node trainer/cli.js <train|eval|bench|export|export-css|report|finish|session|bc-gen|bc-train|bc-quantize> [options]  (see the header of trainer/cli.js)');
+    console.error('usage: node trainer/cli.js <train|assess|bench|export|export-css|report|finish|session|bc-gen|bc-train|bc-quantize> [options]  (see the header of trainer/cli.js)');
     process.exit(2);
   }
   await cmd(args);

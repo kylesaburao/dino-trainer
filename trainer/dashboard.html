@@ -469,7 +469,7 @@ function demosCard(dm, ref, bestHash) {
 
 function evalsCard(evals) {
   if (!evals.length) return '';
-  return `<div class="card wide"><h2>Held-out evaluations</h2><div class="sub">evals.jsonl (node trainer/cli.js eval)</div>
+  return `<div class="card wide"><h2>Held-out assessments</h2><div class="sub">assess.jsonl and legacy evals.jsonl (node trainer/cli.js assess)</div>
     <div class="table-wrap"><table><thead><tr><th>time</th><th>seeds</th><th>offset</th><th>target</th><th>passed</th><th>95% CP</th><th>median</th><th>min</th></tr></thead>
     <tbody>${evals.slice().reverse().map(e => `<tr><td>${e.time ? esc(new Date(e.time).toLocaleString()) : ''}</td><td>${num(e.seeds)}</td><td>${num(e.seedOffset)}</td><td>${compact(e.target)}</td>
       <td>${e.passed !== undefined ? `${num(e.passed)}/${num(e.seeds)}` : '–'}</td><td>${e.passCI95 ? `${e.passCI95.lower.toFixed(3)}–${e.passCI95.upper.toFixed(3)}` : '–'}</td><td>${num(e.median)}</td><td>${num(e.min)}</td></tr>`).join('')}</tbody></table></div></div>`;

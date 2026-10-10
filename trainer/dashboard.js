@@ -10,12 +10,12 @@
 // bc-gen temp file (demos.bin.<pid>.tmp). A top-level directory whose only training
 // output is in its subdirectories is a group, not a run; any other top-level directory
 // is listed as before.
-//   ES runs (train): metrics.jsonl by generation, checkpoint.json, best.json, evals.jsonl,
+//   ES runs (train): metrics.jsonl by generation, checkpoint.json, best.json, assess.jsonl (+ legacy evals.jsonl),
 //     train.lock and the newest *.log; unchanged from the ES-only dashboard.
 //   Behaviour-cloning runs (bc-train; bc-metrics.jsonl, or best.json whose config.method
 //     says behaviour cloning): per-epoch loss, recall for every class key in the rows, and
 //     seconds per epoch; the demos manifest (config.demos, or the bc-train log line while
-//     training); best.json's validation; evals.jsonl; snapshots/epoch-NN.json. Teacher =
+//     training); best.json's validation; assess.jsonl / evals.jsonl; snapshots/epoch-NN.json. Teacher =
 //     config.teacherName / the manifest's teacherName, else teacher-jump. Distilled runs
 //     (config.distillFrom) and quantized runs (config.quant: bc-train --quant-bits, or
 //     bc-quantize with config.quantFrom) also carry bc.distill / bc.quant (teacher model
@@ -42,7 +42,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { pidAlive, ROOT } = require('./store.js');
+const { pidAlive, ROOT, ASSESS_FILES, readAssessLines } = require('./store.js');
 const { listScans } = require('./scans.js');
 
 const args = process.argv.slice(2);
@@ -142,7 +142,7 @@ function esInfo(name) {
   const best = bestSummary(dir);
   const metrics = readLines(path.join(dir, 'metrics.jsonl'));
   const last = metrics.length ? JSON.parse(metrics[metrics.length - 1]) : null;
-  const evals = readLines(path.join(dir, 'evals.jsonl')).map(l => { const e = JSON.parse(l); delete e.scores; return e; });
+  const evals = readAssessLines(dir).map(l => { const e = JSON.parse(l); delete e.scores; return e; });
   const updated = Math.max(...['metrics.jsonl', 'checkpoint.json', 'train.lock'].map(f => mtime(path.join(dir, f))));
   return {
     name,
@@ -232,12 +232,12 @@ function bcInfo(name, kind) {
   const cfg = (best && best.config) || null;
   const rows = readLines(path.join(dir, 'bc-metrics.jsonl')).map(l => JSON.parse(l));
   const last = rows.length ? rows[rows.length - 1] : null;
-  const evals = readLines(path.join(dir, 'evals.jsonl')).map(l => { const e = JSON.parse(l); delete e.scores; return e; });
+  const evals = readAssessLines(dir).map(l => { const e = JSON.parse(l); delete e.scores; return e; });
   const live = !cfg && kind === 'bc' ? trainLine(name) : null;
   const demosFile = kind === 'demos' ? path.join(dir, 'demos.json') : resolveDemos((cfg && cfg.demos) || (live && live.demos));
   const demos = demosSummary(demosFile);
   const layers = best ? best.layers : live && live.layers ? live.layers.split('-').map(Number) : null;
-  const updated = Math.max(...['bc-metrics.jsonl', 'best.json', 'train.lock', 'demos.json', 'evals.jsonl'].map(f => mtime(path.join(dir, f))),
+  const updated = Math.max(...['bc-metrics.jsonl', 'best.json', 'train.lock', 'demos.json', ...ASSESS_FILES].map(f => mtime(path.join(dir, f))),
     ...listDir(dir).filter(e => GEN_TMP.test(e.name)).map(e => mtime(path.join(dir, e.name))));
   // teacherName is additive (duck generation); runs without it are the jump generation.
   const teacher = (cfg && cfg.teacherName) || (best && best.teacherName) || (demos && demos.teacherName) || 'teacher-jump';

@@ -122,8 +122,8 @@ test('v3 survivable at high levels: both solvers, 6 seeds x 3 start levels x 20k
   assert.strictEqual(play('v3', 1, 1020000, 1000000).g.speed, C.V3.maxSpeed);
 });
 
-// eval --game: a cross-rules evaluation plays the asked rules, not the model's own.
-test('eval --game v3 plays a v2 model on rules v3 and records both versions', async () => {
+// assess --game: a cross-rules assessment plays the asked rules, not the model's own.
+test('assess --game v3 plays a v2 model on rules v3 and records both versions', async () => {
   const path = require('path');
   const { evalHeldOut } = require('../trainer/cli.js');
   const { runEpisode, evalSeeds } = require('../trainer/env.js');
@@ -136,9 +136,25 @@ test('eval --game v3 plays a v2 model on rules v3 and records both versions', as
   try { rec = await evalHeldOut({ model: file, workers: 1, seeds: 2, seedOffset: 0 }, 101000, false, 'v3'); } finally { console.warn = warn; }
   assert.strictEqual(rec.gameVersion, 'v3');
   assert.strictEqual(rec.modelGameVersion, 'v2');
-  assert.ok(warnings.some(w => /cross-rules evaluation: a v2 model on rules v3/.test(w)));
+  assert.ok(warnings.some(w => /cross-rules assessment: a v2 model on rules v3/.test(w)));
   const seeds = evalSeeds(2);
   assert.deepStrictEqual(rec.scores, seeds.map(s => runEpisode({ ...model, gameVersion: 'v3' }, s, 101000).score));
   const own = await evalHeldOut({ model: file, workers: 1, seeds: 2, seedOffset: 0 }, 2000);
   assert.strictEqual(own.gameVersion, undefined);
+});
+
+// Assessment records: assess.jsonl for new writes, legacy evals.jsonl still read; merged, legacy first.
+test('assess.jsonl and legacy evals.jsonl are both read and merged', () => {
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const { readAssessLines, ASSESS_FILE, ASSESS_FILES } = require('../trainer/store.js');
+  assert.strictEqual(ASSESS_FILE, 'assess.jsonl');
+  assert.deepStrictEqual(ASSESS_FILES, ['evals.jsonl', 'assess.jsonl']);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assess-'));
+  try {
+    assert.deepStrictEqual(readAssessLines(dir), []);
+    fs.writeFileSync(path.join(dir, 'assess.jsonl'), '{"n":3}\n');
+    assert.deepStrictEqual(readAssessLines(dir), ['{"n":3}']);
+    fs.writeFileSync(path.join(dir, 'evals.jsonl'), '{"n":1}\n{"n":2}\n\n');
+    assert.deepStrictEqual(readAssessLines(dir).map(l => JSON.parse(l).n), [1, 2, 3]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

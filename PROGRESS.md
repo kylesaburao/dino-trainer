@@ -137,7 +137,7 @@ Manual equivalent:
 ```sh
 nohup node trainer/cli.js train --resume --dir runs/main --target 20000 --time-budget 60 >> runs/main/train.log 2>&1 &
 kill -INT <pid>                                                 # PID in runs/main/train.lock; saves and releases the lock
-node trainer/cli.js eval --dir runs/main --which best          # 25 held-out seeds
+node trainer/cli.js assess --dir runs/main --which best        # 25 held-out seeds (formerly eval)
 node trainer/cli.js export --dir runs/main --which best        # writes model.js
 node test/browser-check.js                                      # verify AI mode in headless Chrome
 ```
@@ -153,7 +153,7 @@ Watch live with `node trainer/dashboard.js` (http://127.0.0.1:8080).
 | `render.js` | Canvas renderer (sprites, font, ground, frame drawing), shared by the game and the dashboard playback. Classic script (`DinoRender`) + `require`. |
 | `game.js` | Thin browser shell: sound, input events, localStorage HI, the fixed-timestep loop, the AI toggle. |
 | `model.js` | Exported model: sets `window.DINO_MODEL` and `module.exports`. Loaded with a plain `<script>`; no JSON or fetch, so it works over `file://`. |
-| `trainer/cli.js` | `train`, `eval`, `bench`, `export`. |
+| `trainer/cli.js` | `train`, `assess` (formerly `eval`), `bench`, `export`. |
 | `trainer/{env,es,pool,worker,store,bench}.js` | Episode runner and seed sets, OpenAI-ES maths, the worker_threads pool, worker, checkpoint/lock persistence, benchmark. |
 | `trainer/dashboard.{js,html}` | Live training dashboard (added at the user's request), read-only. |
 | `test/record-golden.js`, `test/golden/*.json.gz` | Golden traces recorded from **baseline 2da34de** itself. |

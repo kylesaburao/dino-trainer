@@ -25,7 +25,7 @@ const path = require('path');
 const { pidAlive } = require('./store.js');
 const { clopperPearson } = require('./rules.js');
 
-const SKIP_FILES = new Set(['metrics.jsonl', 'bc-metrics.jsonl', 'evals.jsonl']);
+const SKIP_FILES = new Set(['metrics.jsonl', 'bc-metrics.jsonl', 'evals.jsonl', 'assess.jsonl']);
 const SKIP_DIRS = new Set(['snapshots', 'export', 'node_modules']);
 const MAX_DEPTH = 4;
 const STALL_MS = 15 * 60 * 1000;

@@ -1,6 +1,6 @@
 # Rules v3: superhuman past 100k
 
-Status (2026-10-10): rules v3 are implemented on `wt/game-v3`. The budget probe, the solver unit tests and a 40 + 40 game solver pilot are done. The full solver survey and the evaluation of the two shipped clones on rules v3 are pre-registered below and **queued**; neither has been run.
+Status (2026-10-10): rules v3 are implemented on `wt/game-v3`. The budget probe, the solver unit tests and a 40 + 40 game solver pilot are done. The full solver survey and the assessment of the two shipped clones on rules v3 (`assess --game v3`) are pre-registered below and **queued**; neither has been run.
 
 Core hash after the change: `65f3546c…` with the step at 100k (`63fa2ab5…` for the superseded first proposal; before rules v3: `0f329d4e…`).
 
@@ -140,16 +140,16 @@ Results so far, all 0 crashes:
   - Duck fallbacks above 1% would not block anything, but would be recorded as the newcomer bound biting at high speed.
 - **Scope.** Start 100k only, at natural speed (no `startScore` past 100k). Starts above 1M are covered by the unit tests only.
 
-## 7. Queued: the shipped clones on rules v3 (cross-rules evaluation)
+## 7. Queued: the shipped clones on rules v3 (cross-rules assessment)
 
 - **Decision.** It gives the baseline for "train even stronger models": how far v2 models get on rules v3, and where.
 - **Expectation.** Both fail just past 100k. Neither clone has seen a speed above 22, and the 44 features include speed. In a 6-seed quick check (with the step), both clones ("v2 model on rules v3") crashed at the same scores, 100,036–100,358, the first obstacles after the step. On rules v2 both reached 1M on the same seeds.
 - **Commands** (queued for the orchestrator, after the stuck study; 2 workers; each game ends near 100.3k, so a few minutes):
   ```sh
-  node trainer/cli.js eval --dir runs/exp-bc-duck/v2-bc-duck-d2w8-s1 --which best --game v3 --target 1000000 --seeds 150 --seed-offset 475 --workers 2 --wasm
-  node trainer/cli.js eval --dir runs/v2-bc-jump-d2w32-s1 --which best --game v3 --target 1000000 --seeds 150 --seed-offset 475 --workers 2 --wasm
+  node trainer/cli.js assess --dir runs/exp-bc-duck/v2-bc-duck-d2w8-s1 --which best --game v3 --target 1000000 --seeds 150 --seed-offset 475 --workers 2 --wasm
+  node trainer/cli.js assess --dir runs/v2-bc-jump-d2w32-s1 --which best --game v3 --target 1000000 --seeds 150 --seed-offset 475 --workers 2 --wasm
   ```
-  `eval --game v3` warns "cross-rules evaluation: a v2 model on rules v3", and appends to the run's `evals.jsonl` with `gameVersion: 'v3'` and `modelGameVersion: 'v2'`.
+  `assess --game v3` (formerly `eval`) warns "cross-rules assessment: a v2 model on rules v3", and appends to the run's `assess.jsonl` with `gameVersion: 'v3'` and `modelGameVersion: 'v2'`.
 - **Reading.** Report the score distribution (median, min, max) and the pass count, which is expected to be 0/150. Label it "v2 model on rules v3".
 
 ## 8. Open choices
