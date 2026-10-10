@@ -647,7 +647,7 @@ function playbackFrame(t) {
   const dt = Math.min(Math.max(t - pb.last, 0), 100);
   pb.last = t;
   const g = pb.game;
-  if (!g) return;
+  if (!g || !pb.model) return;   // weights reloading after a menu change
   if (g.state === 'over') {
     if (!pb.overAt) pb.overAt = t;
     if (t - pb.overAt > 1200) newEpisode();
