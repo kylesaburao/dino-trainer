@@ -4,21 +4,25 @@
 // stop check, the stall rule, sigma annealing, (gated) window adaptation,
 // geometric-mean fitness, folded validation, and the Clopper-Pearson bound used to
 // report certification evals.
-const { median, trainSeed, startScores, episodeCaps } = require('./env.js');
+const { median, trainSeed, startScores, rampMask, episodeCaps } = require('./env.js');
 
 // One generation's draws from the trainer RNG: popSize/2 noise seeds, then the episode
 // seeds, shared by every candidate or (c.pairEpisodes) drawn per antithetic pair; both
 // members of a pair always play the same episodes (common random numbers). With the
 // curriculum (cur = config with the current window, or null) each seed set also gets
 // its start levels and episode ends, a pure function of the seeds (no RNG draws).
-// Returns { noiseSeeds, pairEp: [{ seeds, starts, caps }] } (starts/caps null without
-// the curriculum); pairs that share seeds share one object.
+// Returns { noiseSeeds, pairEp: [{ seeds, starts, caps[, ramp] }] } (starts/caps null
+// without the curriculum; ramp, the natural-ramp episode mask, only when some episode
+// starts on the ramp); pairs that share seeds share one object.
 function drawGeneration(rng, c, cur) {
   const noiseSeeds = Array.from({ length: c.popSize / 2 }, () => Math.floor(rng() * 4294967296));
   const drawSeeds = () => Array.from({ length: c.episodes }, () => trainSeed(rng));
   const episodes = (seeds) => {
     const starts = cur ? startScores(seeds, cur) : null;
-    return { seeds, starts, caps: starts && episodeCaps(starts, cur) };
+    const ep = { seeds, starts, caps: starts && episodeCaps(starts, cur) };
+    const ramp = cur && rampMask(seeds, cur);
+    if (ramp) ep.ramp = ramp;
+    return ep;
   };
   if (c.pairEpisodes) return { noiseSeeds, pairEp: noiseSeeds.map(() => episodes(drawSeeds())) };
   const shared = episodes(drawSeeds());
