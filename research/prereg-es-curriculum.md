@@ -171,3 +171,61 @@ Validation doesn't affect the θ trajectory; it is only there to measure the eve
    - Validation medians: 1510–1590 between 695 and 1360, then 88,532 at gen 1600. **The two-reading validation event isn't reached by gen 1600** (the confirming reading would come at 1610), so per §4.6 the hyg-s12 arm is rerun in full in the batch.
    - Cost note: once past the wall, a generation costs about 4.8 s (17.7M frames). This is why the watcher stops runs at the event.
 2. **Selection/validation flags don't move θ: PASS.** Frozen `ckpt-s9.json` resumed for 5 generations (1017 → 1022) with `--wasm`, with and without `--select count --fold-validation --stop-rule allpass:59 --val-seeds 12`. θ (0/2595 elements differ), Adam m and the RNG state are bit-identical.
+
+**Deviation 1 (confirmed by mac-3).** The trainer's default stop rule (`median`) ends a run when a validation median reaches `--target` (1M) and the held-out median on stop-check seeds 0–24 does too. That happened before the watcher's second reading on s12-cur, s4-cur and s9-cur.
+- Treatment, applied identically in both arms: the **event** is the first validation with valMedian ≥ 2000, and the held-out stop counts only as its **confirmation**.
+- Marked * in the table. No reruns with `allpass`, and no code changes.
+
+## 9. Results (batch finished 18:50Z, main `b6c170e` code, `--wasm`, desktop host)
+
+Tools: `tools/run-bp.sh` (batch), `tools/event-watch.js` (SIGINT at the confirmed event) and `tools/bp-table.js` (this table). Run directories are `runs/exp-bp-s{4,5,7,8,9,12}-{hyg,cur}` (gitignored).
+
+(* = confirmed by the trainer's held-out stop-rule check instead of a second validation)
+| θ | Role | G0 | hyg: to event | cur (B′): to event | R = cur/hyg frames | hyg tied / min val after +100 | cur tied / min val after +100 / window |
+|---|---|---|---|---|---|---|---|
+| s12 | control | 1500 | 100 gens, 522M fr, 114 s | 40* gens, 239M fr, 42 s | 0.46 | 0.00 / 1000000 | 0.00 / - / win 25000→16667→11111→7407→5000 |
+| s4 | control | 1500 | 500 gens, 539M fr, 94 s | 560* gens, 3643M fr, 654 s | 6.76 | 0.00 / 477 | 0.00 / 477 / win 25000→16667→11111→7407→5000 |
+| s5 | stuck | 1435 | >2000 gens, 4414M fr, 708 s | 855 gens, 5248M fr, 842 s | ≤ 1.19 | 0.12 / 1151.5 | 0.00 / 1023.5 / win 25000→16667→11111→7407→5000 |
+| s7 | stuck | 1500 | 1100 gens, 2234M fr, 360 s | 210 gens, 988M fr, 168 s | 0.44 | 0.02 / 518 | 0.00 / 495 / win 25000→16667→11111→7407→5000 |
+| s8 | stuck | 1500 | >2000 gens, 3876M fr, 624 s | 1340 gens, 8170M fr, 1300 s | ≤ 2.11 | 0.04 / 223 | 0.01 / 205.5 / win 25000→16667→11111→7407→5000 |
+| s9 | stuck | 1017 | >2000 gens, 3052M fr, 486 s | 33* gens, 219M fr, 37 s | ≤ 0.07 | 0.91 / 580 | 0.19 / - / win 25000→16667→11111→7407→5000 |
+
+Notes:
+- "Frames" is training frames from the resume point to the event, or to censoring. The hygiene arms on s5, s8 and s9 reached the +2000-generation horizon without the event.
+- Last validation medians of the censored hygiene arms: s5 1297, s8 1421 (best 1622), s9 580 (unchanged since gen 900, with 59/64 pairs tied at the end).
+- No opening loss in any run: the lowest valMedian after +100 generations was ≥ 205 everywhere.
+- The B′ window sat at its 5000 floor after about 20 generations, as §2 predicted.
+- The 30-minute safety cap never bound. The longest run was s8-cur at 1300 s.
+
+### 9.1 Readings, applied as pre-registered
+
+**Counts (coarse layer):**
+- B′ reaches the event on **4 of 4** stuck θs (s5 +855, s7 +210, s8 +1340, s9 +33 generations).
+- Hygiene reaches it on **1 of 4** (s7 +1100).
+- Both positive controls reach the event in both arms within H.
+- No B′ opening loss.
+
+**Reading A** (B′ event on ≥ 3 of 4 stuck θs with R ≤ 1/4 or hygiene censored, controls within H, no opening loss): **met.**
+- s9 qualifies with R ≤ 0.07. s5 and s8 qualify because hygiene was censored. s7 doesn't qualify (R = 0.44).
+- **Register: B′ as specified → promising, confirmation pending** (§4.5). The attribution to late exposure (the row's name) is untested; see Hypotheses below.
+- Reading E doesn't apply: hygiene cleared only 1 of 4 stuck θs.
+
+**Limitation: the primary metric (frames).** This doesn't change the verdict above; the confirmation round fixes it.
+- The horizon was set in **generations**. B′ generations cost more frames: about 2–6× more after the wall starts to give, because the late windows lengthen as the policy improves.
+- On s5 and s8, B′ used **more frames to clear (5.2B, 8.2B) than hygiene had spent when it was censored (4.4B, 3.9B)**. Their ratios are only bounded by R ≤ 1.19 and R ≤ 2.11. So on s5 and s8 B′ is shown to clear in generations, **not** shown to be cheaper in compute.
+- On the frames ratio alone, only **s9 (R ≤ 0.07)** is a decisive win. s7 (0.44) and s12 (0.46) favour B′ within chaos, and the **s4 control goes against it (R = 6.76)**.
+
+**Hypotheses:**
+- B′ changes three things at once: the late windows, 8 episodes per candidate instead of 4, and progress/geomean fitness. This design can't separate them.
+- **H1** (curriculum irrelevant) is contradicted **in generations** (4/4 vs 1/4 under paired starts). It is **not excluded per unit of compute** on type M (s5, s8).
+- **H3 alone** (tie-breaking without transfer) is excluded by s9. Ties fell from 0.91 to 0.19, but s9 also **cleared the wall in 33 generations** after 1000 + 2000 hygiene generations stuck at 580.
+- **H4** (opening loss) is not seen.
+- **H2** (dense late exposure transfers) is **not established.** On type M (s5, s7 and s8 had about 0 ties), less noisy fitness from 8 episodes, or the geomean aggregation, explains the gains as well as late exposure does. Only s9 points specifically at the late windows (its from-0 ties were broken by late-window variation), and that is n = 1.
+
+### 9.2 Recommended confirmation (§4.5), amended by this result
+- Use about 10 more escaped-and-stuck θs (hygiene survey seeds 13–30, `--wasm`), paired as here.
+- **Censor both arms on a matched frames budget**, not on generations, so the primary metric compares equal compute.
+  - Size it at ≥ 1.25× the largest B′ spend seen here (s8-cur 8.2B), so **≥ ~10B training frames**.
+  - At the hygiene arm's measured 3.9–4.4B frames per 2000 stuck generations (about 10–12 min), a hygiene arm censored at 10B takes about 25–30 min on this host. Raise `--time-budget` to 45.
+- **Add an ablation arm, hyg + `--episodes 8`** (no curriculum), to separate the episode count from the late windows and the fitness reshaping. If it matches B′ on type M, the gain there isn't late exposure.
+- Report the split by failure type (T vs M) using `tools/wall-diag.js` on each start θ.
