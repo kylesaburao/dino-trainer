@@ -148,6 +148,12 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 
 ## Invariants to preserve
 
+- **The dashboard sees every training run on this computer.** This is the user's requirement (2026-10-10). `node trainer/dashboard.js` must list and show every training run under `runs/`, while it is running and after it finishes:
+  - ES runs (`train`) and behaviour-cloning runs (`bc-gen` / `bc-train`, any teacher), including runs nested one level down (`runs/<group>/<run>`);
+  - their metrics and log, with live updates while running, and playback of their models.
+
+  **Any new training mode, metrics file or run-dir layout must ship with dashboard support in the same change.** A change that leaves a kind of training run invisible on the dashboard is incomplete.
+
 - **Parity gate.** `test/golden/*.json.gz` were recorded from baseline commit `2da34de` by `test/record-golden.js`, and v1 must reproduce them frame-for-frame. That includes the order of RNG draws: clouds, stars and the idle blink share the game RNG, and the obstacle sequence depends on them. Any core change that alters v1 behaviour breaks `parity.test.js`. Don't re-record the traces to make it pass.
 - **Core hash.** It covers `core.js` and `policy.js`. Editing either one invalidates existing checkpoints, which then `--resume` only with `--force`. Use `--force` only when decisions are provably unchanged; `test/net.test.js` checks bit-identical decisions for the shipped model.
 - **Locked on resume.** `hidden`, `actionRepeat` and `gameVersion` can't change on resume; other options can be overridden.
