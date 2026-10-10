@@ -150,7 +150,7 @@ th { color: var(--text-secondary); font-weight: 600; }
       </div>
       <div class="controls">
         <label>Weights <select id="pb-which"><option value="current">Latest checkpoint</option><option value="best">Best (validation)</option></select></label>
-        <label>Speed <select id="pb-speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option><option value="32">32×</option><option value="64">64×</option><option value="128">128×</option></select></label>
+        <label>Speed <select id="pb-speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option><option value="32">32×</option><option value="64">64×</option><option value="128">128×</option><option value="256">256×</option><option value="512">512×</option><option value="1024">1024×</option></select></label>
       </div>
     </div>
     <div class="pb-row">
@@ -376,7 +376,8 @@ async function refresh() {
 // ---------------------------------------------------------------------------
 // Live playback: runEpisode() from trainer/env.js, frame by frame at 60fps.
 // ---------------------------------------------------------------------------
-const pb = { game: null, agent: null, model: null, run: null, seed: 0, acc: 0, last: 0, overAt: 0, episodes: 0, renderer: null, loading: false };
+const pb = { game: null, agent: null, model: null, run: null, seed: 0, acc: 0, last: 0, overAt: 0, episodes: 0, renderer: null, loading: false, behind: false };
+const STEP_BUDGET_MS = 12;   // simulation time per display frame before playback falls behind
 
 async function loadModel() {
   const which = $('#pb-which').value;
@@ -418,23 +419,28 @@ function playbackFrame(t) {
   } else {
     const speed = Number($('#pb-speed').value);
     pb.acc += dt * speed;
+    // Simulate for at most STEP_BUDGET_MS per display frame (1024x is ~1000
+    // game frames per display frame at 60 Hz). If that can't keep up, drop the
+    // backlog instead of letting it grow, and say so in the caption.
+    const deadline = performance.now() + STEP_BUDGET_MS;
     let steps = 0;
-    while (pb.acc >= DinoCore.FRAME_MS && steps < 1024) {
+    pb.behind = false;
+    while (pb.acc >= DinoCore.FRAME_MS) {
       const keys = pb.agent.act(g);
       if (g.state === 'running') nn.capture(g, keys);
       g.step(keys);
       pb.acc -= DinoCore.FRAME_MS;
-      steps++;
       if (g.state === 'over') { pb.acc = 0; break; }
+      if ((++steps & 63) === 0 && performance.now() > deadline) { pb.acc = 0; pb.behind = true; break; }
     }
-    if (steps >= 1024) pb.acc = 0;   // can't keep up: drop the backlog instead of letting it grow
   }
   pb.renderer.draw(g, g.frameIndex * DinoCore.FRAME_MS, 0);
   nn.draw();
   const m = pb.model;
   $('#pb-caption').textContent = `game ${g.version}${g.version === 'v2' ? ` (level ${g.level.toFixed(2)})` : ''} · ` +
     `${m.which === 'best' ? 'best' : 'latest'} weights from generation ${m.generation} · seed ${pb.seed} · ` +
-    `score ${g.score()}${g.state === 'over' ? ' · crashed, next episode…' : ''} · speed ${g.speed.toFixed(2)}`;
+    `score ${g.score()}${g.state === 'over' ? ' · crashed, next episode…' : ''} · speed ${g.speed.toFixed(2)}` +
+    (pb.behind ? ' · playback can\'t keep up at this speed' : '');
 }
 
 function setPlaybackRun(name) {
