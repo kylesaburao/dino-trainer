@@ -1,6 +1,6 @@
 # Pre-registration: does the solver clone have failure modes the solver lacks? (large-n robustness scan)
 
-Status: **registered; advisor amendments applied (STOP threshold, arm order, oracle-disagreement trace, bound wording, --wasm).** Author: mac-3 (orchestrator), 2026-10-10, on main `d4a1224`.
+Status: **run 2026-10-10; results at the end** (registered; advisor amendments applied: STOP threshold, arm order, oracle-disagreement trace, bound wording, --wasm). Author: mac-3 (orchestrator), 2026-10-10, on main `d4a1224`.
 Process: AGENTS.md "Research method"; retrospective `handoff/2026-10-10T1635Z-retrospective.md` §4 and §6.
 
 ## 1. Decision this informs
