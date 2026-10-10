@@ -1,0 +1,1 @@
+{"model":"/Users/kyle/Desktop/dino-game/.claude/worktrees/agent-aab38dbf9659a16f4/runs/exp-distill/v2-distill-duck-d2w6-s6-tau1/best.json","layers":"44-6-6-3","frames":600000,"games":5,"crashes":0,"minMargin":0.0005687428802207961,"at":{"level":0,"seed":30003000,"score":31862},"p01":2.910011191419416,"median":29.586137458558618}

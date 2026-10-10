@@ -279,3 +279,22 @@ Written after the §5.0 test-suite, demo and teacher controls and before any tra
 - **Reading (§5.1 rule 1):** D1 targets = the MARGINAL shapes, largest first: **2×6, then 2×4**. Not every shape is PASS, so no Stage 0b.
 - **Surprise (not a reading):** both one-layer shapes are 10/10 clean, the two-layer shapes 4–5/10, like the direct d2w8 reference (5/10). All Stage 0 failures are in the opening (stuck duck or early release).
 - D1 waits for the orchestrator's go (the Mac is lent to the rules-v3 survey).
+
+### D1: closed by user order (2026-10-10, 23:51Z), not a registered reading
+The user dropped D1 as not tenable. Orchestrator mac-5 stopped the tier-B runner at 23:51:52Z (logged in `runs/exp-distill/status.log`). All 100 D1 trainings, their opening scans and duck shares had finished; agree.js was not run on the D1 models. **Nothing below is a registered §7 reading.**
+
+Provisional clean counts (tier A + opening scan only, seeds 1–10; `runs/exp-distill/d1-summary-provisional.json`; duck share 1.000 on every clean seed). The McNemar column is exact, one-sided, against (a) (`d1-mcnemar-provisional.json`): b = seeds clean in the arm but not in (a), c = the reverse.
+
+| Arm | 2×6 clean/10 | 2×6 seeds stuck / early release | 2×6 b, c, p | 2×4 clean/10 | 2×4 seeds stuck / early release | 2×4 b, c, p |
+|---|---|---|---|---|---|---|
+| (a) direct (Stage 0) | 4 | 5 / 1 | — | 5 | 3 / 1 | — |
+| (b) τ = 1 | 3 | 6 / 1 | 0, 1, 1.0 | 4 | 5 / 1 | 1, 2, 0.88 |
+| (b) τ = 2 | 4 | 1 / 5 | 2, 2, 0.69 | 8 | 1 / 1 | 4, 1, 0.19 |
+| (b) τ = 4 | 5 | 0 / 5 | 3, 2, 0.50 | 6 | 2 / 1 | 2, 1, 0.50 |
+| (c) hard | 5 | 5 / 0 | 1, 0, 0.50 | 5 | 4 / 1 | 1, 1, 0.75 |
+| (d) τ = 2, α = 0.5 | 5 | 1 / 4 | 2, 1, 0.50 | 6 | 2 / 1 | 2, 1, 0.50 |
+
+- **Tier B when stopped:** 4 of 20 scans had completed, all 0/1,000 with 1,000 contiguous seeds and a footer: d2w6 s6-tau1, s7-tau1, s4-tau2 and s6-tau2 (`runs/exp-distill/scans-summary/`). (The orchestrator's stop note said 3; the 4th, s6-tau2, ended at 23:51:04Z, before the stop.) The 5th, d2w6 s1-tau4, was killed mid-scan and is not counted.
+- These tier-B scans overlapped for a few minutes with the v3 tooling controls (about 23:42–23:50Z), so their recorded run times may be inflated; the scores are deterministic and unaffected.
+- Descriptive only: raising τ at 2×6 traded stuck ducks for early releases (stuck seeds 6 → 1 → 0, early-release seeds 1 → 5 → 5 at τ = 1, 2, 4) without changing the clean count.
+- C-kd-control (d2w8 s1, τ = 2): path check passed (teacher agreement 0.99699); opening 973/1,000.
