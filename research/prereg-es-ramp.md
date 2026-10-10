@@ -1,6 +1,6 @@
 # Pre-registration: does a curriculum that starts episodes inside 400–800 help stuck θs through the wall? (natural-ramp arm vs hyg + `--episodes 8`)
 
-**This tests the register row "curriculum targeting the 400–800-point zone".** B′ (`research/prereg-es-curriculum.md`) could not test it, because B′ never starts an episode below 2000. This arm runs inside desktop-1's B′ confirmation batch, on the same start θs. Its paired control is desktop-1's ablation arm, hyg + `--episodes 8` (called **hyg8** here).
+**This tests the register row "curriculum targeting the 400–800-point zone".** B′ (`research/prereg-es-curriculum.md`) could not test it, because B′ never starts an episode below 2000. This arm runs inside desktop-1's B′ confirmation batch, on the same start θs. Its paired control is desktop-1's ablation arm, hyg + `--episodes 8` (called **hyg8** here; desktop-1's arm name is `abl`, run dirs `runs/exp-bp2-sS-abl`).
 
 Status: **draft, paper only; launch gated on §4.6.** Author: desktop-2, 2026-10-10, on main `b1fbab8` (natural-ramp merged in `6331aee`).
 Process: retrospective `handoff/2026-10-10T1635Z-retrospective.md` §4 and §6.
@@ -63,7 +63,7 @@ Secondary comparisons on the same θs, not decisive: ramp vs B′ (`cur`) and ra
 ## 4. Design
 
 ### 4.1 Paired θs
-desktop-1's confirmation set, unchanged: the same frozen pre-resume checkpoints (sha256-checked copies), the same positive controls and the same failure-type classification. Pairing is of the starting state only. Each start θ gets a `ramp` run directory next to desktop-1's: `runs/exp-bp-sS-ramp`.
+desktop-1's confirmation set, unchanged (positive controls s4 and s12 from `runs/exp-bp-start`, G0 1500; 6 stuck θs from survey seeds 13–30, frozen in `runs/exp-bp2-start` with SHA256SUMS): the same frozen pre-resume checkpoints (sha256-checked copies), the same positive controls and the same failure-type classification. Pairing is of the starting state only. Each start θ gets a `ramp` run directory next to desktop-1's: `runs/exp-bp2-sS-ramp` (round 2 naming; paired with `runs/exp-bp2-sS-abl`).
 
 ### 4.2 Arm
 - **ramp:** desktop-1's hyg8 command exactly (`train --resume --wasm --episodes 8`, the same `--generations`, `--time-budget`, `--eval-every 10 --val-seeds 12`, watcher and budget), plus
@@ -77,7 +77,7 @@ desktop-1's confirmation set, unchanged: the same frozen pre-resume checkpoints 
 
 ### 4.3 Primary metric
 - **Event:** as desktop-1's batch: valMedian ≥ 2000, confirmed per that prereg's deviation 1 (the second validation or the trainer's held-out stop).
-- **Primary: R = ramp / hyg8 training frames from the resume point to the event, counting `frames + teacherFrames` for the ramp arm.** Both arms are censored on the same frames budget as the rest of the batch (≥ 10B, desktop-1's §9.2). The watcher and `tools/bp-table.js` sum `r.frames + (r.teacherFrames || 0)`; `teacherFrames` is absent on every other arm. The censoring bounds are the same as in the B′ prereg's §4.3.
+- **Primary: R = ramp / hyg8 training frames from the resume point to the event, counting `frames + teacherFrames` for the ramp arm.** Both arms are censored on the same frames budget as the rest of the batch (10B via `tools/event-watch.js --max-frames 1e10`, which counts `frames + teacherFrames` as of desktop-1's round-2 tools; `--time-budget 45`, `--generations G0+20000`). The watcher and `tools/bp-table.js` sum `r.frames + (r.teacherFrames || 0)` (bp-table also reports `studentFrames`); `teacherFrames` is absent on every other arm. Run order (desktop-1): abl and cur on all θs first, then ramp, only if gate (a) is exactly identical. The censoring bounds are the same as in the B′ prereg's §4.3.
 - **Secondary:** generations to the event; student-only frames; wall time; mean tiedPairs/64; the opening check (the lowest valMedian after +100); and teacher frames as a share of all frames, measured.
 
 ### 4.4 Horizon
