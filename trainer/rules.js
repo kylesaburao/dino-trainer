@@ -1,8 +1,9 @@
 'use strict';
 // Per-generation training policies as pure functions (no I/O, no workers), so
 // test/rules.test.js can check them directly: best-model selection, the held-out
-// stop check, the stall rule, sigma annealing, window adaptation, folded
-// validation, and the Clopper-Pearson bound used to report certification evals.
+// stop check, the stall rule, sigma annealing, (gated) window adaptation,
+// geometric-mean fitness, folded validation, and the Clopper-Pearson bound used to
+// report certification evals.
 const { median, trainSeed, startScores, episodeCaps } = require('./env.js');
 
 // One generation's draws from the trainer RNG: popSize/2 noise seeds, then the episode
@@ -124,6 +125,32 @@ function adaptWindow(window, passRate, target) {
   return window;
 }
 
+// Gated window adaptation, decided every few generations on pooled counts
+// acc = { zeroPassed, zeroTotal, latePassed, lateTotal }: while start-0 episodes mostly
+// fail (pass rate < 30%) the window shrinks, however the late windows go; only once the
+// opening is learned (> 60%, or no start-0 episodes) does the late pass rate move it.
+// A shrink never grows a window that is already below adaptWindow's floor.
+function gatedAdaptWindow(window, acc, target) {
+  const shrink = () => Math.min(window, adaptWindow(window, 0, target));
+  const zeroRate = acc.zeroTotal > 0 ? acc.zeroPassed / acc.zeroTotal : null;
+  if (zeroRate !== null && zeroRate < 0.3) return shrink();
+  if ((zeroRate === null || zeroRate > 0.6) && acc.lateTotal > 0) {
+    const lateRate = acc.latePassed / acc.lateTotal;
+    return lateRate < 0.3 ? shrink() : adaptWindow(window, lateRate, target);
+  }
+  return window;
+}
+const emptyAdaptAcc = () => ({ zeroPassed: 0, zeroTotal: 0, latePassed: 0, lateTotal: 0 });
+
+// Geometric-mean curriculum fitness over one candidate's episodes: exp(mean ln max(f_j,
+// 1/span_j)). A failing stage pulls it towards 0 (dF/df_j is proportional to F/f_j), so
+// the opening cannot be traded for late-window progress. The floor 1/span_j is one point.
+function geomeanFitness(fs, spans) {
+  let s = 0;
+  for (let j = 0; j < fs.length; j++) s += Math.log(Math.max(fs[j], 1 / spans[j]));
+  return Math.exp(s / fs.length);
+}
+
 // Folded validation: the generation's pool results are popSize training candidates
 // followed by the validation games of the pre-update θ.
 const splitFolded = (results, popSize) => ({ train: results.slice(0, popSize), val: results.slice(popSize) });
@@ -152,5 +179,5 @@ function clopperPearson(k, n, alpha = 0.05) {
 
 module.exports = {
   drawGeneration, valSummary, isBetter, parseStopRule, alreadyTested, wantHeldOut, sequentialAllPass,
-  tiedPairs, stallUpdate, STALL_MAX, annealUpdate, adaptWindow, splitFolded, clopperPearson,
+  tiedPairs, stallUpdate, STALL_MAX, annealUpdate, adaptWindow, gatedAdaptWindow, emptyAdaptAcc, geomeanFitness, splitFolded, clopperPearson,
 };

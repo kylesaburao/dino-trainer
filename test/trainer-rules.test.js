@@ -301,3 +301,70 @@ test('Clopper-Pearson interval', () => {
   const r2 = rules.clopperPearson(24, 25);
   close(r2.lower, 0.7965, 1e-4); close(r2.upper, 0.9990, 1e-4);
 });
+
+// --- gated curriculum ------------------------------------------------------------
+test('gated window adaptation: shrink while the opening fails, late rule once it passes, hold between', () => {
+  const T = 1e6;
+  const acc = (zp, zt, lp, lt) => ({ zeroPassed: zp, zeroTotal: zt, latePassed: lp, lateTotal: lt });
+  // Opening failing: shrink even though every late window passed.
+  assert.strictEqual(rules.gatedAdaptWindow(30000, acc(1, 10, 10, 10), T), 20000);
+  // Opening passed: the late rule applies (grow / shrink / hold).
+  assert.strictEqual(rules.gatedAdaptWindow(30000, acc(7, 10, 10, 10), T), 45000);
+  assert.strictEqual(rules.gatedAdaptWindow(30000, acc(7, 10, 1, 10), T), 20000);
+  assert.strictEqual(rules.gatedAdaptWindow(30000, acc(7, 10, 5, 10), T), 30000);
+  // In between (30%..60%): hold.
+  assert.strictEqual(rules.gatedAdaptWindow(30000, acc(5, 10, 10, 10), T), 30000);
+  // No start-0 episodes: the late rule alone; no episodes at all: hold.
+  assert.strictEqual(rules.gatedAdaptWindow(30000, acc(0, 0, 10, 10), T), 45000);
+  assert.strictEqual(rules.gatedAdaptWindow(30000, acc(0, 0, 0, 0), T), 30000);
+  // A shrink never grows a window already below the 5000 floor.
+  assert.strictEqual(rules.gatedAdaptWindow(500, acc(0, 10, 0, 10), T), 500);
+  assert.strictEqual(rules.gatedAdaptWindow(500, acc(10, 10, 0, 10), T), 500);
+  assert.strictEqual(rules.gatedAdaptWindow(6000, acc(0, 10, 0, 0), T), 5000);
+  assert.deepStrictEqual(rules.emptyAdaptAcc(), acc(0, 0, 0, 0));
+});
+
+test('gated window adaptation: never grows while the opening fails; w_t <= w0 * 1.5^(t/N) with every N', () => {
+  const T = 1e7, N = 5, w0 = 5000;
+  const rng = createRng(7);
+  for (let trial = 0; trial < 200; trial++) {
+    let w = w0, decisions = 0, bound = w0;
+    for (let t = 1; t <= 300; t++) {
+      if (t % N) continue;
+      const zt = Math.floor(rng() * 20), lt = Math.floor(rng() * 20);
+      const a = { zeroTotal: zt, zeroPassed: Math.floor(rng() * (zt + 1)), lateTotal: lt, latePassed: Math.floor(rng() * (lt + 1)) };
+      const next = rules.gatedAdaptWindow(w, a, T);
+      if (a.zeroTotal > 0 && a.zeroPassed / a.zeroTotal < 0.3) assert.ok(next <= w, 'grew while the opening failed');
+      decisions++;
+      bound = Math.round(bound * 1.5);   // the largest window reachable after `decisions` decisions
+      assert.ok(next <= Math.min(T, bound), `window ${next} above bound ${bound}`);
+      assert.ok(next <= w0 * 1.5 ** (t / N) + decisions, 'rate limit (allowing 0.5 per rounding)');
+      w = next;
+    }
+  }
+});
+
+test('geometric-mean fitness: equals the mean when all stages are equal; a failing stage dominates; floor applied', () => {
+  close(rules.geomeanFitness([0.4, 0.4, 0.4, 0.4], [500, 500, 500, 500]), 0.4, 1e-12);
+  close(rules.geomeanFitness([1, 1, 1, 1], [500, 500, 500, 500]), 1, 1e-12);
+  // One stage at zero, three passed: floored at 1/span, F = (1/span)^(1/E), below the mean 0.75.
+  const one = rules.geomeanFitness([0, 1, 1, 1], [500, 2000, 2000, 2000]);
+  close(one, (1 / 500) ** (1 / 4), 1e-12);
+  assert.ok(one < 0.75);
+  // Several failing stages drive it towards 0.
+  assert.ok(rules.geomeanFitness([0, 0, 0, 1], [5000, 5000, 5000, 5000]) < 0.002);
+  // The floor is per episode (its own span) and only applies below it.
+  close(rules.geomeanFitness([0, 0], [100, 400]), Math.sqrt(1 / 100 * 1 / 400), 1e-12);
+  close(rules.geomeanFitness([0.5, 0.002], [100, 400]), Math.sqrt(0.5 * 0.0025), 1e-12);
+  assert.ok(Number.isFinite(rules.geomeanFitness([0, 0], [1, 1])));
+});
+
+test('checkConfig: --fitness-agg and --window-adapt-every', () => {
+  const { DEFAULTS, checkConfig } = require('../trainer/cli.js');
+  const cur = { window: 500, target: 3000, startDist: 'points', startZeroCap: 500 };
+  checkConfig({ ...DEFAULTS, ...cur, fitnessAgg: 'geomean', windowAdapt: true, windowAdaptEvery: 3 });
+  assert.throws(() => checkConfig({ ...DEFAULTS, fitnessAgg: 'geomean' }), /geomean needs/);
+  assert.throws(() => checkConfig({ ...DEFAULTS, ...cur, fitnessAgg: 'median' }), /fitness-agg/);
+  assert.throws(() => checkConfig({ ...DEFAULTS, windowAdaptEvery: 0 }), /window-adapt-every/);
+  assert.throws(() => checkConfig({ ...DEFAULTS, windowAdaptEvery: 2.5 }), /window-adapt-every/);
+});

@@ -25,9 +25,15 @@
 //                         (default), or uniform in points on [start-min, target) with
 //                         the window clipped at target (span = target - start)
 //   --start-zero-cap P    start-0 episodes end at P points (default: --window as first set)
-//   --window-adapt        after each generation, window x1.5 if >60% of late windows
-//                         were passed, /1.5 if <30%; clamped to [5000, target]. Needs
-//                         --start-dist points. The current window is checkpointed.
+//   --window-adapt        every --window-adapt-every generations (default 5), on the pass
+//                         rates pooled since the last decision: window /1.5 while <30% of
+//                         start-0 episodes passed; once >60% did (or there are none),
+//                         window x1.5 if >60% of late windows were passed, /1.5 if <30%;
+//                         clamped to [5000, target] (a shrink never grows the window).
+//                         Needs --start-dist points. The window and counts are checkpointed.
+//   --fitness-agg mean|geomean  per-candidate fitness over its episodes: mean (default) or
+//                         geometric mean of max(progress, 1/span), so a failing stage
+//                         (e.g. the opening) dominates. geomean needs --window.
 // These can be changed (or the curriculum turned on/off) on --resume.
 //
 // Selection and stopping:
@@ -50,9 +56,12 @@
 //                         antithetic pairs zero weight)
 //   --decay coupled|decoupled  coupled (default): --weight-decay is L2 inside Adam's
 //                         gradient; decoupled (AdamW): θ *= 1 - lr * weight-decay after
-//                         each step, so use a larger value (~0.1)
+//                         each step, so use a larger value (~0.01; 0.1 slowed the climb)
 //   --stall-rule          if >50% of antithetic pairs tie, skip the Adam step and widen
-//                         sigma x1.5 for the next generation (at most 4x); reset when not
+//                         sigma x1.5 for the next generation (at most 4x); reset when not.
+//                         Kept only to reproduce Run A; not recommended: in 900-generation
+//                         replays (32,32, decoupled wd 0.01) it skipped 65-70% of steps and
+//                         escaped the plateau in 0 of 3 seeds.
 //   --sigma-scale none|fanin  per-parameter sigma: fanin scales layer l's weights by
 //                         sqrt(44 / fanIn_l) (biases keep sigma)
 //   --sigma-anneal        sigma *= 0.8 (floor --sigma-min, default 0.02, at most every 10
@@ -77,8 +86,8 @@ const { modelToCss } = require('./css-model.js');
 const { runEpisode, median, windowFitness, validationSeeds, evalSeeds } = require('./env.js');
 const { gaussian, sigmaVector, esGradient, adamStep } = require('./es.js');
 const {
-  valSummary, isBetter, parseStopRule, wantHeldOut, sequentialAllPass, tiedPairs, stallUpdate, annealUpdate, adaptWindow,
-  splitFolded, clopperPearson, drawGeneration,
+  valSummary, isBetter, parseStopRule, wantHeldOut, sequentialAllPass, tiedPairs, stallUpdate, annealUpdate,
+  gatedAdaptWindow, emptyAdaptAcc, geomeanFitness, splitFolded, clopperPearson, drawGeneration,
 } = require('./rules.js');
 const { createPool, defaultWorkers } = require('./pool.js');
 const { ROOT, coreHash, writeAtomic, writeJsonAtomic, readJson, acquireLock } = require('./store.js');
@@ -106,6 +115,8 @@ const DEFAULTS = {
   startDist: 'log',       // curriculum: late start distribution (log | points)
   startZeroCap: null,     // curriculum: end of start-0 episodes (null: the window when first set)
   windowAdapt: false,     // curriculum: adapt the window to the late-window pass rate
+  windowAdaptEvery: 5,    // curriculum: generations between window adaptation decisions
+  fitnessAgg: 'mean',     // curriculum: per-candidate episode aggregate (mean | geomean)
   select: 'median',       // best-model selection (median | count)
   stopRule: 'median',     // held-out stop rule (median | allpass[:N])
   valSeeds: 25,           // validation seeds
@@ -122,7 +133,8 @@ const DEFAULTS = {
 // Keys added after the first checkpoints: backfilled from DEFAULTS when resuming
 // checkpoints that predate them (their defaults reproduce the old behaviour).
 const BACKFILL = ['window', 'startZeroFrac', 'startMin', 'startDist', 'startZeroCap', 'windowAdapt', 'select', 'stopRule',
-  'valSeeds', 'evalWhenFitMax', 'foldValidation', 'rankTies', 'decay', 'stallRule', 'sigmaScale', 'sigmaAnneal', 'sigmaMin', 'pairEpisodes'];
+  'valSeeds', 'evalWhenFitMax', 'foldValidation', 'rankTies', 'decay', 'stallRule', 'sigmaScale', 'sigmaAnneal', 'sigmaMin', 'pairEpisodes',
+  'windowAdaptEvery', 'fitnessAgg'];
 // Settings that change the parameter layout or the policy's behaviour cannot change on resume.
 const STRUCTURAL = ['hidden', 'actionRepeat', 'gameVersion'];
 
@@ -136,7 +148,8 @@ const FLAG_TO_KEY = {
   '--start-dist': ['startDist', String], '--start-zero-cap': ['startZeroCap', Number],
   '--select': ['select', String], '--stop-rule': ['stopRule', String], '--val-seeds': ['valSeeds', Number],
   '--rank-ties': ['rankTies', String], '--decay': ['decay', String], '--sigma-scale': ['sigmaScale', String],
-  '--sigma-min': ['sigmaMin', Number],
+  '--sigma-min': ['sigmaMin', Number], '--window-adapt-every': ['windowAdaptEvery', Number],
+  '--fitness-agg': ['fitnessAgg', String],
 };
 // Boolean config options: --x sets true, --no-x sets false.
 const BOOL_TO_KEY = {
@@ -200,6 +213,9 @@ function checkConfig(c) {
   oneOf(c, 'sigmaScale', '--sigma-scale', ['none', 'fanin']);
   if (!(Number.isInteger(c.valSeeds) && c.valSeeds > 0)) throw new Error('--val-seeds must be a positive integer');
   if (c.sigmaAnneal && !(c.sigmaMin > 0)) throw new Error('--sigma-min must be > 0');
+  oneOf(c, 'fitnessAgg', '--fitness-agg', ['mean', 'geomean']);
+  if (c.fitnessAgg === 'geomean' && !(c.window > 0)) throw new Error('--fitness-agg geomean needs the curriculum (--window)');
+  if (!(Number.isInteger(c.windowAdaptEvery) && c.windowAdaptEvery > 0)) throw new Error('--window-adapt-every must be a positive integer');
   checkCurriculum(c);
 }
 
@@ -262,6 +278,7 @@ async function train({ config: cli, opts }) {
       sigma: 'sigma' in cli || ck.sigma == null ? config.sigma : ck.sigma,
       stallMult: ck.stallMult ?? 1, annealedAt: ck.annealedAt ?? null, lastValMin: ck.lastValMin ?? null,
       window: 'window' in cli || ck.window == null ? config.window : ck.window,
+      adaptAcc: ck.adaptAcc ?? emptyAdaptAcc(),
     };
     log(`resuming ${ckptFile} at generation ${st.generation}`);
   } else {
@@ -278,6 +295,7 @@ async function train({ config: cli, opts }) {
       adam: { t: 0, m: new Float64Array(theta.length), v: new Float64Array(theta.length) },
       rngState: rng.getState(), best: null, cumulativeMs: 0, lastValidated: -1, heldOut: null,
       sigma: config.sigma, stallMult: 1, annealedAt: null, lastValMin: null, window: config.window,
+      adaptAcc: emptyAdaptAcc(),
     };
     for (const f of ['metrics.jsonl', 'metrics.csv']) fs.rmSync(path.join(dir, f), { force: true });
   }
@@ -309,7 +327,7 @@ async function train({ config: cli, opts }) {
       adam: { t: st.adam.t, m: Array.from(st.adam.m), v: Array.from(st.adam.v) },
       rngState: st.rngState, best: st.best, lastValidated: st.lastValidated, heldOut: st.heldOut,
       sigma: st.sigma, stallMult: st.stallMult, annealedAt: st.annealedAt, lastValMin: st.lastValMin, window: st.window,
-      cumulativeMs: committedMs(), workers,
+      adaptAcc: st.adaptAcc, cumulativeMs: committedMs(), workers,
     });
     if (reason !== 'periodic') log(`checkpoint saved: generation ${st.generation} (${reason}) -> ${ckptFile}`);
   }
@@ -409,8 +427,9 @@ async function train({ config: cli, opts }) {
     const { train: results, val: valResults } = splitFolded(await pool.run(setup, jobs), config.popSize);
 
     // Fitness: mean capped score, using fractional distance for a finer signal.
-    // With the curriculum: mean progress through each episode's span, in [0, 1].
-    let latePassed = 0, lateTotal = 0, reachedTarget = false;
+    // With the curriculum: mean (or --fitness-agg geomean) progress through each episode's
+    // span, in [0, 1]; the start-0/late pass counts feed --window-adapt.
+    let latePassed = 0, lateTotal = 0, zeroPassed = 0, zeroTotal = 0, reachedTarget = false;
     const zeroStartScores = [];
     const fitness = results.map((r, i) => {
       const { starts, caps } = pairEp[i >> 1];
@@ -418,11 +437,19 @@ async function train({ config: cli, opts }) {
         zeroStartScores.push(...r.scores);
         return r.distances.reduce((a, d) => a + Math.min(d * CFG.scoreCoef, config.target), 0) / r.distances.length;
       }
-      return r.distances.reduce((a, d, j) => {
-        const f = windowFitness(d, starts[j], caps[j] - starts[j]);
-        if (starts[j] === 0) zeroStartScores.push(r.scores[j]);
+      const tally = (f, j) => {
+        if (starts[j] === 0) { zeroStartScores.push(r.scores[j]); zeroTotal++; if (f === 1) zeroPassed++; }
         else { lateTotal++; if (f === 1) latePassed++; }
         if (f === 1 && caps[j] >= config.target) reachedTarget = true;
+      };
+      if (config.fitnessAgg === 'geomean') {
+        const progress = r.distances.map((d, j) => windowFitness(d, starts[j], caps[j] - starts[j]));
+        progress.forEach(tally);
+        return geomeanFitness(progress, caps.map((c, j) => c - starts[j]));
+      }
+      return r.distances.reduce((a, d, j) => {
+        const f = windowFitness(d, starts[j], caps[j] - starts[j]);
+        tally(f, j);
         return a + f;
       }, 0) / r.distances.length;
     });
@@ -446,7 +473,15 @@ async function train({ config: cli, opts }) {
     st.rngState = rng.getState();
     st.generation++;
     st.stallMult = stall.stallMult;
-    if (cur && config.windowAdapt && lateTotal > 0) st.window = adaptWindow(st.window, latePassed / lateTotal, config.target);
+    if (cur && config.windowAdapt) {
+      const acc = st.adaptAcc;
+      st.adaptAcc = { zeroPassed: acc.zeroPassed + zeroPassed, zeroTotal: acc.zeroTotal + zeroTotal,
+        latePassed: acc.latePassed + latePassed, lateTotal: acc.lateTotal + lateTotal };
+      if (st.generation % config.windowAdaptEvery === 0) {
+        st.window = gatedAdaptWindow(st.window, st.adaptAcc, config.target);
+        st.adaptAcc = emptyAdaptAcc();
+      }
+    }
     let val = null;
     if (config.foldValidation) val = recordValidation(valResults.map(r => r.scores[0]), preTheta, st.generation - 1);
     st.cumulativeMs += Date.now() - lastCommitAt;
@@ -658,7 +693,7 @@ async function main() {
   await cmd(args);
 }
 
-module.exports = { exportModel, evalHeldOut, loadModel, DEFAULTS };
+module.exports = { exportModel, evalHeldOut, loadModel, DEFAULTS, checkConfig };
 
 if (require.main === module) main().catch((e) => {
   console.error(`error: ${e.message}`);
