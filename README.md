@@ -29,6 +29,7 @@ node trainer/cli.js bc-train --dir runs/exp-bc-mine --hidden 32,32              
 - `--hidden` sets the layers, for example `8`, `8,8` or `32,32`.
 - After training it plays 25 validation games to `--target` (default 1,000,000).
 - It writes `best.json` (the model) and `bc-metrics.jsonl` (loss and per-class recall for each epoch: none, jump, and duck when present).
+- Optional, off by default: `--distill-from <best.json> [--distill-mode soft|hard] [--tau T] [--alpha A]` learns from another model's logits (distillation), `--quant-bits N` trains with quantized weights, and `bc-quantize --from <best.json> --dir <run> --quant-bits N` quantizes a trained model after the fact. Details are in the `trainer/cli.js` header.
 
 **3. Evaluate on held-out seeds:**
 ```sh

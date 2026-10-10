@@ -16,7 +16,10 @@
 //     says behaviour cloning): per-epoch loss, recall for every class key in the rows, and
 //     seconds per epoch; the demos manifest (config.demos, or the bc-train log line while
 //     training); best.json's validation; evals.jsonl; snapshots/epoch-NN.json. Teacher =
-//     config.teacherName / the manifest's teacherName, else teacher-jump.
+//     config.teacherName / the manifest's teacherName, else teacher-jump. Distilled runs
+//     (config.distillFrom) and quantized runs (config.quant: bc-train --quant-bits, or
+//     bc-quantize with config.quantFrom) also carry bc.distill / bc.quant (teacher model
+//     path, sha256, tau, mode, alpha; bits, scheme, levels, source), live from the log line.
 //   Demos runs (bc-gen; demos.json only): the manifest summary and teacher playback.
 // Running = train.lock with a live pid (train, bc-train), or a bc-gen temp file
 // demos.bin.<pid>.tmp with a live pid (bc-gen takes no lock). A nested run with no *.log
@@ -169,7 +172,10 @@ function trainLineIn(dir, name) {
   const line = readLines(f).find(l => l.includes('bc-train: dir='));
   if (!line) return null;
   const g = (re) => { const m = re.exec(line); return m ? m[1] : null; };
-  return { backend: g(/backend=(\S+)/), layers: g(/layers=([\d-]+)/), epochs: Number(g(/ epochs (\d+)/)) || null, demos: g(/ demos (\S+)/) };
+  return { backend: g(/backend=(\S+)/), layers: g(/layers=([\d-]+)/), epochs: Number(g(/ epochs (\d+)/)) || null, demos: g(/ demos (\S+)/),
+    distill: g(/ distill=(\S+)/) ? { mode: g(/ distill=(\S+)/), tau: g(/ tau=(\S+)/) !== null ? Number(g(/ tau=(\S+)/)) : null,
+      alpha: g(/ alpha=(\S+)/) !== null ? Number(g(/ alpha=(\S+)/)) : null, from: g(/ from=(\S+)/) } : null,
+    quant: g(/ quant=int(\d+)\//) ? { bits: Number(g(/ quant=int(\d+)\//)), scheme: g(/ quant=int\d+\/(\S+)/), mode: 'qat' } : null };
 }
 const trainLine = (name) => trainLineIn(path.join(RUNS, name), name);
 
@@ -196,6 +202,24 @@ function demosSummary(file) {
 function snapshotList(dir) {
   return listDir(path.join(dir, 'snapshots')).filter(e => e.isFile() && /^epoch-\d+\.json$/.test(e.name))
     .map(e => ({ name: e.name.slice(0, -5), epoch: Number(e.name.slice(6, -5)) })).sort((a, b) => a.epoch - b.epoch);
+}
+
+// Distillation (bc-train --distill-from) and quantization (--quant-bits, bc-quantize):
+// from best.json's config, or from the bc-train start line while training.
+function distillSummary(cfg, live) {
+  if (cfg && cfg.distillFrom) {
+    return { mode: cfg.distillMode || 'soft', tau: cfg.tau ?? null, alpha: cfg.alpha ?? null, from: cfg.distillFrom.path,
+      paramsSha256: cfg.distillFrom.paramsSha256 || null, layers: cfg.distillFrom.layers || null, teacherName: cfg.distillFrom.teacherName || null };
+  }
+  return live && live.distill ? { ...live.distill, paramsSha256: null, layers: null, teacherName: null } : null;
+}
+function quantSummary(cfg, live) {
+  if (cfg && cfg.quant) {
+    const q = cfg.quant;
+    return { bits: q.bits, scheme: q.scheme, mode: q.mode, levels: q.levels ?? null, biases: q.biases || null,
+      from: cfg.quantFrom ? cfg.quantFrom.path : null, fromSha256: cfg.quantFrom ? cfg.quantFrom.paramsSha256 : null };
+  }
+  return live && live.quant ? { ...live.quant, levels: null, biases: 'float', from: null, fromSha256: null } : null;
 }
 
 function bcInfo(name, kind) {
@@ -238,6 +262,8 @@ function bcInfo(name, kind) {
       demos,
       demosRef: (cfg && cfg.demos) || (live && live.demos) || null,
       snapshots: snapshotList(dir),
+      distill: distillSummary(cfg, live),
+      quant: quantSummary(cfg, live),
     },
     last,
     updated,

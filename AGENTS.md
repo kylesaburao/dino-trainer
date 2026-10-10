@@ -48,6 +48,7 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend pytho
 - `bc-gen --teacher jump|duck` picks the teacher (default `jump` = `createSolver`, byte-identical demos to before; `duck` = `createDuckSolver`, label 2 = down key). The manifest records `teacherName`, `bc-train` copies it into the `best.json` config, and recall gains a `duck` key only when duck rows exist.
 - `bc-train` refuses demos from another core hash unless `--force`. The flags are in the `trainer/cli.js` header.
 - `bc-train --backend python --snapshots` also writes each epoch's params to `<dir>/snapshots/epoch-NN.json` (gitignored research output); it leaves training unchanged. The node backend rejects it.
+- Distillation and quantization (both backends, off by default, defaults bit-identical): `bc-train --distill-from <best.json> [--distill-mode soft|hard] [--tau T] [--alpha A]` (Hinton soft targets or the teacher's argmax; `config.distillFrom` records path and params sha256), `--quant-bits N [--quant-scheme row|layer]` (QAT, symmetric int weights stored as q × scale, still `dino-mlp-v1`), and `bc-quantize --from <best.json> --dir <run> --quant-bits N` (post-training). Definitions in the `trainer/bc.js` header; plan in `research/prereg-distill.md`.
 
 The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale. `runs/main` no longer exists. Pass both explicitly.
 
