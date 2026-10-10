@@ -317,3 +317,23 @@ s12 and s4 (frozen `runs/exp-bp-start`) run in abl and cur only. They are read *
 - abl ≤ cur (R ≥ 1, including "abl clears, cur censored") on **≥ 4/5** → the round-1 gain is attributed to the episode count, and B′'s late windows are pruned at this scope.
 - Otherwise → unresolved.
 - **The register row stays "B′ as specified: promising, confirmation pending" whatever the result.** Promotion needs fresh θs, which is out of scope this round.
+
+### 10.9 Stopped by the user before completion (time); no reading applied
+
+At 19:23Z on 2026-10-10 the user stopped the round-2 attribution batch: the project moves to the ducking solver (teacher-duck). The running trainer got SIGINT and saved its checkpoint. No further arm was started. **No reading in §10.8 (or in `research/prereg-es-ramp.md`) is applied.**
+
+Arms that ran. This is **partial, and NOT read against the registered thresholds**:
+
+| Run | Status | Generations | Training frames | Note |
+|---|---|---|---|---|
+| exp-bp2-s7-cur | complete (replication gate) | 1500 → 1710 event (confirmed 1720) | 988M | Bit-identical to round 1's exp-bp-s7-cur on all 220 gens (6 fields, 0 mismatches) |
+| exp-bp2-s5-abl | **interrupted** (SIGINT) | 1435 → 1543 (108 gens) | ~0.4B | No event; checkpoint at gen 1543 kept |
+
+Not run: abl on s7, s8, s9, s15, s12 and s4; cur on s15; ramp on all θs and controls. cur on s5, s8 and s9 is round 1's, linked as `runs/exp-bp2-sS-cur`.
+
+**Register:** "B′ as specified: promising, confirmation pending; attribution round incomplete."
+
+**To resume later:**
+- Checkpoints and start θs stay in place: `runs/exp-bp-start`, `runs/exp-bp2-start` and `runs/exp-bp2-s5-abl` on the desktop host.
+- `tools/run-bp2.sh` skips any directory that already has a checkpoint, so continue s5-abl by hand: `train --resume --dir runs/exp-bp2-s5-abl` with the same flags plus `event-watch --after 1435 --max-frames 1e10`. The frame budget counts from 1435.
+- Then rerun the runner for the remaining arms.
