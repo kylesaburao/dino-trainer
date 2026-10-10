@@ -207,21 +207,25 @@ Notes:
 
 **Reading A** (B′ event on ≥ 3 of 4 stuck θs with R ≤ 1/4 or hygiene censored, controls within H, no opening loss): **met.**
 - s9 qualifies with R ≤ 0.07. s5 and s8 qualify because hygiene was censored. s7 doesn't qualify (R = 0.44).
-- **Register: "dense late exposure transfers down to the second wall" → promising, confirmation pending** (§4.5).
+- **Register: B′ as specified → promising, confirmation pending** (§4.5). The attribution to late exposure (the row's name) is untested; see Hypotheses below.
+- Reading E doesn't apply: hygiene cleared only 1 of 4 stuck θs.
 
-**Caveat on the primary metric (frames), stated plainly:**
+**Limitation: the primary metric (frames).** This doesn't change the verdict above; the confirmation round fixes it.
 - The horizon was set in **generations**. B′ generations cost more frames: about 2–6× more after the wall starts to give, because the late windows lengthen as the policy improves.
 - On s5 and s8, B′ used **more frames to clear (5.2B, 8.2B) than hygiene had spent when it was censored (4.4B, 3.9B)**. Their ratios are only bounded by R ≤ 1.19 and R ≤ 2.11. So on s5 and s8 B′ is shown to clear in generations, **not** shown to be cheaper in compute.
 - On the frames ratio alone, only **s9 (R ≤ 0.07)** is a decisive win. s7 (0.44) and s12 (0.46) favour B′ within chaos, and the **s4 control goes against it (R = 6.76)**.
-- By the strict ratio rule (R ≤ 1/4 on ≥ 3 of 4), the result is **inconclusive in compute terms**, and positive only in generations to clear.
 
 **Hypotheses:**
-- **H1** (curriculum irrelevant) is contradicted by the counts: 4/4 vs 1/4 under paired starts.
+- B′ changes three things at once: the late windows, 8 episodes per candidate instead of 4, and progress/geomean fitness. This design can't separate them.
+- **H1** (curriculum irrelevant) is contradicted **in generations** (4/4 vs 1/4 under paired starts). It is **not excluded per unit of compute** on type M (s5, s8).
 - **H3 alone** (tie-breaking without transfer) is excluded by s9. Ties fell from 0.91 to 0.19, but s9 also **cleared the wall in 33 generations** after 1000 + 2000 hygiene generations stuck at 580.
 - **H4** (opening loss) is not seen.
-- **H2** (dense late exposure transfers) is the surviving hypothesis. It is strongest for the type-T failure (s9), and weaker or compute-neutral for type M (s5, s8).
+- **H2** (dense late exposure transfers) is **not established.** On type M (s5, s7 and s8 had about 0 ties), less noisy fitness from 8 episodes, or the geomean aggregation, explains the gains as well as late exposure does. Only s9 points specifically at the late windows (its from-0 ties were broken by late-window variation), and that is n = 1.
 
 ### 9.2 Recommended confirmation (§4.5), amended by this result
 - Use about 10 more escaped-and-stuck θs (hygiene survey seeds 13–30, `--wasm`), paired as here.
-- **Censor both arms on a matched frames budget** (e.g. 6B training frames), not on generations, so the primary metric compares equal compute.
+- **Censor both arms on a matched frames budget**, not on generations, so the primary metric compares equal compute.
+  - Size it at ≥ 1.25× the largest B′ spend seen here (s8-cur 8.2B), so **≥ ~10B training frames**.
+  - At the hygiene arm's measured 3.9–4.4B frames per 2000 stuck generations (about 10–12 min), a hygiene arm censored at 10B takes about 25–30 min on this host. Raise `--time-budget` to 45.
+- **Add an ablation arm, hyg + `--episodes 8`** (no curriculum), to separate the episode count from the late windows and the fitness reshaping. If it matches B′ on type M, the gain there isn't late exposure.
 - Report the split by failure type (T vs M) using `tools/wall-diag.js` on each start θ.
