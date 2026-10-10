@@ -1,6 +1,6 @@
 # Pre-registration: what is the smallest clone that is as reliable as the shipped 44-32-32-3?
 
-Status: **registered.** Author: mac-3, 2026-10-10, on main `0e334ff`.
+Status: **superseded by `research/prereg-bc-sweep.md`**, which reuses its Step 0, gate, certification rung and readings. Not run on its own. Author: mac-3, 2026-10-10, on main `0e334ff`.
 
 The user's goal (chosen 2026-10-10): **a smaller, faster model.**
 
