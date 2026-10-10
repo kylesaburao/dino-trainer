@@ -11,8 +11,8 @@
 //   v2 - identical to v1 up to 1,000 points, then progressively harder on a log
 //        scale up to 1,000,000 points (see V2 below). Same physics, sprites,
 //        observations and fairness model, so every sequence stays survivable.
-//   v3 - identical to v2 up to 100,000 points; from there a second log-scale
-//        segment (see V3 below) raises the speed cap toward superhuman reaction
+//   v3 - identical to v2 up to 100,000 points; there the speed cap steps up, then
+//        a second log-scale segment (see V3 below) raises it toward superhuman reaction
 //        budgets, and the fairness model anchors each takeoff late in its window
 //        so the canonical (solver) action comes after the obstacle is visible.
 //        The v2 schedule of every other rule continues unchanged.
@@ -375,16 +375,23 @@ function difficulty(version, score) {
 // ---------------------------------------------------------------------------
 // Rules v3: the v2 schedule (d above) plus a second level e that rises on a log
 // scale from 0 at 100,000 points to 1 at V3.endScore (e = log10(score / 100k) /
-// log10(endScore / 100k)) and stays at 1 after that. Only the V3 levers change:
-// each moves from its v2 value at 100k (d = 2/3) toward its V3 value as e^curve.
-// Every other rule keeps following v2. research/game-v3.md has the definition
-// (a reaction budget below 150 ms) and the probe that chose these numbers.
+// log10(endScore / 100k)) and stays at 1 after that. Only the speed cap changes:
+// it STEPS at 100k from v2's 19 to stepSpeed, then rises toward maxSpeed as
+// e^curve. Every other rule keeps following v2. research/game-v3.md has the
+// definition (a reaction budget below 150 ms) and the probe that chose these numbers.
+//
+// The step itself (createGame update()): once e > 0, obstacle spawning pauses
+// until the track is empty and the dino is on the ground; then the speed jumps
+// to the cap in one frame and spawning resumes. No obstacle placed at the old
+// speed is ever on the track at the new one, so the fairness model (whose
+// intervals are in frames, and frames per pixel change with speed) stays exact.
 // ---------------------------------------------------------------------------
 const V3 = {
   startScore: 100000,      // e = 0 below (v3 is exactly v2 there)
   endScore: 1000000,       // e = 1 from here on
-  maxSpeed: 60,            // speed cap at e = 1 (v2 at 100k: 19; v2 at 1M: 22)
-  curve: 0.5,              // lever value moves as e^curve (< 1: front-loaded)
+  stepSpeed: 41,           // speed cap just above 100k (v2 at 100k: 19)
+  maxSpeed: 60,            // speed cap at e = 1 (v2 at 1M: 22)
+  curve: 1,                // the cap moves as e^curve (1: plain log scale)
 };
 
 function superLevel(version, score) {
@@ -408,8 +415,7 @@ function rulesAt(d, r, e = 0) {
   r.maxGroup = d >= V2.groupOf4Level ? 4 : 3;
   r.superLevel = e;
   if (e > 0) {
-    const base = lerp(CFG.maxSpeed, V2.maxSpeed, difficulty('v2', V3.startScore));
-    r.maxSpeed = lerp(base, V3.maxSpeed, Math.pow(e, V3.curve));
+    r.maxSpeed = lerp(V3.stepSpeed, V3.maxSpeed, Math.pow(e, V3.curve));
   }
   return r;
 }
@@ -610,8 +616,11 @@ function createGame(opts) {
     obstacles = obstacles.filter(o => o.x + o.w > 0);
 
     const last = obstacles[obstacles.length - 1];
-    if (runTime > CFG.clearTime && (!last || last.x + last.w + last.gap < W)) spawnObstacle();
+    if (runTime > CFG.clearTime && !stepPending() && (!last || last.x + last.w + last.gap < W)) spawnObstacle();
   }
+
+  // Rules v3 only: the speed step at 100k is due but not yet taken (see V3).
+  const stepPending = () => rules.superLevel > 0 && speed < V3.stepSpeed;
 
   // -------------------------------------------------------------------------
   // Horizon: ground, clouds, night sky (state only; the shell draws it)
@@ -673,6 +682,8 @@ function createGame(opts) {
     runTime += ms;
     runFrames++;
     if (version !== 'v1') setRules();
+    // Rules v3: take the speed step once the track is clear and the dino has landed.
+    if (stepPending() && obstacles.length === 0 && !dino.jumping) speed = rules.maxSpeed;
     if (speed < rules.maxSpeed) speed = Math.min(rules.maxSpeed, speed + CFG.accel * dt);
     distance += speed * dt;
 

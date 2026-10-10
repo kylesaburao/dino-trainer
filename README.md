@@ -9,7 +9,7 @@ Open `index.html` in a browser, directly over `file://`. There is no build step.
 **Game rules.** Add `?game=v1`, `?game=v2` or `?game=v3` to the URL of either page to pick the rules; by default a page plays the rules its model was trained for. Each version keeps its own high score.
 - **rules v1**: the original game; difficulty stops rising at about 1,700 points.
 - **rules v2**: v1 up to 1,000 points, then harder on a log scale up to 1,000,000 points (speed cap 13 → 22, more pterodactyls, tighter gaps).
-- **rules v3**: v2 up to 100,000 points, then the speed cap climbs to 60 px/frame by 1,000,000. From about 200,000 points most obstacles leave less than 150 ms between appearing on screen and the last moment to jump or duck, beyond human reaction time; every sequence stays solvable by an exact solver. See `research/game-v3.md`.
+- **rules v3**: v2 up to 100,000 points. At 100k the speed jumps from 19 to 41 px/frame (after a moment of empty track), then climbs to 60 by 1,000,000. From the jump on, most obstacles leave less than 150 ms between appearing on screen and the last moment to jump or duck, beyond human reaction time; every sequence stays solvable by an exact solver. See `research/game-v3.md`.
 
 To score a model on other rules than it was trained for: `node trainer/cli.js eval --dir <run> --game v3 ...` (it warns that this is a cross-rules evaluation). Train for rules v3 with `--game v3` (`train`, `bc-gen`).
 

@@ -59,9 +59,33 @@ test('v3 schedule: e rises on a log scale from 100k; only the speed cap departs 
     assert.ok(v3.maxSpeed > v2.maxSpeed, `speed cap at ${s}`);
   }
   assert.strictEqual(rulesAt(1, {}, 1).maxSpeed, C.V3.maxSpeed);
-  // Continuous at 100k: the segment starts from the v2 cap there.
-  const at100k = rulesAt(C.difficulty('v2', 100000), {}).maxSpeed;
-  assert.ok(Math.abs(rulesAt(C.difficulty('v3', 100001), {}, e(100001)).maxSpeed - at100k) < 0.2);
+  // A step at 100k: v2's cap up to 100k, then V3.stepSpeed rising to V3.maxSpeed.
+  assert.strictEqual(rulesAt(C.difficulty('v3', 100000), {}, e(100000)).maxSpeed, rulesAt(C.difficulty('v2', 100000), {}).maxSpeed);
+  assert.ok(Math.abs(rulesAt(C.difficulty('v3', 100001), {}, e(100001)).maxSpeed - C.V3.stepSpeed) < 0.01);
+});
+
+test('v3 speed step at 100k: spawning pauses, the speed jumps on a clear track, both solvers survive', () => {
+  for (const [name, mk] of [['jump', createSolver], ['duck', createDuckSolver]]) {
+    for (let seed = 1; seed <= 6; seed++) {
+      const g = C.createGame({ rng: C.createRng(3500 + seed), version: 'v3', startScore: 98000 });
+      const act = mk();
+      let eAt = -1, stepAt = -1, prev = g.speed;
+      do {
+        g.step(act(g));
+        if (eAt < 0 && g.superLevel > 0) eAt = g.frameIndex;
+        if (stepAt < 0 && g.speed - prev > 1) {
+          stepAt = g.frameIndex;
+          assert.ok(eAt >= 0 && prev < 20 && g.speed >= C.V3.stepSpeed, `${name} ${seed}: ${prev} -> ${g.speed}`);
+          // Nothing placed at the old speed is on the track at the new one.
+          assert.ok(g.obstacles.every(o => o.late), `${name} ${seed}: pre-step obstacle on the track`);
+          assert.ok(!g.dino.jumping);
+        }
+        prev = g.speed;
+      } while (g.state === 'running' && g.score() < 110000);
+      assert.strictEqual(g.state, 'running', `${name} seed ${seed} crashed at ${g.score()}`);
+      assert.ok(stepAt > eAt && stepAt - eAt < 120, `${name} ${seed}: pause ${stepAt - eAt} frames`);
+    }
+  }
 });
 
 test('v3 late anchors: obstacles spawned past 100k are anchored late, never on v1/v2', () => {

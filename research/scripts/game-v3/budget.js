@@ -1,7 +1,7 @@
 'use strict';
 // Reaction-budget probe for rules v3 (research/game-v3.md). Single thread, seconds.
 //
-//   node research/scripts/game-v3/budget.js [--versions v2,v3] [--levels 100000,110000,150000,200000,500000,1000000]
+//   node research/scripts/game-v3/budget.js [--versions v2,v3] [--levels 99000,101000,110000,150000,200000,500000,1000000]
 //        [--games 12] [--span 2000] [--teacher jump|duck|both] [--set maxSpeed=60,curve=0.5] [--json]
 //
 // Plays solver-driven games (test/solver.js createSolver / createDuckSolver) from each
@@ -28,7 +28,7 @@ const { requirement, jumpArc } = C._internal;
 
 const arg = (name, def) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : def; };
 const versions = arg('--versions', 'v2,v3').split(',');
-const levels = arg('--levels', '100000,110000,150000,200000,500000,1000000').split(',').map(Number);
+const levels = arg('--levels', '99000,101000,110000,150000,200000,500000,1000000').split(',').map(Number);
 const games = Number(arg('--games', 12)), span = Number(arg('--span', 2000));
 const teacher = arg('--teacher', 'both');
 const asJson = process.argv.includes('--json');
