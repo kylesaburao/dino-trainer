@@ -1,17 +1,19 @@
-# Pre-registration (DRAFT): Run B′ curriculum vs hygiene at the second wall
+# Pre-registration: does dense late exposure transfer down to the second wall? (Run B′ vs hygiene)
 
-Status: **draft for mac-2 review. Nothing has been run except the static premise probe in §2.** Author: desktop-1, 2026-10-10, on main `322fcaf`.
+**This experiment does not test the register row "curriculum targeting the 400–800-point zone". That row stays OPEN whatever the result.** B′ never starts an episode in that zone (§1). A curriculum that really does (natural-ramp starts below 2000) is being scoped by desktop-2 and will get its own pre-registration once this one reads out.
+
+Status: **amended per mac-2's review (option (a)); runs gated on the reproduction check (§4.6).** Author: desktop-1, 2026-10-10, on main `322fcaf`.
 Process: retrospective `handoff/2026-10-10T1635Z-retrospective.md` §4 and §6.
 
 ## 1. Decision this informs
 
-Register row (retrospective §6.4): **"Curriculum targeting the 400–800-point zone — OPEN — gated curriculum merged, untrained."**
+**New register row registered by this experiment: "Dense late exposure transfers down to the second wall (Run B′ flags as merged)".** The existing row "curriculum targeting the 400–800-point zone" stays OPEN regardless of the outcome.
 
 The decision: does the merged gated curriculum (Run B′, transfer handoff §7.3) become the default pure-ES recipe for getting an escaped policy through the second wall, or is this design pruned?
 
 Possible register outcomes:
 - **promising, confirmation pending.** B′ clears stuck θs that hygiene doesn't (§5 reading A). That leads to a confirmation run (§4.5), not straight to adoption.
-- **pruned (this design), row stays OPEN for a targeted variant.** No large effect detected (reading B), or B′ is worse (reading C).
+- **pruned (this design).** No large effect detected (reading B), or B′ is worse (reading C).
 - **inconclusive.** Reading D.
 
 **Naming caveat, found in the premise check.** As merged, B′ does **not** put any training episodes in the 400–800-point zone:
@@ -20,7 +22,7 @@ Possible register outcomes:
 - The 400–800 zone is reached only by start-0 episodes. With `--episodes 8 --start-zero-frac 0.5` there are 4 per candidate, the **same count as the hygiene arm's 4 from-0 episodes**.
 - So B′ can affect the wall only through (i) the extra late windows, which contain the same pterodactyl types at higher density (§2), and (ii) reshaped fitness (progress to a 50k cap, geomean).
 
-A curriculum that really starts episodes inside 400–800 needs a code change (natural-ramp starts below 2000) and is **not** tested here. That is the row's reopen trigger if B′ is pruned.
+A curriculum that really starts episodes inside 400–800 needs a code change (natural-ramp starts below 2000) and is **not** tested here.
 
 ## 2. Premise check (static probe, done; `research/scripts/prereg-es-curriculum/late-probe.js` (usage: `node <script> <checkpoint.json> <repo root>`), single-threaded, ~1 min)
 
@@ -42,6 +44,11 @@ What it establishes:
 2. The window will sit at its 5000 floor for the whole test. Start-0 episodes capped at 50k are never passed by a stuck θ (progress ≈ 0.01–0.02), so the gate's start-0 pass rate stays below 30% and `--window-adapt` only shrinks.
 3. For s9, late-window deaths vary (low vs high pteros, different distances), so B′'s fitness is **not** tied the way s9's from-0 fitness is (tiedPairs/64 ≈ 0.9 in the resumed hygiene run). B′ breaks s9's ties by construction. Whether the gradient that results points at the low-ptero skill is the question.
 4. Fitness scale: geomean ranks candidates by Σ ln f_j. A from-0 death at 520 vs 1000 points is Δln ≈ 0.65. A late-window death after 3 vs 8 obstacles is a similar Δln. **The late windows carry roughly half the ranking signal**, and none of it comes from the 400–800 zone itself.
+
+### 2.1 Further premises (checked before the batch; results appended in §8)
+1. **The positive control reproduces on main with `--wasm`** (§4.6).
+2. **`--select count`, `--fold-validation` and `--stop-rule allpass:59` don't move θ.** These are left out of both arms (§4.2). Check: a 5-generation resume of frozen s12, with and without those flags; θ must be bit-identical (checkpoint `theta` arrays compared element-wise).
+3. **Validation cadence (`--eval-every`, `--val-seeds`) doesn't move θ.** This is covered by check 1: the reference resume used `--eval-every 50`, the reproduction uses 10.
 
 ## 3. Competing hypotheses and predictions
 
@@ -91,6 +98,14 @@ Validation doesn't affect the θ trajectory; it is only there to measure the eve
 - **Primary outcome: training frames from the resume point to the event**, Σ `frames` over the logged generations.
   - It is deterministic, unaffected by host contention, and charges B′ for its extra episodes.
   - Censored at G0 + 2000 generations. The 30-minute session budget is a safety cap only and shouldn't bind (§6).
+- **Primary reading: the paired time-to-event ratio per θ, R = B′ frames / hyg frames.** Censoring is handled as bounds:
+  - both clear: R is exact;
+  - B′ clears, hyg censored: R ≤ F_B′ / F_hyg(H), an upper bound;
+  - hyg clears, B′ censored: R ≥ F_B′(H) / F_hyg, a lower bound;
+  - both censored: R unknown, read as "no difference within H".
+  - **Promising at n = 4:** R ≤ 1/4 (B′ at least ~4× fewer frames, using the bound when censored) on ≥ 3 of 4 stuck θs, or B′ clears where hyg is censored on ≥ 3 of 4. Smaller ratios can't be told apart from chaos at n = 4 (§4.5).
+  - **Harmful:** R ≥ 4 on ≥ 3 of 4 stuck θs, by the same rule.
+  - The count readings in §5 are the coarse layer. The horizon is 1.4–2.3× the budget under which these θs were labelled "stuck", so both arms may clear, and then the ratio decides.
 - **Secondary outcomes:**
   - generations to the event;
   - wall time (cumulativeMs) to the event;
@@ -116,13 +131,20 @@ Validation doesn't affect the θ trajectory; it is only there to measure the eve
   4. Adopt only if B′ wins the paired primary outcome on every θ, or by a sign test at α 0.05 (n ≥ 6 → 6/6).
   5. Then certify the resulting model against hygiene on fresh offsets **from 325**.
 
+### 4.6 Launch gate: reproduction check (replaces the zero-generation resume)
+- Resume frozen `ckpt-s12.json` in the **hyg** configuration on main with `--wasm --eval-every 10 --val-seeds 12`, for 100 generations (gen 1500 → 1600).
+- It must replay the earlier ee6995c resume `runs/exp-surv-32x32-s12` **exactly**: fitMean, fitMax and thetaNorm to 1e-9 for every generation 1501–1600 (`tools/diff-metrics.js`), including the crossing of fitMean 2000 at gen 1565.
+- **If it doesn't reproduce: STOP and report.** The positive control would then be invalid.
+- This run doubles as the hyg-s12 arm only if it also reaches the validation event. Otherwise the hyg-s12 arm is rerun in full.
+
 ## 5. Readings (fixed before the run)
 
 | Outcome | Reading | Register action / next step |
 |---|---|---|
-| **A** — B′ event on ≥ 3 of 4 stuck θs, each with fewer frames than its hyg pair (hyg censored counts as more), AND both B′ positive controls reach the event within H, AND no B′ opening loss | Supports H2 (look at the type split: if s9 clears too, H3 alone is excluded) | "promising, confirmation pending" → run the §4.5 confirmation |
+| **A** — B′ event on ≥ 3 of 4 stuck θs with R ≤ 1/4 (or hyg censored) on each of them, AND both B′ positive controls reach the event within H, AND no B′ opening loss | Supports H2 (look at the type split: if s9 clears too, H3 alone is excluded) | "promising, confirmation pending" → run the §4.5 confirmation |
 | **B** — B′ ≤ 1 of 4 stuck θs and hyg ≤ 1 of 4; hyg positive controls reach the event; no B′ harm | H1 (or H3 with no transfer); no effect > ~4× detected | Prune **this design (B′ flags)**, scope = 32,32, these 6 θs, H 2000, ee6995c-equivalent code with `--wasm`. Row stays OPEN for a true 400–800-start curriculum (code change) |
 | **C** — any B′ opening loss (valMedian < 200 at two consecutive validations after +100 gens on any θ), OR a B′ positive control fails to reach the event within H, OR hyg beats B′ on ≥ 3 of 4 stuck θs | H4 | Prune B′ as **harmful in this scope**. Reopen if a curriculum keeps the opening (e.g. lexicographic ranks, archived HANDOFF §9 fix 4) |
+| **E** — both arms clear on ≥ 3 of 4 stuck θs | "Stuck" was a budget artefact; the counts don't discriminate | Read the per-θ ratios R: promising if R ≤ 1/4 on ≥ 3 of 4, harmful if R ≥ 4 on ≥ 3 of 4, otherwise no effect > ~4× detected (prune this design, as in B) |
 | **D** — anything else (e.g. 2 of 4 vs 1 of 4, or type-split results such as B′ clearing s9 but no type-M θ) | Inconclusive at n = 4 | Report the split by failure type. Decide with mac-2 whether the §4.5 confirmation is worth it |
 | **Invalid** — a hyg positive control (s4 or s12) doesn't reach the event within H | The event definition or horizon is wrong; the test can't show success | Fix the event (e.g. val cap or threshold) and rerun the controls before reading anything |
 
@@ -139,3 +161,7 @@ Validation doesn't affect the θ trajectory; it is only there to measure the eve
 - θs from survey seeds 4, 5, 7, 8, 9 and 12 (pre-resume, ee6995c); code at main with `--wasm`.
 - The θs were **selected** for being stuck under hygiene, so regression to the mean affects both arms equally (paired). Results don't generalise to fresh-seed training.
 - B′ also changes the episode count (8 vs 4). With from-0 exposure equal, the comparison is "B′ as specified" vs hygiene, not a pure curriculum effect.
+
+## 8. Premise and launch-gate results
+
+(Appended as they come in.)
