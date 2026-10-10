@@ -181,9 +181,8 @@ Watch live with `node trainer/dashboard.js` (http://127.0.0.1:8080).
 
 ## Next steps
 
-1. **The 759 seed** is now the only gap: 24 of 25 held-out seeds reach 99999.
-2. **Fix the remaining held-out failure:** one seed crashed at 759. A minimum-oriented check (e.g. min or 10th percentile over more seeds) would show whether this is rare bad luck or a gap in skill.
-3. If a higher target plateaus, try in this order:
+1. **Fix the remaining held-out failure.** One seed crashes at 759; the other 24 of 25 reach 99999. A minimum-oriented check would show whether this is rare bad luck or a gap in skill, e.g. the min or 10th percentile over more seeds.
+2. If training plateaus, try in this order:
    - a wider network in a fresh run (`--hidden 64` or `32,32`); width was what broke the 1200 wall;
    - a smaller σ (0.05);
    - more episodes per candidate.
