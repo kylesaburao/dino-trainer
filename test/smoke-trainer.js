@@ -6,7 +6,8 @@
 // completed generation and releases the lock; a concurrent trainer is refused;
 // a stale lock (dead PID) is replaced; --resume continues the generation count;
 // a core-hash mismatch is refused without --force (on a temporary copy of the
-// repo, never the real core); eval and export work on the smoke checkpoint.
+// repo, never the real core); assess (and its deprecated alias eval) and export work
+// on the smoke checkpoint.
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -138,13 +139,27 @@ const waitFor = async (pred, ms = 180000) => {
   fs.rmSync(tmp, { recursive: true, force: true });
   check('real core.js untouched by the mismatch test', () => assert.strictEqual(coreHash(), realHash));
 
-  // 6. eval + export.
-  console.log('--- eval and export');
-  const e = run(['eval', '--dir', DIR, '--which', 'best', '--workers', '3']);
+  // 6. assess + export.
+  console.log('--- assess and export');
+  const ASSESS = path.join(DIR, 'assess.jsonl');
+  const records = () => { try { return fs.readFileSync(ASSESS, 'utf8').trim().split('\n').filter(Boolean).length; } catch (err) { return 0; } };
+  const before = records();
+  const e = run(['assess', '--dir', DIR, '--which', 'best', '--workers', '3']);
   process.stdout.write(e.stdout.replace(/^/gm, '    | '));
-  check('eval runs the 25 held-out seeds', () => {
+  check('assess runs the 25 held-out seeds and appends to assess.jsonl', () => {
     assert.strictEqual(e.status, 0, e.stderr);
-    assert.match(e.stdout, /held-out eval \(25 seeds, cap 10000\)/);
+    assert.match(e.stdout, /held-out assessment \(25 seeds, cap 10000\)/);
+    assert.ok(!/deprecated/.test(e.stderr));
+    assert.strictEqual(records(), before + 1);
+  });
+  const alias = run(['eval', '--dir', DIR, '--which', 'best', '--workers', '3']);
+  check('eval is a deprecated alias of assess: one-line notice, same result', () => {
+    assert.strictEqual(alias.status, 0, alias.stderr);
+    assert.match(alias.stderr, /^note: `eval` is deprecated; use `node trainer\/cli.js assess`/);
+    assert.strictEqual(alias.stderr.trim().split('\n').length, 1);
+    const med = (s) => s.match(/median (\S+)\s+min (\S+)\s+max (\S+)/).slice(1).join(' ');
+    assert.strictEqual(med(alias.stdout), med(e.stdout));
+    assert.strictEqual(records(), before + 2);
   });
   const x = run(['export', '--dir', DIR, '--which', 'best', '--out', path.join(DIR, 'model.js')]);
   process.stdout.write(x.stdout.replace(/^/gm, '    | '));
@@ -164,8 +179,8 @@ const waitFor = async (pred, ms = 180000) => {
     assert.ok(css.includes(`--nn-model-id: "${modelId(model)}";`));
     assert.ok(css.includes('--act:'));
   });
-  const e2 = run(['eval', '--model', path.join(DIR, 'model.js'), '--workers', '1']);
-  check('eval of exported model.js matches eval of best.json', () => {
+  const e2 = run(['assess', '--model', path.join(DIR, 'model.js'), '--workers', '1']);
+  check('assess of exported model.js matches assess of best.json', () => {
     const med = (s) => s.match(/median (\S+)\s+min (\S+)\s+max (\S+)/).slice(1).join(' ');
     assert.strictEqual(med(e2.stdout), med(e.stdout));
   });

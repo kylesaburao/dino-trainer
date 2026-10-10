@@ -6,6 +6,13 @@ A Chrome-dino clone in plain JavaScript with an "AI mode" driven by a small neur
 
 Open `index.html` in a browser, directly over `file://`. There is no build step. Toggle AI mode on the page to watch the shipped model play. `index-css.html` runs the same network in the browser's CSS engine.
 
+**Game rules.** Add `?game=v1`, `?game=v2` or `?game=v3` to the URL of either page to pick the rules; by default a page plays the rules its model was trained for. Each version keeps its own high score.
+- **rules v1**: the original game; difficulty stops rising at about 1,700 points.
+- **rules v2**: v1 up to 1,000 points, then harder on a log scale up to 1,000,000 points (speed cap 13 → 22, more pterodactyls, tighter gaps).
+- **rules v3**: v2 up to 100,000 points. At 100k the speed jumps from 19 to 41 px/frame (after a moment of empty track), then climbs to 60 by 1,000,000. From the jump on, most obstacles leave less than 150 ms between appearing on screen and the last moment to jump or duck, beyond human reaction time; every sequence stays solvable by an exact solver. See `research/game-v3.md`.
+
+To score a model on other rules than it was trained for: `node trainer/cli.js assess --dir <run> --game v3 ...` (it warns that this is a cross-rules assessment). Train for rules v3 with `--game v3` (`train`, `bc-gen`).
+
 ## Train a model
 
 The shipped model is a **behaviour clone**: a small MLP trained by supervised learning to copy an exact solver (`test/solver.js` `createDuckSolver`, which jumps and ducks). The model sees only the 44 allowed `observe()` features. Training takes two steps: generate demonstrations, then train on them.
@@ -31,9 +38,9 @@ node trainer/cli.js bc-train --dir runs/exp-bc-mine --hidden 32,32              
 - It writes `best.json` (the model) and `bc-metrics.jsonl` (loss and per-class recall for each epoch: none, jump, and duck when present).
 - Optional, off by default: `--distill-from <best.json> [--distill-mode soft|hard] [--tau T] [--alpha A]` learns from another model's logits (distillation), `--quant-bits N` trains with quantized weights (`--quant-scheme pow2`: every weight and bias an N-bit integer times one power-of-two scale per layer; `research/scripts/prereg-distill/pack.js` packs it), and `bc-quantize --from <best.json> --dir <run> --quant-bits N` quantizes a trained model after the fact. Details are in the `trainer/cli.js` header.
 
-**3. Evaluate on held-out seeds:**
+**3. Assess on held-out seeds** (`assess`; the old name `eval` still works and prints a deprecation notice):
 ```sh
-node trainer/cli.js eval --dir runs/exp-bc-mine --which best --target 1000000 --seeds 25 --seed-offset 0
+node trainer/cli.js assess --dir runs/exp-bc-mine --which best --target 1000000 --seeds 25 --seed-offset 0
 ```
 This prints the pass rate with a 95% confidence interval.
 
@@ -60,7 +67,7 @@ node trainer/dashboard.js --port 9000     # use another port
 node trainer/dashboard.js --runs /path/to/runs   # read runs from another directory
 ```
 - The dashboard is read-only. It only reads files in each run directory, so it is safe to leave running alongside a trainer.
-- It lists the runs under `runs/`, with live training curves, evaluations and game playback of a run's model.
+- It lists the runs under `runs/`, with live training curves, held-out assessments and game playback of a run's model.
 - To view a remote machine's dashboard, forward the port, for example `ssh -L 8080:127.0.0.1:8080 <host>`.
 - It shows every run under `runs/`, including nested `runs/<group>/<run>` dirs: ES runs (`metrics.jsonl`, checkpoints, evals) and behaviour-cloning runs (`bc-metrics.jsonl` with recall per class, the teacher name, demo manifests, and snapshot epochs you can play). The playback menu also lists every solver in `test/solver.js` (`createSolver`, `createDuckSolver`), so you can watch either teacher play. Reload the page to pick up new solvers.
 - A Scans section lists every game scan (`research/scripts/prereg-bc-robustness/scan.js`) and teacher survey (`survey.js`) JSONL under `runs/`, at any depth, with games done, passes, failure scores and a 95% Clopper–Pearson interval on the failure rate. Each one shows as running, stalled or done, using the pid that scan.js records in the file (older files fall back to the file's mtime). A run's view also lists the scans of its `best.json`.

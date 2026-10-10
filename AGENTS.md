@@ -24,7 +24,8 @@ node test/dashboard-check.js              # headless Chrome check of the dashboa
 There is no build step and no linter. To play, open `index.html` (or `index-css.html`) directly in a browser.
 
 Trainer CLI (`trainer/cli.js`; the header comment lists every option):
-- `train` / `eval` / `export` / `export-css` / `report`
+- `train` / `assess` / `export` / `export-css` / `report`
+- `assess` (held-out assessment) was called `eval` until 2026-10-10 (user order). `eval` still works as a deprecated alias and prints a one-line notice. New records go to `<run>/assess.jsonl`; older runs' `evals.jsonl` were renamed, and every reader (dashboard, `ops.js` report, `scans.js`) merges both names (`readAssessLines` in `trainer/store.js`). Historical pre-registrations still say `eval`.
 - `finish`: eval, export, browser check, report and **git commit**.
 - `session`: `train` followed by `finish`.
 
@@ -72,17 +73,17 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 
 - The BC pipeline is `bc-gen` then `bc-train` (Commands above). The teacher is `test/solver.js`; demonstration features come only from `policy.observe`. Both backends run the same algorithm (a port of the prototype's `trainB.py`): the python backend reproduces the shipped clone's params exactly from the prototype's demos (`--seed 1`), and the node backend needs no dependencies but does not match it bit for bit.
 - `bc-gen` reproduces the prototype's rows (`cloneB.js gen`), except that the boring-frame counter now resets every episode, so a few down-weighted rows differ.
-- To ship a new BC model: `bc-train` into a `runs/bc-*` directory, certify it with `eval`, then `export --dir runs/bc-... --which best`.
+- To ship a new BC model: `bc-train` into a `runs/bc-*` directory, certify it with `assess`, then `export --dir runs/bc-... --which best`.
 
 **Naming scheme (unambiguous; the user asked for it, 2026-10-10).** A bare `v<N>` means **game rules only**. Nothing else is named with a bare version number.
 
 | Thing | Name | Where it appears |
 |---|---|---|
-| Game rules | **rules v1**, **rules v2**; write "rules v2" in prose | `gameVersion: 'v1' \| 'v2'`, `?game=`, `HI_KEY`. The code field is unchanged |
+| Game rules | **rules v1**, **rules v2**, **rules v3**; write "rules v2" in prose | `gameVersion: 'v1' \| 'v2' \| 'v3'`, `?game=`, `--game`, `HI_KEY`. The code field is unchanged |
 | Model file format | **`dino-mlp-v1`** | `model.js`, `best.json` |
 | BC teacher | **`teacher-jump`** (`test/solver.js` `createSolver`, jump only) and **`teacher-duck`** (planned: ducks under mid pterodactyls) | `best.json` `config.teacherName` and demos manifest `teacherName`, stored as `jump` / `duck` (= `--teacher`) |
 | Project generation | named after its teacher: the **jump generation** (everything up to 2026-10-10: the shipped clone and the depth × width sweep) and the **duck generation** (`teacher-duck` and the clones trained on it) | docs, handoffs, register rows |
-| Game rules | (also) **rules v3**: superhuman past 100k, in progress on `wt/game-v3` | |
+| Game rules | **rules v3**: rules v2 up to 100k points, then superhuman reaction budgets (a speed step at 100k; < 150 ms for most must-act obstacles from there on; `research/game-v3.md`) | `gameVersion: 'v3'`, `?game=v3`, `HI_KEY` `dino-hi-v3`, run dirs `v3-…` |
 | Run dirs (every model, any method) | **`runs/[<group>/]v<R>-<method>-[<teacher>-]d<depth>w<width>-s<seed>[-<tag>]`**. `v<R>` is the game rules the model was **trained for**, and always comes first. `<method>` is `bc` or `es` (later also `distill`, `quant`). Examples: `v2-bc-duck-d2w8-s1`, `v2-es-d2w32-s1-t1m`, `v3-bc-duck-d2w32-s1`. Demo dirs: `v<R>-demos-<teacher>-s<seeds>` | run dir names, `model.js` `source`, briefs, docs |
 
 - **A model is trained for one game-rules version.** The name prefix, `best.json` `gameVersion` and `model.js` `gameVersion` must agree. Evaluating a model on other rules (for example a v2 model on rules v3) is a cross-rules evaluation: say so explicitly ("v2 model on rules v3").
@@ -113,7 +114,16 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 
 **CSS network page.** `index-css.html` + `css-nn.js` evaluate the same MLP in the browser's style engine. `model.css` is generated from `model.js` by `trainer/css-model.js` via `export` or `export-css`; never edit it by hand. JavaScript only writes `--x0..--x43` and reads `--act`.
 
-**Game versions.** `v1` is the original rules and `createGame`'s default. `v2` is identical below 1k points, then ramps difficulty on a log scale up to 1M. All training uses v2. The version is stored in checkpoints, `best.json` and `model.js`; the page plays the model's version, and `?game=v1|v2` overrides it.
+**Game versions.** `v1` is the original rules and `createGame`'s default. `v2` is identical below 1k points, then ramps difficulty on a log scale up to 1M. All training so far uses v2. The version is stored in checkpoints, `best.json` and `model.js`; the page (and `index-css.html`) plays the model's version, and `?game=v1|v2|v3` overrides it. `assess --game <v>` plays other rules than the model's: a cross-rules assessment, so it warns, and the `assess.jsonl` record carries `gameVersion` and `modelGameVersion`.
+
+**Rules v3** (`research/game-v3.md`): built to be effectively impossible for humans past 100k, while staying legal and solvable.
+- **Definition (user ruling, 2026-10-10).** The reaction budget of a must-act obstacle is the time from its first visible frame (x < W) to the latest frame on which a valid action can still start: the most lenient of the clearing jumps and, for a mid pterodactyl, the duck. Past 100k, most must-act obstacles must have a budget below 150 ms (9 frames), tightening with score. An exact solver must never crash.
+- **Engine.** Exactly rules v2 up to 100,000 points (proven by `test/v2-parity.test.js` and `test/v3.test.js`). From there a second level `e = log10(score/100k) / log10(V3.endScore/100k)` sets the speed cap. It **steps** from v2's 19 to `V3.stepSpeed` (41) at 100k (user ruling "Step at 100k"), then rises to `V3.maxSpeed` (60) at 1M on the log scale (`curve` 1). Every other rule keeps following the v2 schedule.
+- **The step** never lands on obstacles placed at the old speed: their frame spacing would shrink below one airtime. Once e > 0, spawning pauses until the track is empty and the dino has landed (1–48 frames). The speed then jumps in one frame and spawning resumes (`stepPending` in `core.js`; tested in `test/v3.test.js`). See `rulesAt(d, r, e)`, `superLevel()` and `V3` in `core.js`; `game.superLevel` exposes e.
+- **Why speed is the lever.** `jumpVelocity` grows with speed, but `maxJumpY`/`dropVel` cap the arc, so airtime stays about 32 frames at every speed. The budget is about (W − dino front)/v minus the frames needed to clear the obstacle's height, so only obstacle speed moves it. Above about 25 px/frame the fairness spacing (one airtime per obstacle) sets obstacle density, not the gap coefficients.
+- **Fairness change (v3 only, above 100k).** Each obstacle spawned with e > 0 is frozen with `o.late = true`, and `requirement()` anchors its takeoff in the last `minWindow` frames of the window instead of the centre. With the centre, the canonical (solver) takeoff at v3 speeds would come before the obstacle appears, which a legal-input student can never imitate. With the late anchor it comes after the obstacle appears, on every obstacle (the probe's `canonicalBeforeVisible` is 0).
+- **Probe.** `node research/scripts/game-v3/budget.js` (single thread, about a second) prints the budget distribution per rules version and start level. `--set maxSpeed=..,curve=..` explores other endpoints in-process.
+- **Survey.** `research/scripts/prereg-teacher-duck/survey.js --game v3 --start 100000` runs a solver on rules v3; the dashboard shows the file's game.
 
 **Trainer** (`trainer/`):
 - `es.js`: OpenAI-ES with antithetic sampling, centred ranks and Adam.
@@ -121,7 +131,7 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 - `env.js`: episodes and seed sets, in three disjoint ranges:
   - training seeds;
   - validation seeds, used to select the best model;
-  - held-out seeds (`EVAL_SEEDS`), used only by `eval` and the stop check.
+  - held-out seeds (`EVAL_SEEDS`), used only by `assess` and the stop check.
 - The stop check, by default (`--stop-rule median`), is the median score over the 25 held-out seeds, with episodes capped at `--target`. The alternative is `--stop-rule allpass:N`: all N held-out seeds must reach the target.
 - `rules.js`: the per-generation policies as pure functions (selection, stop check, window adaptation, fitness aggregation), tested in `test/trainer-rules.test.js`.
 - `store.js`: atomic writes (temp file, fsync, rename), the `train.lock` PID lockfile, and `coreHash`.
@@ -133,18 +143,19 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
   - `--window-adapt`: gated, so the window shrinks while start-0 episodes mostly fail and only grows once the opening is learned. Decided every `--window-adapt-every` generations (default 5) on pooled pass counts. Needs `--start-dist points`;
   - `--fitness-agg mean|geomean`: geomean lets a failing stage (for example the opening) dominate. Needs `--window`.
   - `--ramp-frac F --ramp-min P --ramp-max P`: natural-ramp starts. The solver (`test/solver.js`) plays from 0 and hands over to the student at a level in [P_min, P_max] (for example 400–800), when grounded with keys up. These count as "late" episodes for `--window-adapt`. Needs `--window`. Costs about 2.8 ms of teacher prefix per ramp episode.
-- Speed: `--wasm` runs the MLP forward pass as WASM SIMD in the trainer only (train, `eval --wasm`, `bench --wasm`). It is bit-identical to JS (verified on arm64 and x86) and about 1.65–1.7× faster. Use it for all experiments.
+- Speed: `--wasm` runs the MLP forward pass as WASM SIMD in the trainer only (train, `assess --wasm`, `bench --wasm`). It is bit-identical to JS (verified on arm64 and x86) and about 1.65–1.7× faster. Use it for all experiments.
 - Selection and stopping: `--select median|count`, `--stop-rule median|allpass[:N]`, `--val-seeds N`, `--fold-validation` (validates every generation inside the training batch), `--eval-when-fit-max`.
 - ES:
   - `--rank-ties index|mid`;
   - `--decay coupled|decoupled`: with decoupled, use `--weight-decay` about 0.01;
   - `--sigma-scale none|fanin`, `--sigma-anneal` with `--sigma-min`, `--pair-episodes`;
   - `--stall-rule`: not recommended, kept only to reproduce an old run.
-- `eval --seeds N --seed-offset K` scores held-out seeds K..K+N-1 and reports a 95% Clopper–Pearson interval for the pass rate. The stop check uses the first N held-out seeds, so certify a run from an offset past them.
+- `assess --seeds N --seed-offset K` scores held-out seeds K..K+N-1 and reports a 95% Clopper–Pearson interval for the pass rate. The stop check uses the first N held-out seeds, so certify a run from an offset past them.
 
 **Verification tools.**
 - `node test/bit-identity.js <oldTree> <newTree>` runs 7 small training scenarios, including one that fires the `allpass` held-out stop, in two checkouts (for example a `git worktree` at the pre-change commit, and yours) and diffs metrics, checkpoints and `best.json` (about 9 s). It refuses to start while another trainer is running unless `--allow-busy`.
 - A new trainer flag must leave defaults IDENTICAL against the pre-change commit.
+- `bit-identity.js --core-changed` is for a deliberate `core.js`/`policy.js` edit (for example rules v3): the coreHash fields are reported, not compared, and everything else must still be identical.
 
 **Findings that constrain defaults.**
 - **Shape cap (user order, 2026-10-10):** at most 16 hidden layers and at most 32 units per layer in any run, sweep or brief. The code stays generic over `--hidden`.
@@ -162,11 +173,13 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 
   **Any new training mode, metrics file or run-dir layout must ship with dashboard support in the same change.** A change that leaves a kind of training run invisible on the dashboard is incomplete.
 
+- **Parity gate (rules v2).** `test/golden-v2/*.json.gz` were recorded from commit `10cd0e0` (before rules v3) by `test/record-golden-v2.js`, which loads that commit's `core.js` and `test/solver.js`. They cover 0 → 1.6k, 30k (groups of 4), 148k → 151k and 998k → 1M, with both solvers and random keys. `test/v2-parity.test.js` replays them on rules v2, and `test/v3.test.js` replays the part below 100k on rules v3. The same rule applies: never re-record them to make a test pass.
 - **Parity gate.** `test/golden/*.json.gz` were recorded from baseline commit `2da34de` by `test/record-golden.js`, and v1 must reproduce them frame-for-frame. That includes the order of RNG draws: clouds, stars and the idle blink share the game RNG, and the obstacle sequence depends on them. Any core change that alters v1 behaviour breaks `parity.test.js`. Don't re-record the traces to make it pass.
 - **Core hash.** It covers `core.js` and `policy.js`. Editing either one invalidates existing checkpoints, which then `--resume` only with `--force`. Use `--force` only when decisions are provably unchanged; `test/net.test.js` checks bit-identical decisions for the shipped model.
+  - The rules-v3 change moved the hash from `0f329d4e…`. For rules v1/v2 work, `--force` on pre-v3 checkpoints and `bc-train --force` on pre-v3 demos are justified: the v1 and v2 goldens, the jump and duck demos (sha256 `3a67bfd4…` and `363872f6…` regenerated byte for byte), `net.test.js` and `bit-identity.js --core-changed` all prove v1/v2 games and decisions unchanged. Never reuse pre-v3 artifacts for rules v3.
 - **Locked on resume.** `hidden`, `actionRepeat` and `gameVersion` can't change on resume; other options can be overridden.
 - **Evaluation uses the unmodified game.** No changes to CFG, physics, collision or fairness for evaluation. Any curriculum is training-only.
-- **Committed vs ignored.** In `runs/<name>/`, `best.json`, `evals.jsonl` and `metrics.*` are committed, and for BC runs also `demos.json` and `bc-metrics.jsonl`. Checkpoints, logs, locks and `demos.bin` are gitignored.
+- **Committed vs ignored.** In `runs/<name>/`, `best.json`, `assess.jsonl` (legacy `evals.jsonl`) and `metrics.*` are committed, and for BC runs also `demos.json` and `bc-metrics.jsonl`. Checkpoints, logs, locks and `demos.bin` are gitignored.
 
 ## Research method
 

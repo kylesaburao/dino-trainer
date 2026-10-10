@@ -3,6 +3,10 @@
 // from score 0 to --cap points with a solver, on worker threads, one JSONL line per seed.
 // Usage: node research/scripts/prereg-teacher-duck/survey.js --solver jump|duck
 //          [--base 40000000] [--n 5000] [--cap 1000000] [--workers 16] [--out file.jsonl]
+//          [--game v2|v3] [--start 0]
+//   --game / --start (default v2 / 0, unchanged output): play those rules from that start
+//   score (createGame startScore), e.g. the rules-v3 survey: --game v3 --start 100000.
+//   Rows then also carry game and start.
 //   jump -> test/solver.js createSolver; duck -> test/solver.js createDuckSolver
 // Per seed: crashed, score, frames, downFrames (DOWN held), obstacles passed / ducked,
 // mid pteros encountered (from the game: ptero boxes that clear the ducking box but hit the
@@ -23,15 +27,16 @@ if (isMainThread) {
   if (!['jump', 'duck'].includes(solver)) { console.error('--solver jump|duck is required'); process.exit(2); }
   const base = Number(arg('--base', 40000000)), n = Number(arg('--n', 5000));
   const cap = Number(arg('--cap', 1000000)), workers = Number(arg('--workers', 16));
+  const game = arg('--game', 'v2'), start = Number(arg('--start', 0));
   const out = arg('--out', `runs/exp-teacher-duck/survey-${solver}-${base}-${n}.jsonl`);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   const fd = fs.openSync(out, 'w');
   const t0 = Date.now();
   let next = 0, done = 0, crashes = 0, frames = 0;
   const log = (m) => console.log(`[${new Date().toISOString()}] ${m}`);
-  log(`survey solver=${solver} seeds ${base}..${base + n - 1} cap ${cap} workers ${workers} -> ${out}`);
+  log(`survey solver=${solver} seeds ${base}..${base + n - 1} cap ${cap}${game !== 'v2' || start ? ` game ${game} start ${start}` : ''} workers ${workers} -> ${out}`);
   for (let w = 0; w < workers; w++) {
-    const wk = new Worker(__filename, { workerData: { solver, cap } });
+    const wk = new Worker(__filename, { workerData: { solver, cap, game, start } });
     const feed = () => { if (next < n) wk.postMessage(base + next++); else wk.postMessage(null); };
     wk.on('message', (r) => {
       fs.writeSync(fd, JSON.stringify(r) + '\n');
@@ -59,7 +64,8 @@ if (isMainThread) {
   const describe = (o) => ({ type: o.t.name, size: o.size, x: +o.x.toFixed(2), y: o.y, speedOffset: o.speedOffset, box: boxOf(o) });
 
   function play(seed) {
-    const g = createGame({ rng: createRng(seed), version: 'v2' });
+    const { game = 'v2', start = 0 } = workerData;
+    const g = createGame({ rng: createRng(seed), version: game, startScore: start || undefined });
     const sol = make();
     const F = 8, ring = new Float64Array(30 * F);   // y, vy, jumping, ducking, keyJump, keyDown, act (0 none, 1 jump, 2 down), speed
     let frames = 0, downFrames = 0, ri = 0;
@@ -98,6 +104,7 @@ if (isMainThread) {
       midEncountered: mid.size, midPassed: [...passed].filter(o => mid.has(o)).length, midDucked,
       solverStats: typeof sol.stats === 'function' ? sol.stats() : (sol.stats ?? null),
     };
+    if (game !== 'v2' || start) Object.assign(r, { game, start });
     if (crashed) {
       r.onScreen = g.obstacles.filter(o => o.x < 600).map(describe);
       r.last30 = [];

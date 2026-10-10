@@ -69,4 +69,20 @@ function acquireLock(dir) {
   throw new Error(`could not acquire ${file}`);
 }
 
-module.exports = { ROOT, coreHash, writeAtomic, writeJsonAtomic, readJson, acquireLock, pidAlive };
+// Held-out assessment records (`cli.js assess`). New records go to assess.jsonl; runs
+// assessed before the rename (2026-10-10) also have evals.jsonl. Readers merge both,
+// legacy file first (records are append-only, so that is chronological for any run
+// that was assessed under both names).
+const ASSESS_FILE = 'assess.jsonl';
+const ASSESS_FILES = ['evals.jsonl', ASSESS_FILE];
+function readAssessLines(dir) {
+  const out = [];
+  for (const f of ASSESS_FILES) {
+    let text;
+    try { text = fs.readFileSync(path.join(dir, f), 'utf8'); } catch (e) { continue; }
+    for (const l of text.split('\n')) if (l.trim()) out.push(l);
+  }
+  return out;
+}
+
+module.exports = { ROOT, coreHash, writeAtomic, writeJsonAtomic, readJson, acquireLock, pidAlive, ASSESS_FILE, ASSESS_FILES, readAssessLines };
