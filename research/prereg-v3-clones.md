@@ -79,7 +79,7 @@ Changes (each off or unchanged by default):
 | Control | Must show | If not |
 |---|---|---|
 | `node --test test/` and `node test/dashboard-check.js` | all pass | STOP |
-| Defaults unchanged, opening and duck share | `opening.js` on the committed `runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json` (base 30,003,000, n 1,000, target 2,000) gives output identical to `runs/exp-bc-duck-stuck/opening/ctl-*` for that model, apart from time fields. `duckshare.js --teacher duck --n 2` gives the same counts as before the change | fix the tool |
+| Defaults unchanged, opening and duck share | `opening.js` on the committed `runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json` (base 30,003,000, n 1,000, target 2,000) gives output identical to `runs/exp-bc-duck-stuck/opening/ctl-d2w8-s1.json`, apart from time fields; `--teacher duck` gives `ctl-teacher.json`. `duckshare.js --teacher duck --n 2` gives the same counts as before the change | fix the tool |
 | Defaults unchanged, scan | `scan.js --expect-hash 65f3546c` on a v2 model, `--n 20 --target 1000000`, equals the same 20 seeds of the step-2 tier B (`--n 20` is seconds) | fix |
 | `--start` plumbing | `scan.js --start 2000 --target 3000` on a v2 model, `--n 5`: every row's game starts at 2,000 (checked by replaying one seed with `runEpisode(model, seed, 3000, 2000)`, same score and frames). On rules v3 the plumbing is checked by the detection control DC-post (§4.4) | fix |
 | `margin.js` with default levels | identical to its previous output on one committed model | fix |
