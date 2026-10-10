@@ -16,7 +16,33 @@ Read in order:
 6. Earlier handoffs as needed: `…1711Z-orchestrator-transfer-mac3.md`, the retrospective at `…1635Z`, and `…1626Z` §1 for standing instructions.
 7. The memory index `~/.claude/projects/-Users-kyle-Desktop-dino-game/memory/MEMORY.md`. See "Naming scheme" and "Experiment pre-registration".
 
-## 1. Standing user instructions (unchanged)
+## 0. Newest user instructions (verbatim, 19:3xZ; these override older priorities)
+- "I want mac and desktop to focus entirely on the problem of the ducking solver and training."
+- "Parallelize work where possible."
+
+Consequences:
+- **The jump-generation sweep has been STOPPED.** mac-3 told its subagent to kill its jobs and write a PARTIAL report from completed data, with no certification, so offsets 325–474 stay unspent. mac-3 merges that and relays it to you.
+- **ES research stays stopped.**
+- **Both hosts work only on the duck generation.**
+
+### Suggested parallel plan (mac-3's view; you decide)
+Run these at the same time. They are independent until step 2 joins them.
+- **Desktop host (Node-only, 16 workers): step 1** (`research/prereg-teacher-duck.md`).
+  - desktop-2 implements `createDuckSolver` and its unit tests.
+  - Then the 5,000-seed survey (control plus duck, about 20 min). desktop-1 can run the survey once the code is pushed. Only one CPU-heavy job runs on the host at a time.
+- **Mac, in parallel, as subagents:**
+  - (a) **`bc-gen --teacher jump|duck` plumbing**, defaulting to jump. Jump output must be sha-identical to `runs/exp-bc-e2e`. `bc-train`/`bc_train.py` must handle three classes with duck present: class weights and recall for duck. Add a `teacher` field to the demos manifest and `best.json` config. Develop it against a stub teacher interface, so it doesn't wait for step 1. The two can merge in either order: `bc.js` selects the teacher by name.
+  - (b) **Write the step-2 pre-registration:**
+    - demonstrations from `teacher-duck`, seeds 1–40;
+    - clones at d2-w32 (shipped) and the smallest shapes that passed the sweep's tier B (d1-w8 and d2-w8 were 0/1,000 at seed 1);
+    - paired comparison with the jump generation on scan seeds;
+    - duck recall;
+    - an observability check: is the duck decision a function of `observe()`?
+    - margins and the CSS check.
+  - (c) **A Sonnet research note on any open design question,** for example how much the ducking box's extra width constrains release timing. Keep this one optional.
+- **Join:** step 1 passes, (a) merges, then step 2 runs on the Mac. That needs numpy, so the Mac is the only place for clone training.
+
+
 - **Orchestrate.** Delegate edits to subagents or to the desktops. Keep Sonnet research going while idle, choosing topics by the decision they serve.
 - **Branches → main.** The orchestrator merges and pushes main; the desktops push only their own `wt/*` branches.
 - **Pre-register every run** (AGENTS.md "Research method"). Verify every claim in a brief against code. Consult the native advisor at design time.
@@ -47,7 +73,7 @@ Read in order:
 ## 3. In flight
 | Item | Where | Owner | Status |
 |---|---|---|---|
-| Depth × width sweep (jump generation; `research/prereg-bc-sweep.md`) | Mac, subagent of mac-3; worktree `/Users/kyle/Desktop/dino-game-sweep`, branch `wt/bc-sweep`; data in `runs/exp-bc-sweep/` | **mac-3** reviews, merges and relays it to you | At 19:12Z: 28 configs trained; depth ≥ 32 and d16-w64 fail tier A (0/25); tier-B scans mostly 0/1,000, but d8-w8 is 2/1,000. Second-seed scans, margins, and possibly certification still to come. **It uses the Mac CPU until it finishes, so don't start Mac CPU work before then** |
+| Depth × width sweep (jump generation; `research/prereg-bc-sweep.md`): **being STOPPED; a partial report is coming** | Mac, subagent of mac-3; worktree `/Users/kyle/Desktop/dino-game-sweep`, branch `wt/bc-sweep`; data in `runs/exp-bc-sweep/` | **mac-3** reviews, merges and relays it to you | At 19:12Z: 28 configs trained; depth ≥ 32 and d16-w64 fail tier A (0/25); tier-B scans mostly 0/1,000, but d8-w8 is 2/1,000. Second-seed scans, margins, and possibly certification still to come. The Mac CPU frees as soon as its stop completes; Mac code-writing can start right away |
 | Desktop host | desktop-1, desktop-2 | you | **Idle.** desktop-2 has read Q2 and is waiting for a brief. desktop-1 is idle |
 
 ## 4. Your first actions (mac-3's recommendation)
