@@ -3,8 +3,9 @@
 // valMedian >= threshold. Polls <dir>/metrics.jsonl and sends SIGINT to the PID in
 // <dir>/train.lock (the trainer saves a checkpoint and releases the lock on SIGINT).
 // Exits when the event fires or when the trainer is gone.
-// Usage: node tools/event-watch.js <run dir> [--threshold 2000] [--after GEN] [--poll-ms 1000]
-//   --after GEN  only count validations at generations > GEN (the resume point)
+// Usage: node tools/event-watch.js <run dir> [--threshold 2000] [--after GEN] [--max-frames N] [--poll-ms 1000]
+//   --after GEN       only count validations and frames at generations > GEN (the resume point)
+//   --max-frames N    also stop (censor) once training frames since --after reach N
 const fs = require('fs');
 const path = require('path');
 
@@ -12,6 +13,7 @@ const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? Number(args[i + 1]) : def; };
 const dir = args[0];
 const THRESHOLD = opt('--threshold', 2000), AFTER = opt('--after', -Infinity), POLL = opt('--poll-ms', 1000);
+const MAX_FRAMES = opt('--max-frames', Infinity);
 const log = (m) => console.log(`[${new Date().toISOString()}] event-watch ${path.basename(dir)}: ${m}`);
 
 const pidOf = () => {
@@ -36,6 +38,13 @@ const timer = setInterval(() => {
       clearInterval(timer);
       return;
     }
+  }
+  const frames = rows.filter(r => r.generation > AFTER).reduce((a, r) => a + r.frames, 0);
+  if (frames >= MAX_FRAMES) {
+    log(`frame budget reached: ${frames} >= ${MAX_FRAMES} training frames, censored at generation ${rows[rows.length - 1].generation}`);
+    if (seenPid && alive(seenPid)) { process.kill(seenPid, 'SIGINT'); log(`SIGINT sent to ${seenPid}`); }
+    clearInterval(timer);
+    return;
   }
   if (seenPid && !alive(seenPid)) { log('trainer exited without the event'); clearInterval(timer); }
 }, POLL);

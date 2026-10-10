@@ -229,3 +229,65 @@ Notes:
   - At the hygiene arm's measured 3.9–4.4B frames per 2000 stuck generations (about 10–12 min), a hygiene arm censored at 10B takes about 25–30 min on this host. Raise `--time-budget` to 45.
 - **Add an ablation arm, hyg + `--episodes 8`** (no curriculum), to separate the episode count from the late windows and the fitness reshaping. If it matches B′ on type M, the gain there isn't late exposure.
 - Report the split by failure type (T vs M) using `tools/wall-diag.js` on each start θ.
+
+## 10. Confirmation pre-registration (approved by mac-3 with amendments; written before any confirmation-arm run)
+
+Code: main `b1fbab8` plus this commit, with `--wasm`. The core hash is unchanged from the §9 runs (`0f329d4e3493`). The question has narrowed after §9: **does B′'s gain come from its late windows and fitness reshaping, or only from playing 8 episodes per candidate?**
+
+### 10.1 Start θs
+- **Source:** hygiene survey seeds 13–30 (`tools/run-survey.sh 13 30`: mid + decoupled 0.01, pop 128, σ 0.1, lr 0.03, 4 episodes, 32,32, `--generations 1500 --time-budget 5 --eval-every 50 --wasm`). These were started before this section was written: mac-3 approved generating them immediately. Their selection rule below is fixed before any arm runs.
+- **Qualifies as stuck when**, at the run's last generation (1500, or earlier if the budget cut it):
+  - it has escaped (10 consecutive generations with fitMean > 200);
+  - the mean fitMean over the last 50 generations is < 1100;
+  - fitMean never exceeded 2000;
+  - the last validation median is < 2000.
+  - Its start θ is that final checkpoint, frozen into `runs/exp-bp2-start/ckpt-sN.json` with `SHA256SUMS`.
+- **Type**, from `tools/wall-diag.js` on the start θ (50 seeds from 900000) plus the run's last 100 generations:
+  - **T (tie-bound, s9-like):** ≥ 60% of deaths are `ptero-low` with the dino on the ground, AND mean tiedPairs/64 over the last 100 generations ≥ 0.5.
+  - **M:** everything else. A θ that meets only one of the two T conditions is reported as "T-partial" and counted as M.
+- **Choosing n = 6:** all type-T θs first (up to 3), then type M by ascending seed, up to 6 in total. The **extension set** is the next 4 by the same rule (more T first if any remain). If fewer than 10 θs qualify, survey seeds 31+ are run with the same script before the extension.
+- **If fewer than 2 type-T θs qualify,** the late-exposure question for the tie-bound mode can't be reached in this round. The type-T reading is then "not reached", not "null".
+
+### 10.2 Arms (paired on each start θ; resumed from the same frozen checkpoint)
+1. **abl** (the ablation, mandatory): hyg + `--episodes 8`, no curriculum.
+2. **cur:** B′, with exactly the §4.2 flags (`--window 25000 --episodes 8 --start-dist points --start-zero-frac 0.5 --start-zero-cap 50000 --window-adapt --fitness-agg geomean`).
+3. **hyg** (optional, secondary): plain hygiene with 4 episodes. Run only after arms 1–2 have finished on all θs, if the host is free.
+4. **ramp** (optional): hyg + ep8 + desktop-2's natural-ramp flags. Included only if desktop-2's exact flags arrive before the θ classification is done; otherwise this round runs without it.
+
+Common to every arm: `--wasm --eval-every 10 --val-seeds 12 --time-budget 45 --generations G0+20000`. The generation cap is deliberately non-binding; the frame budget below censors.
+
+Order: positive controls first (s12, s4, frozen in `runs/exp-bp-start`), then the 6 θs in ascending seed, each θ abl then cur.
+
+### 10.3 Event and censoring
+- **Event** as in §4.3 and deviation 1: the first validation with valMedian ≥ 2000, confirmed by the next validation or by the trainer's held-out stop.
+- **Frame-matched censoring:** each arm stops at **10B training frames since the resume point** (`tools/event-watch.js --max-frames 1e10`). That is 1.25× the largest B′ spend in §9 (s8-cur, 8.2B).
+  - A first reading ≥ 2000 whose confirmation comes after the budget counts as censored.
+  - If the 45-minute cap binds before 10B frames, that arm is "censored at budget" and reported separately. It shouldn't happen: about 6M training frames/s gives about 28 min.
+
+### 10.4 Primary analysis (fixed in advance)
+- **Per θ: R = cur frames to event / abl frames to event.** Bounds under censoring as in §4.3. Both censored → R undetermined, which counts as **not** a B′ win.
+- **A B′ win on a θ:** R < 1, including "cur clears, abl censored".
+- **Stage 1 (n = 6):** paired sign test on B′ wins, one-sided.
+  - **6/6 wins → promote** (p = 0.016).
+  - **4/6 or 5/6 → extend** with 4 more θs (n = 10). Promote only if the total is **≥ 9/10 wins** and **R ≤ 0.5 on ≥ 2/3 of all θs**. A stage-1 5/6 needs all 4 extension θs to win.
+  - **≤ 3/6 → stop, not promoted.**
+  - Overall one-sided α of the two-stage rule: P(6/6) + P(5/6)·P(4/4) = 1/64 + (6/64)(1/16) ≈ 0.022.
+- **Promotion criterion (share of θs with R ≤ threshold):** besides the sign-test count, **R ≤ 0.5 (B′ at least 2× cheaper) on ≥ 2/3 of the θs.** A 6/6 sign-test result with fewer than 4 θs at R ≤ 0.5 is reported as "B′ consistently but only marginally cheaper", and not promoted.
+- **Ablation-wins reading:** abl wins (R > 1, or abl clears and cur is censored) on ≥ 5/6 → the §9 gain is attributed to the episode count, and B′'s late windows and fitness reshaping are pruned in this scope.
+
+### 10.5 Controls
+s12 and s4 (frozen `runs/exp-bp-start`) run in abl and cur only. They are read **only** as "both arms clear within the 10B budget", never as ratio evidence (in §9, s4 went 6.76× against B′). If either arm fails to clear on a control, the round is **invalid** for that arm.
+
+### 10.6 Readings split by type
+- Every reading above is reported separately for type T and type M, as well as pooled. The sign test is computed on the pooled set.
+- **Type T:** the late-exposure question (does B′'s late-window variation break the ties the ablation keeps) is answered only if ≥ 2 type-T θs are in the set:
+  - if cur clears and abl stays tied (mean tiedPairs/64 ≥ 0.5) on both → late windows matter for the tie-bound mode;
+  - if abl also clears → the episode count is enough.
+- **Type M:** the pooled sign test is the evidence. A split such as "T wins, M ties" is reported as such, not averaged away.
+
+### 10.7 Cost
+- **Per censored arm:** about 10B frames at about 6M/s ≈ 28 min. Arms that clear stop sooner.
+- **Primary arms:** 6 θs × 2 arms ≲ 5.6 h, plus controls (about 0.5 h).
+- **Optional arms:** plain hyg adds ≲ 2.8 h; a ramp arm adds ≲ 2.8 h.
+- **Extension:** 4 θs × 2 arms ≲ 3.7 h.
+- One trainer at a time on the desktop host. desktop-2 is told at the start and end.
