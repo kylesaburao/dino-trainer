@@ -1,6 +1,6 @@
 # Rules v3: superhuman past 100k
 
-Status (2026-10-10): rules v3 are implemented on `wt/game-v3`. The budget probe, the solver unit tests and a 40 + 40 game solver pilot are done. The full solver survey and the assessment of the two shipped clones on rules v3 (`assess --game v3`) are pre-registered below and **queued**; neither has been run.
+Status (2026-10-10): rules v3 are implemented on `wt/game-v3`. The budget probe, the solver unit tests and a 40 + 40 game solver pilot are done. The full solver survey and the assessment of the two shipped clones on rules v3 (`assess --game v3`) are pre-registered below. They are being run on branch `wt/exp-v3-survey` (from `fb1793c`); results go in §9.
 
 Core hash after the change: `65f3546c…` with the step at 100k (`63fa2ab5…` for the superseded first proposal; before rules v3: `0f329d4e…`).
 
