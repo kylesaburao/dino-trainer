@@ -259,6 +259,19 @@ function cdpClient(url) {
 
     check('no console errors, warnings or exceptions on the page', problems.length === 0, problems.join('; '));
     console.log(`screenshot: ${path.join(scratch, 'page.png')}`);
+
+    // ---- 4. Game versions -------------------------------------------------
+    const defaultVersion = await evaluate(`({ v: game.version, want: (typeof DINO_MODEL !== 'undefined' && DINO_MODEL.gameVersion) || 'v1' })`);
+    check('default page plays the game version its model was trained on', defaultVersion.v === defaultVersion.want, JSON.stringify(defaultVersion));
+    await load(path.join(ROOT, 'index.html') + '?game=v2');
+    await evaluate(`localStorage.setItem('dino-hi', '7')`);
+    check('?game=v2 selects the v2 rules', await evaluate(`game.version === 'v2' && HI_KEY === 'dino-hi-v2'`));
+    await tap('Space');
+    check('v2 starts and scores', await waitUntil(`game.state === 'running'`, 1000) && await waitUntil(`game.score() > 0`, 3000));
+    await waitUntil(`game.state === 'over'`, 20000);
+    const v2hi = await evaluate(`({ v1: localStorage.getItem('dino-hi'), v2: localStorage.getItem('dino-hi-v2'), score: game.score() })`);
+    check('v2 keeps its own HI (v1 HI untouched)', v2hi.v1 === '7' && v2hi.v2 === String(v2hi.score), JSON.stringify(v2hi));
+    check('no console errors, warnings or exceptions on the v2 page', problems.length === 0, problems.join('; '));
   } finally {
     if (cdp) cdp.close();
     chrome.kill();

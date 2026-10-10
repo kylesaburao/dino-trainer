@@ -55,6 +55,7 @@ function buildStatus(dir, extra = {}) {
     : 'not evaluated yet';
   const rows = [
     ['Run', `\`${name}\`: ${lock ? `**running**, PID ${lock.pid}` : ck ? `stopped (${ck.reason}, saved ${ck.savedAt})` : 'no checkpoint'}`],
+    ['Game version', `${cfg.gameVersion || 'v1'}`],
     ['Target / metric', `${target ?? '–'}; median score over the 25 held-out seeds, episodes capped at the target`],
     ['Generation / cumulative wall time', `${gen} / ${mins(wall)}`],
     ['Best training score', top ? `${top.fitMax.toFixed(1)} (best candidate's mean capped score, gen ${top.generation})` : '–'],

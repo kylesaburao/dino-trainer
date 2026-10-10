@@ -13,10 +13,11 @@ const VALIDATION_SEEDS = Array.from({ length: 25 }, (_, i) => 0x40000000 + (hash
 const EVAL_SEEDS = Array.from({ length: 25 }, (_, i) => (0x80000000 | hashSeed(i, 0xE7)) >>> 0);
 const trainSeed = (rng) => Math.floor(rng() * 0x40000000);
 
-// Play one episode from a fresh game until crash or `capScore` points.
+// Play one episode from a fresh game until crash or `capScore` points, on the
+// game version the model is for (model.gameVersion; 'v1' if absent).
 // The agent's first action presses jump from idle (the run's start).
 function runEpisode(model, seed, capScore) {
-  const game = createGame({ rng: createRng(seed) });
+  const game = createGame({ rng: createRng(seed), version: model.gameVersion || 'v1' });
   const agent = createAgent(model);
   const capDistance = capScore / CFG.scoreCoef;
   let frames = 0;

@@ -18,7 +18,7 @@
 // shared policy MLP, with candidates evaluated in parallel on worker_threads.
 const fs = require('fs');
 const path = require('path');
-const { CFG, createRng } = require('../core.js');
+const { CFG, createRng, GAME_VERSIONS } = require('../core.js');
 const { FORMAT, OBS_DIM, numParams, initParams } = require('../policy.js');
 const { runEpisode, median, trainSeed, VALIDATION_SEEDS, EVAL_SEEDS } = require('./env.js');
 const { gaussian, esGradient, adamStep } = require('./es.js');
@@ -41,16 +41,17 @@ const DEFAULTS = {
   evalEvery: 5,           // generations between validation evals
   generations: Infinity,  // stop once this many generations are done in total
   seed: 1,                // trainer RNG seed (init, noise seeds, training seeds)
+  gameVersion: 'v2',      // game rules trained and evaluated on (core.js GAME_VERSIONS)
 };
 // Settings that change the parameter layout or the policy's behaviour cannot change on resume.
-const STRUCTURAL = ['hidden', 'actionRepeat'];
+const STRUCTURAL = ['hidden', 'actionRepeat', 'gameVersion'];
 
 const FLAG_TO_KEY = {
   '--target': ['target', Number], '--hidden': ['hidden', (v) => v.split(',').map(Number)],
   '--action-repeat': ['actionRepeat', Number], '--pop': ['popSize', Number], '--episodes': ['episodes', Number],
   '--sigma': ['sigma', Number], '--lr': ['lr', Number], '--weight-decay': ['weightDecay', Number],
   '--checkpoint-every': ['checkpointEvery', Number], '--eval-every': ['evalEvery', Number],
-  '--generations': ['generations', Number], '--seed': ['seed', Number],
+  '--generations': ['generations', Number], '--seed': ['seed', Number], '--game': ['gameVersion', String],
 };
 
 function parseArgs(argv) {
@@ -87,7 +88,7 @@ const fmt = (x) => (Number.isFinite(x) ? Math.round(x * 10) / 10 : x);
 // Score fixed seeds with one model (params), in parallel when a pool is given.
 async function scoreSeeds(pool, model, seeds, target) {
   if (!pool) return seeds.map(s => runEpisode(model, s, target).score);
-  const setup = { theta: model.params, layers: model.layers, actionRepeat: model.actionRepeat, sigma: 0, target };
+  const setup = { theta: model.params, layers: model.layers, actionRepeat: model.actionRepeat, gameVersion: model.gameVersion || 'v1', sigma: 0, target };
   const res = await pool.run(setup, seeds.map(s => ({ noiseSeed: 0, sign: 0, seeds: [s] })));
   return res.map(r => r.scores[0]);
 }
@@ -120,9 +121,10 @@ async function train({ config: cli, opts }) {
       log(`WARNING: core hash mismatch (${ck.coreHash.slice(0, 12)} -> ${hash.slice(0, 12)}), continuing because of --force`);
     }
     for (const k of STRUCTURAL) {
-      if (k in cli && JSON.stringify(cli[k]) !== JSON.stringify(ck.config[k])) throw new Error(`--${k} cannot change on resume`);
+      const saved = k === 'gameVersion' ? ck.config[k] || 'v1' : ck.config[k];
+      if (k in cli && JSON.stringify(cli[k]) !== JSON.stringify(saved)) throw new Error(`--${k} cannot change on resume`);
     }
-    config = { ...ck.config, ...cli };
+    config = { ...ck.config, gameVersion: ck.config.gameVersion || 'v1', ...cli };
     if (config.generations === null) config.generations = Infinity;
     st = {
       generation: ck.generation, theta: Float64Array.from(ck.theta),
@@ -155,7 +157,8 @@ async function train({ config: cli, opts }) {
   let lastCommitAt = startedAt;
   const committedMs = () => st.cumulativeMs + (Date.now() - lastCommitAt);
 
-  log(`train: dir=${dir} workers=${workers} params=${numParams(layers)} layers=${layers.join('-')} core=${hash.slice(0, 12)}`);
+  if (!GAME_VERSIONS.includes(config.gameVersion)) throw new Error(`--game must be one of ${GAME_VERSIONS.join(', ')}`);
+  log(`train: dir=${dir} game=${config.gameVersion} workers=${workers} params=${numParams(layers)} layers=${layers.join('-')} core=${hash.slice(0, 12)}`);
   log(`watch it live: node trainer/dashboard.js  ->  http://127.0.0.1:8080  (run from ${ROOT})`);
   log(`config ${JSON.stringify(config)}${budgetMs < Infinity ? ` time-budget=${opts.timeBudget}min` : ''}`);
 
@@ -192,14 +195,14 @@ async function train({ config: cli, opts }) {
   if (!fs.existsSync(metricsCsv)) fs.writeFileSync(metricsCsv, CSV_COLS.join(',') + '\n');
 
   async function validate() {
-    const model = { layers, params: st.theta, actionRepeat: config.actionRepeat };
+    const model = { layers, params: st.theta, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion };
     const scores = await scoreSeeds(pool, model, VALIDATION_SEEDS, config.target);
     const s = summary(scores);
     st.lastValidated = st.generation;
     if (!st.best || s.median > st.best.valMedian) {
       st.best = { generation: st.generation, valMedian: s.median, valMin: s.min, valMax: s.max, params: Array.from(st.theta) };
       writeJsonAtomic(bestFile, {
-        format: FORMAT, layers, actionRepeat: config.actionRepeat, params: st.best.params,
+        format: FORMAT, layers, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion, params: st.best.params,
         generation: st.generation, validation: s, coreHash: hash, config,
       });
       if (opts.autoExport) {
@@ -225,7 +228,7 @@ async function train({ config: cli, opts }) {
     const episodeSeeds = Array.from({ length: config.episodes }, () => trainSeed(rng));
     const jobs = [];
     for (const s of noiseSeeds) jobs.push({ noiseSeed: s, sign: 1, seeds: episodeSeeds }, { noiseSeed: s, sign: -1, seeds: episodeSeeds });
-    const setup = { theta: st.theta, layers, actionRepeat: config.actionRepeat, sigma: config.sigma, target: config.target };
+    const setup = { theta: st.theta, layers, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion, sigma: config.sigma, target: config.target };
     const results = await pool.run(setup, jobs);
 
     // Fitness: mean capped score, using fractional distance for a finer signal.
@@ -248,7 +251,7 @@ async function train({ config: cli, opts }) {
     let val = null;
     if (st.generation % config.evalEvery === 0) val = await validate();
     if (val && val.median >= config.target) {
-      const heldOut = summary(await scoreSeeds(pool, { layers, params: st.best.params, actionRepeat: config.actionRepeat }, EVAL_SEEDS, config.target));
+      const heldOut = summary(await scoreSeeds(pool, { layers, params: st.best.params, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion }, EVAL_SEEDS, config.target));
       st.heldOut = { generation: st.best.generation, target: config.target, ...heldOut };
       log(`held-out eval of best (gen ${st.best.generation}): median ${heldOut.median} min ${heldOut.min} max ${heldOut.max}`);
       if (heldOut.median >= config.target) stopReason = `held-out median ${heldOut.median} >= target ${config.target}`;
@@ -308,7 +311,7 @@ function loadModel(opts) {
     const file = path.join(dir, 'checkpoint.json');
     const ck = readJson(file);
     return {
-      model: { format: FORMAT, layers: ck.layers, actionRepeat: ck.config.actionRepeat, params: ck.theta },
+      model: { format: FORMAT, layers: ck.layers, actionRepeat: ck.config.actionRepeat, gameVersion: ck.config.gameVersion || 'v1', params: ck.theta },
       source: file, target: ck.config.target, meta: { generation: ck.generation, coreHash: ck.coreHash },
     };
   }
@@ -343,7 +346,7 @@ function exportModel(opts) {
   const { model, source, meta } = loadModel(opts);
   const out = path.resolve(opts.out || path.join(ROOT, 'model.js'));
   const data = {
-    format: FORMAT, layers: model.layers, actionRepeat: model.actionRepeat || 1,
+    format: FORMAT, layers: model.layers, actionRepeat: model.actionRepeat || 1, gameVersion: model.gameVersion || 'v1',
     generation: meta && meta.generation, validation: meta && meta.validation, coreHash: meta && meta.coreHash,
     exportedAt: ts(), source: path.relative(ROOT, source), params: Array.from(model.params),
   };

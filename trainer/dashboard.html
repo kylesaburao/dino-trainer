@@ -394,7 +394,7 @@ async function newEpisode() {
     if (!pb.model) { $('#pb-caption').textContent = 'No weights yet for this run (they appear after the first checkpoint).'; pb.game = null; return; }
     pb.seed = Math.floor(Math.random() * 0x40000000);       // training seed range, never validation/held-out
     $('#pb-stage').classList.remove('night');
-    pb.game = DinoCore.createGame({ rng: DinoCore.createRng(pb.seed), hooks: { night: (on) => $('#pb-stage').classList.toggle('night', on) } });
+    pb.game = DinoCore.createGame({ rng: DinoCore.createRng(pb.seed), version: pb.model.gameVersion || 'v1', hooks: { night: (on) => $('#pb-stage').classList.toggle('night', on) } });
     pb.agent = DinoPolicy.createAgent(pb.model);
     nn.setModel(pb.model);
     pb.overAt = 0;
@@ -432,7 +432,8 @@ function playbackFrame(t) {
   pb.renderer.draw(g, g.frameIndex * DinoCore.FRAME_MS, 0);
   nn.draw();
   const m = pb.model;
-  $('#pb-caption').textContent = `${m.which === 'best' ? 'best' : 'latest'} weights from generation ${m.generation} · seed ${pb.seed} · ` +
+  $('#pb-caption').textContent = `game ${g.version}${g.version === 'v2' ? ` (level ${g.level.toFixed(2)})` : ''} · ` +
+    `${m.which === 'best' ? 'best' : 'latest'} weights from generation ${m.generation} · seed ${pb.seed} · ` +
     `score ${g.score()}${g.state === 'over' ? ' · crashed, next episode…' : ''} · speed ${g.speed.toFixed(2)}`;
 }
 

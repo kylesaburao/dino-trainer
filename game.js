@@ -10,12 +10,24 @@ const { FRAME_MS } = DinoCore;
 const renderer = DinoRender.createRenderer(document.getElementById('game'));
 
 // ---------------------------------------------------------------------------
-// High score (human runs only)
+// Game version: ?game=v1|v2 in the URL, else the version the shipped model was
+// trained on (so AI mode plays the game it learned), else v2. See core.js.
 // ---------------------------------------------------------------------------
+const MODEL = typeof DINO_MODEL !== 'undefined' ? DINO_MODEL : null;
+const GAME_VERSION = (() => {
+  const asked = new URLSearchParams(location.search).get('game');
+  if (DinoCore.GAME_VERSIONS.includes(asked)) return asked;
+  return MODEL ? MODEL.gameVersion || 'v1' : 'v2';
+})();
+
+// ---------------------------------------------------------------------------
+// High score (human runs only), kept per game version ('dino-hi' is v1's)
+// ---------------------------------------------------------------------------
+const HI_KEY = GAME_VERSION === 'v1' ? 'dino-hi' : `dino-hi-${GAME_VERSION}`;
 let hi = 0;
-try { hi = parseInt(localStorage.getItem('dino-hi'), 10) || 0; } catch (e) { /* storage unavailable */ }
+try { hi = parseInt(localStorage.getItem(HI_KEY), 10) || 0; } catch (e) { /* storage unavailable */ }
 function saveHi() {
-  try { localStorage.setItem('dino-hi', String(hi)); } catch (e) { /* storage unavailable */ }
+  try { localStorage.setItem(HI_KEY, String(hi)); } catch (e) { /* storage unavailable */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +63,7 @@ let aiRun = false;             // AI was on at some point during the current run
 
 const game = DinoCore.createGame({
   rng: DinoCore.createRng((Math.random() * 4294967296) >>> 0),
+  version: GAME_VERSION,
   hooks: {
     sound: (name) => sounds[name](),
     night: (on) => document.body.classList.toggle('night', on),
@@ -72,7 +85,7 @@ const dino = game.dino;
 // jump/duck input is ignored; after a game over the AI restarts by itself once
 // the restart lockout has passed (auto-restart).
 const aiButton = document.getElementById('ai-toggle');
-const model = typeof DINO_MODEL !== 'undefined' ? DINO_MODEL : null;
+const model = MODEL;
 let aiOn = false;
 let agent = null;
 

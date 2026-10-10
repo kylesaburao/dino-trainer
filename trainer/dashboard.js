@@ -74,11 +74,11 @@ function runModel(name, which) {
   const dir = path.join(RUNS, name);
   if (which === 'best') {
     const b = readJson(path.join(dir, 'best.json'));
-    return b && { format: b.format, layers: b.layers, actionRepeat: b.actionRepeat, params: b.params, generation: b.generation, which };
+    return b && { format: b.format, layers: b.layers, actionRepeat: b.actionRepeat, gameVersion: b.gameVersion || 'v1', params: b.params, generation: b.generation, which };
   }
   const ck = readJson(path.join(dir, 'checkpoint.json'));
   if (!ck) return which === 'current' ? runModel(name, 'best') : null;   // a run with only best.json
-  return { layers: ck.layers, actionRepeat: ck.config.actionRepeat, params: ck.theta, generation: ck.generation, which: 'current' };
+  return { layers: ck.layers, actionRepeat: ck.config.actionRepeat, gameVersion: ck.config.gameVersion || 'v1', params: ck.theta, generation: ck.generation, which: 'current' };
 }
 
 // The page runs the real game code, served straight from the repo.

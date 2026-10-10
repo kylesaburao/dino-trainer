@@ -29,16 +29,18 @@ test('observations ignore obstacles at x >= 600 and planner internals', () => {
       const before = obs(game);
       if (game.obstacles.some(o => o.x >= W)) sawOffscreen++;
       // Tamper with everything the policy must not see.
-      const saved = game.obstacles.map(o => ({ o, x: o.x, gap: o.gap, size: o.size, y: o.y }));
+      const saved = game.obstacles.map(o => ({ o, x: o.x, gap: o.gap, size: o.size, y: o.y, minWindow: o.minWindow, minGround: o.minGround }));
       for (const o of game.obstacles) {
         o.gap = -12345;
+        o.minWindow = 99;
+        o.minGround = -7;
         if (o.x >= W) { o.x += 500; o.size = 3; o.y = 58; }
       }
       const fake = { t: OBSTACLE_TYPES[2], size: 1, frame: 0, timer: 0, x: W, y: 58, w: 46, h: 20, speedOffset: 0.8, gap: 0 };
       game.obstacles.push(fake, { ...fake, x: W + 100, t: OBSTACLE_TYPES[1] });
       const after = obs(game);
       game.obstacles.length -= 2;
-      for (const s of saved) Object.assign(s.o, { x: s.x, gap: s.gap, size: s.size, y: s.y });
+      for (const s of saved) Object.assign(s.o, { x: s.x, gap: s.gap, size: s.size, y: s.y, minWindow: s.minWindow, minGround: s.minGround });
       assert.deepStrictEqual(after, before);
       checked++;
     });
@@ -76,4 +78,26 @@ test('agent episodes are deterministic; an idle game is started with a jump pres
 test('model shape is validated', () => {
   assert.throws(() => P.createAgent({ layers: [3, 3], params: new Float64Array(12) }), /inputs/);
   assert.throws(() => P.createNet([P.OBS_DIM, 3], new Float64Array(5)), /params/);
+});
+
+test('policy.js never reads the planner (solver, frozen tolerances, difficulty level)', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'policy.js'), 'utf8')
+    .replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const word of ['_internal', 'requirement', 'placeFairly', 'minWindow', 'minGround', 'level', 'committed', '.gap', 'rulesAt', 'difficulty']) {
+    assert.ok(!src.includes(word), `policy.js must not reference ${word}`);
+  }
+});
+
+test('v2 observations stay normalised at maximum difficulty (|x| <= 2.5)', () => {
+  let maxAbs = 0;
+  const { createSolver } = require('./solver.js');
+  for (let seed = 1; seed <= 6; seed++) {
+    const g = createGame({ rng: createRng(seed), version: 'v2', startScore: 1000000 });
+    const act = createSolver();
+    for (let f = 0; f < 3000 && g.state !== 'over'; f++) {
+      g.step(act(g));
+      if (g.state === 'running') for (const v of obs(g)) maxAbs = Math.max(maxAbs, Math.abs(v));
+    }
+  }
+  assert.ok(maxAbs <= 2.5, `max |feature| ${maxAbs}`);
 });
