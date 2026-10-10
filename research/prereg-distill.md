@@ -254,3 +254,28 @@ Written after the §5.0 test-suite, demo and teacher controls and before any tra
 **(f) D2 (quantization) is ON HOLD.** The user changed D2 to all-params-N-bit: weights **and biases** as N-bit integers with one power-of-two scale per layer, at 8 and 4 bits. A new pow2 scheme is being implemented separately. **No PTQ or QAT is run in this execution**; C-q8-control and §5.4 are not run, and the D2 parts of §2, §3, §5, §7 and §8 are superseded until a new amendment.
 
 **Execution.** Python backend with `PYTHON=/Users/kyle/Desktop/dino-game/.venv/bin/python OMP_NUM_THREADS=2 VECLIB_MAXIMUM_THREADS=2`, `--snapshots --wasm`, defaults otherwise (15 epochs, batch 1,024, lr 2e-3); each stage runs as one detached serial job list (`research/scripts/prereg-distill/runjobs.js`), logs in the run dirs. No `eval`, held-out offsets, `export`/`finish`/`session`/`--auto-export`; root `model.js`/`model.css`, `core.js`, `policy.js` untouched.
+
+## Results (in progress; Stage 0 complete, 2026-10-10, Mac executor, branch `wt/exp-distill2`)
+**Provenance.** Code at main `b4624b3` plus this branch's scripts only (`research/scripts/prereg-distill/agree.js`, `runjobs.js`, `mkjobs.js`, `summarize.js`). **The whole study stays on base `b4624b3`, core hash `0f329d4e3493…`**: main has since moved on (the rules-v3 core change and the eval→assess rename), and the orchestrator ordered no rebase mid-experiment. Teacher params sha256 `5706d5d970d5…`. Demo shas as in §11b.
+
+### Controls (§5.0, §11b): all pass
+| Control | Result |
+|---|---|
+| test suite | 105/105 |
+| C-duck-rows | both shas equal (§11b) |
+| C-teacher | 0.99825 ≥ 0.995 |
+| C-direct-params | params sha256 `34e8a3af6ea3…`, identical to the committed `v2-bc-duck-d2w8-s1`; tier A 25/25 |
+| C-kd-control (path check) | teacher agreement 0.99699 ≥ 0.99 (solver 0.99556, recallDuck 0.99991); identity test in the 105/105. Data: tier A 25/25, **opening 973/1,000** (not clean; direct s1 is clean) |
+
+### Stage 0 (direct clones, seeds 1–10; `runs/exp-distill/stage0-summary.json`)
+| Shape (params) | Clean/10 | Clean seeds | Seeds stuck | Seeds early release | Duck share, clean | Tier B (0/1,000, contiguous + footer) | Min margin (tier-B models) | Class |
+|---|---|---|---|---|---|---|---|---|
+| 2×6 (333) | 4 | s6–s9 | 5 | 1 | 1.000 | s6, s7 | 6.1e-4 | **MARGINAL** |
+| 1×6 (291) | 10 | s1–s10 | 0 | 0 | 1.000 | s1, s2 | 8.6e-5 | **PASS** |
+| 2×4 (215) | 5 | s1, s3, s5, s6, s10 | 3 | 1 | 1.000 | s1, s3 | 1.3e-4 | **MARGINAL** |
+| 1×4 (195) | 10 | s1–s10 | 0 | 0 | 1.000 | s1, s2 | 1.6e-4 | **PASS** |
+
+- Clean seeds beyond the first two per shape rest on tier A + the opening scan only (§11b tier-B cap).
+- **Reading (§5.1 rule 1):** D1 targets = the MARGINAL shapes, largest first: **2×6, then 2×4**. Not every shape is PASS, so no Stage 0b.
+- **Surprise (not a reading):** both one-layer shapes are 10/10 clean, the two-layer shapes 4–5/10, like the direct d2w8 reference (5/10). All Stage 0 failures are in the opening (stuck duck or early release).
+- D1 waits for the orchestrator's go (the Mac is lent to the rules-v3 survey).
