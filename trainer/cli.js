@@ -21,7 +21,7 @@
 //                              [--target 1000000] [--workers N] [--wasm] [--force] [--overwrite] [--snapshots]
 //                              [--distill-from <best.json> [--distill-mode soft|hard] [--tau 1] [--alpha 0]]
 //                              [--quant-bits N [--quant-scheme row|layer]]
-//   node trainer/cli.js bc-quantize --from <best.json> --dir runs/<name> --quant-bits N [--quant-scheme row|layer]
+//   node trainer/cli.js bc-quantize --from <best.json> --dir runs/<name> --quant-bits N [--quant-scheme row|layer]  (refuses another core hash unless --force)
 //                              [--target 1000000] [--workers N] [--wasm] [--overwrite]
 //
 // Behaviour cloning of test/solver.js (trainer/bc.js; supervised, no ES):
@@ -994,6 +994,11 @@ async function bcQuantizeCmd({ config: cli, opts }) {
   const quant = parseQuant(opts, bc);
   if (!quant) throw new Error('bc-quantize needs --quant-bits N');
   const { abs, model: src } = loadTrainedModel(opts.from, '--from');
+  const hash = coreHash();
+  if (src.coreHash && src.coreHash !== hash) {
+    if (!opts.force) throw new Error(`core hash mismatch: --from was trained on ${src.coreHash.slice(0, 12)}, current core/policy is ${hash.slice(0, 12)}; pass --force to quantize it anyway`);
+    log(`WARNING: --from core hash ${src.coreHash.slice(0, 12)} differs from the current ${hash.slice(0, 12)}, continuing because of --force`);
+  }
   const target = cli.target || 1000000;
   fs.mkdirSync(dir, { recursive: true });
   const bestFile = path.join(dir, 'best.json');
@@ -1025,7 +1030,7 @@ async function bcQuantizeCmd({ config: cli, opts }) {
     quantFrom: { path: path.relative(ROOT, abs), paramsSha256: bc.paramsSha256(src.params), method: sc.method || null, seed: sc.seed ?? null },
     quant: quantConfig,
   };
-  writeJsonAtomic(bestFile, bc.assembleBest({ layers: src.layers, params: q.params, validation, coreHash: coreHash(), config }));
+  writeJsonAtomic(bestFile, bc.assembleBest({ layers: src.layers, params: q.params, validation, coreHash: src.coreHash || hash, config }));
   release();
   log(`validation: median ${validation.median} min ${validation.min} count ${validation.count}/${valSeedList.length} -> ${path.relative(ROOT, bestFile)}`);
 }

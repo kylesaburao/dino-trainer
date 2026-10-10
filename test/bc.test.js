@@ -589,4 +589,10 @@ test('bc-quantize: post-training quantization into a new run dir, validated, wit
   assert.match(again.stderr, /exists; pass --overwrite/);
   const none = cli('bc-quantize', '--from', src, '--dir', path.join(tmp, 'ptq-none'));
   assert.match(none.stderr, /needs --quant-bits/);
+  assert.strictEqual(best.coreHash, srcBest.coreHash, 'the source model core hash is carried over');
+  const stale = path.join(tmp, 'stale-src.json');
+  fs.writeFileSync(stale, JSON.stringify({ ...srcBest, coreHash: '0'.repeat(64) }));
+  const refused = cli('bc-quantize', '--from', stale, '--dir', path.join(tmp, 'ptq-stale'), '--quant-bits', '8');
+  assert.notStrictEqual(refused.status, 0);
+  assert.match(refused.stderr, /core hash mismatch/);
 });
