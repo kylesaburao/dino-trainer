@@ -19,6 +19,7 @@
   --text-muted: #7a7973;
   --series-1: #2a78d6;
   --series-2: #eb6834;
+  --series-3: #12936b;
   --good: #0ca30c;
   --critical: #d03b3b;
   --accent-soft: #e8f0fb;
@@ -35,6 +36,7 @@
     --text-muted: #8f8e86;
     --series-1: #3987e5;
     --series-2: #d95926;
+    --series-3: #2fb48a;
     --accent-soft: #1d2a3a;
     --neg: #e66767;
     --neutral: #383835;
@@ -51,6 +53,7 @@
   --text-muted: #8f8e86;
   --series-1: #3987e5;
   --series-2: #d95926;
+  --series-3: #2fb48a;
   --accent-soft: #1d2a3a;
   --neg: #e66767;
   --neutral: #383835;
@@ -132,6 +135,16 @@ details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px
 table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
 th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 th { color: var(--text-secondary); font-weight: 600; }
+.badge { font-size: 11px; font-weight: 600; border-radius: 4px; padding: 0 5px; background: var(--accent-soft); color: var(--series-1); border: 1px solid color-mix(in srgb, var(--series-1) 35%, transparent); }
+details.group { margin: -6px 0 12px; }
+details.group .runs { margin: 8px 0 4px; }
+.snaps { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.snaps button { font: inherit; font-size: 12px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); border-radius: 6px; padding: 2px 8px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.snaps button[aria-pressed="true"] { border-color: var(--series-1); background: var(--accent-soft); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13px; margin-top: 6px; }
+.kv dt { color: var(--text-secondary); }
+.kv dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.bad { color: var(--critical); font-weight: 600; }
 .cfg { font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--text-secondary); overflow-wrap: anywhere; }
 </style>
 </head>
@@ -142,6 +155,7 @@ th { color: var(--text-secondary); font-weight: 600; }
     <span class="updated" id="updated">loading…</span>
   </header>
   <div class="runs" id="runs" role="group" aria-label="Training runs"></div>
+  <div id="run-groups"></div>
   <section class="card" id="playback" hidden>
     <div class="play-head">
       <div>
@@ -214,7 +228,7 @@ function ticks(min, max, n = 4) {
 }
 
 // Line chart with crosshair tooltip. series: [{ name, color, points: [[x, y]], markers }]
-function lineChart(host, series, { yFmt = compact, xLabel = 'generation', yMinZero = true } = {}) {
+function lineChart(host, series, { yFmt = compact, xLabel = 'generation', yMinZero = true, tFmt = (v) => num(v, 1) } = {}) {
   host.innerHTML = '';
   const pts = series.flatMap(s => s.points);
   if (!pts.length) { host.innerHTML = '<div class="empty">No data yet</div>'; return; }
@@ -262,7 +276,7 @@ function lineChart(host, series, { yFmt = compact, xLabel = 'generation', yMinZe
     for (const s of series) {
       const p = s.points.find(q => q[0] === best);
       if (!p) continue;
-      rows += `<div class="row"><i style="background:${s.color}"></i>${esc(s.name)} <b>${num(p[1], 1)}</b></div>`;
+      rows += `<div class="row"><i style="background:${s.color}"></i>${esc(s.name)} <b>${tFmt(p[1])}</b></div>`;
       dots += `<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="4.5" fill="${s.color}" stroke="${css('--surface-1')}" stroke-width="2"/>`;
     }
     hd.innerHTML = dots;
@@ -280,13 +294,50 @@ function tile(k, v, s = '', cls = '') {
   return `<div class="tile"><div class="k">${k}</div><div class="v ${cls}">${v}</div><div class="s">${s}</div></div>`;
 }
 
+// Layers as "44-32-32-3", or "44-d64w32-3" for a deep uniform stack.
+function layersText(L) {
+  if (!L || !L.length) return '?';
+  const h = L.slice(1, -1);
+  if (h.length > 4 && h.every(x => x === h[0])) return `${L[0]}-d${h.length}w${h[0]}-${L[L.length - 1]}`;
+  return L.join('-');
+}
+
+function bcChip(r) {
+  const b = r.bc;
+  const what = r.kind === 'demos' ? `demos · ${b.demos ? compact(b.demos.rows) + ' rows' : 'generating'}`
+    : `${layersText(b.layers)}${b.backend ? ' · ' + b.backend : ''}${b.epochsDone ? ` · epoch ${b.epochsDone}${b.epochs ? '/' + b.epochs : ''}` : ''}`;
+  return `<button class="run-chip" type="button" aria-pressed="${r.name === selected}" data-run="${esc(r.name)}">
+    <span class="dot ${r.running ? 'live' : ''}" aria-hidden="true"></span><span class="badge">${r.kind === 'demos' ? 'BC demos' : 'BC'}</span>${esc(r.name)}<span style="color:var(--text-muted)">${r.running ? 'running' : 'stopped'} · ${esc(b.teacher)} · ${esc(what)}</span></button>`;
+}
+
+// Stopped runs nested one level down (runs/<group>/<run>) fold into one collapsible row per
+// group; running ones stay in the top row with the top-level runs.
+const openGroups = new Set();
 function renderRuns(runs) {
-  $('#runs').innerHTML = runs.map(r => `<button class="run-chip" type="button" aria-pressed="${r.name === selected}" data-run="${esc(r.name)}">
-    <span class="dot ${r.running ? 'live' : ''}" aria-hidden="true"></span>${esc(r.name)}<span style="color:var(--text-muted)">${r.running ? 'running' : 'stopped'} · gen ${r.generation}</span></button>`).join('');
+  const chip = (r) => r.kind === 'bc' || r.kind === 'demos' ? bcChip(r) : esChip(r);
+  const top = runs.filter(r => !r.name.includes('/') || r.running);
+  const groups = new Map();
+  for (const r of runs) if (r.name.includes('/') && !r.running) {
+    const g = r.name.split('/')[0];
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(r);
+  }
+  if (selected && selected.includes('/')) openGroups.add(selected.split('/')[0]);
+  $('#runs').innerHTML = top.map(chip).join('');
+  $('#run-groups').innerHTML = [...groups].sort((a, b) => a[0].localeCompare(b[0])).map(([g, rs]) =>
+    `<details class="group" data-group="${esc(g)}"${openGroups.has(g) ? ' open' : ''}><summary>${esc(g)}/ · ${rs.length} run${rs.length > 1 ? 's' : ''}</summary>
+      <div class="runs">${rs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).map(chip).join('')}</div></details>`).join('');
+  for (const d of document.querySelectorAll('details.group')) d.ontoggle = () => { d.open ? openGroups.add(d.dataset.group) : openGroups.delete(d.dataset.group); };
   for (const b of document.querySelectorAll('.run-chip')) b.onclick = () => { selected = b.dataset.run; try { localStorage.setItem('dino-dash-run', selected); } catch (e) {} refresh(); };
 }
 
+function esChip(r) {
+  return `<button class="run-chip" type="button" aria-pressed="${r.name === selected}" data-run="${esc(r.name)}">
+    <span class="dot ${r.running ? 'live' : ''}" aria-hidden="true"></span>${esc(r.name)}<span style="color:var(--text-muted)">${r.running ? 'running' : 'stopped'} · gen ${r.generation}</span></button>`;
+}
+
 function renderDetail(d) {
+  if (d.info.kind === 'bc' || d.info.kind === 'demos') return renderBcDetail(d);
   const { info, metrics, log } = d;
   const last = info.last || {};
   const cfg = info.config || {};
@@ -352,6 +403,117 @@ function renderDetail(d) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+// ---------------------------------------------------------------------------
+// Behaviour-cloning runs (bc-train) and demonstration sets (bc-gen).
+// bc-metrics.jsonl rows: { backend, epoch (0-based), loss, recall: { <class>: r, ... }, seconds }.
+// Charts use 1-based epochs, matching snapshots/epoch-NN.json.
+// ---------------------------------------------------------------------------
+const SERIES = ['--series-1', '--series-2', '--series-3'];
+const pct = (v, d = 1) => Number.isFinite(v) ? (v * 100).toFixed(d) + '%' : '–';
+const short = (h) => h ? String(h).slice(0, 12) : '–';
+
+function demosCard(dm, ref, bestHash) {
+  if (!dm) return `<div class="card wide"><h2>Demonstrations</h2><div class="sub">${ref ? `Manifest ${esc(ref)} not found on this computer` : 'No demos manifest recorded'}</div></div>`;
+  const classes = Object.keys((dm.counts && dm.counts.rows) || {});
+  const cnt = classes.map(c => `${esc(c)} ${num(dm.counts.rows[c])}${dm.counts.weighted && dm.counts.weighted[c] !== dm.counts.rows[c] ? ` (weighted ${num(dm.counts.weighted[c])})` : ''}`).join(' · ');
+  const hashNote = bestHash && dm.coreHash && bestHash !== dm.coreHash ? ` <span class="bad">≠ model core ${esc(short(bestHash))}</span>` : '';
+  return `<div class="card wide"><h2>Demonstrations</h2><div class="sub">${esc(dm.file)} (bc-gen manifest)</div>
+    <dl class="kv">
+      <dt>Rows</dt><dd>${num(dm.rows)}</dd>
+      <dt>Per class</dt><dd>${cnt || '–'}</dd>
+      <dt>Teacher</dt><dd>${esc(dm.teacherName || 'not recorded (teacher-jump)')}${dm.teacher ? ` · ${esc(dm.teacher)}` : ''}</dd>
+      <dt>Solver crashes</dt><dd class="${dm.solverCrashes ? 'bad' : ''}">${num(dm.solverCrashes)}</dd>
+      <dt>Core hash</dt><dd>${esc(short(dm.coreHash))}${hashNote}</dd>
+      <dt>Game</dt><dd>${esc(dm.gameVersion || '–')}</dd>
+      <dt>Seeds · levels</dt><dd>${esc(dm.seeds || '–')} · ${esc((dm.levels || []).join(', '))} (span0 ${num(dm.span0)}, span ${num(dm.span)}, keep-boring ${num(dm.keepBoring)})</dd>
+      <dt>Created</dt><dd>${dm.createdAt ? esc(new Date(dm.createdAt).toLocaleString()) : '–'} · sha ${esc(short(dm.sha256))}</dd>
+    </dl></div>`;
+}
+
+function evalsCard(evals) {
+  if (!evals.length) return '';
+  return `<div class="card wide"><h2>Held-out evaluations</h2><div class="sub">evals.jsonl (node trainer/cli.js eval)</div>
+    <div class="table-wrap"><table><thead><tr><th>time</th><th>seeds</th><th>offset</th><th>target</th><th>passed</th><th>95% CP</th><th>median</th><th>min</th></tr></thead>
+    <tbody>${evals.slice().reverse().map(e => `<tr><td>${e.time ? esc(new Date(e.time).toLocaleString()) : ''}</td><td>${num(e.seeds)}</td><td>${num(e.seedOffset)}</td><td>${compact(e.target)}</td>
+      <td>${e.passed !== undefined ? `${num(e.passed)}/${num(e.seeds)}` : '–'}</td><td>${e.passCI95 ? `${e.passCI95.lower.toFixed(3)}–${e.passCI95.upper.toFixed(3)}` : '–'}</td><td>${num(e.median)}</td><td>${num(e.min)}</td></tr>`).join('')}</tbody></table></div></div>`;
+}
+
+function renderBcDetail(d) {
+  const { info, metrics, log } = d;
+  const b = info.bc, cfg = info.config || {}, best = info.best;
+  const status = info.running ? `<span class="status-live">● Running</span>` : '○ Stopped';
+  const statusSub = info.running ? `${info.process || ''} PID ${info.pid} · since ${new Date(info.startedAt).toLocaleTimeString()}` : `updated ${ago(info.updated)}`;
+  const last = metrics[metrics.length - 1];
+  const secs = metrics.reduce((a, r) => a + (r.seconds || 0), 0);
+  const ev = info.lastEval;
+  const logCard = `<div class="card wide"><h2>Log</h2><div class="sub">Tail of the newest *.log in the run directory${info.name.includes('/') ? ' (or &lt;group&gt;/&lt;run&gt;.log)' : ''}</div>
+    <pre class="log" id="log">${log.length ? esc(log.join('\n')) : 'No log file found.'}</pre></div>`;
+  const cfgCard = `<div class="card wide"><details><summary>Config (best.json)</summary><p class="cfg">${esc(JSON.stringify(cfg))}${best && best.coreHash ? `<br>core ${esc(short(best.coreHash))}` : ''}</p></details></div>`;
+  if (info.kind === 'demos') {
+    const dm = b.demos;
+    $('#detail').innerHTML = `
+      <div class="tiles">
+        ${tile('Status', status, statusSub)}
+        ${tile('Teacher', esc(b.teacher), esc((dm && dm.teacher) || 'test/solver.js'))}
+        ${tile('Demonstration rows', dm ? compact(dm.rows) : '–', dm ? Object.entries(dm.counts.rows).map(([k, v]) => `${esc(k)} ${compact(v)}`).join(' · ') : 'bc-gen in progress')}
+        ${tile('Solver crashes', dm ? num(dm.solverCrashes) : '–', dm ? `core ${esc(short(dm.coreHash))}` : '', dm && dm.solverCrashes ? 'bad' : '')}
+      </div>
+      <div class="charts">${demosCard(dm, null, null)}${logCard}</div>`;
+    const logEl = $('#log'); logEl.scrollTop = logEl.scrollHeight;
+    return;
+  }
+  const classes = [...new Set(metrics.flatMap(r => Object.keys(r.recall || {})))];
+  const v = best && best.validation;
+  $('#detail').innerHTML = `
+    <div class="tiles">
+      ${tile('Status', status, statusSub)}
+      ${tile('Teacher', esc(b.teacher), `${esc(b.teacherSource || 'test/solver.js')} · behaviour cloning`)}
+      ${tile('Network', esc(layersText(b.layers)), `${esc(b.backend || '–')}${cfg.seed !== undefined ? ` · seed ${cfg.seed}` : ''}${cfg.lr ? ` · lr ${cfg.lr}` : ''}`)}
+      ${metrics.length || info.running ? tile('Epoch', `${num(b.epochsDone)}${b.epochs ? ' / ' + num(b.epochs) : ''}`, last ? `loss ${last.loss.toFixed(4)} · ${classes.map(c => `${esc(c)} ${pct(last.recall[c], 2)}`).join(' · ')}` : 'no epochs logged yet') : ''}
+      ${tile('Validation', v ? `${num(v.count)}/25` : '–', v ? `seeds reaching ${compact(cfg.target)} · median ${num(v.median)} · min ${num(v.min)}` : info.running ? 'after training' : 'no best.json')}
+      ${tile('Held-out eval', ev ? `${num(ev.passed)}/${num(ev.seeds)}` : '–', ev ? `offset ${num(ev.seedOffset)} · target ${compact(ev.target)}${ev.passCI95 ? ` · CP ${ev.passCI95.lower.toFixed(3)}–${ev.passCI95.upper.toFixed(3)}` : ''}` : 'not evaluated')}
+      ${!metrics.length && !cfg.trainSeconds ? '' : tile('Training time', dur((cfg.trainSeconds || secs) * 1000), metrics.length ? `${(secs / metrics.length).toFixed(1)}s per epoch` : '')}
+    </div>
+    <div class="charts">
+      ${metrics.length || info.running ? `<div class="card">
+        <h2>Training loss</h2>
+        <div class="sub">Class-weighted cross-entropy, mean over the epoch's batches</div>
+        <div class="chart" id="c-loss"></div>
+      </div>
+      <div class="card">
+        <h2>Recall by class</h2>
+        <div class="sub">Training-set recall of the teacher's action, per class (subsample)</div>
+        <div class="legend">${classes.map((c, i) => `<span><i style="background:var(${SERIES[i % SERIES.length]})"></i>${esc(c)}</span>`).join('')}</div>
+        <div class="chart" id="c-recall"></div>
+      </div>
+      <div class="card">
+        <h2>Seconds per epoch</h2>
+        <div class="sub">Wall time of each epoch (${esc(b.backend || 'backend')})</div>
+        <div class="chart" id="c-secs"></div>
+      </div>` : `<div class="card wide"><h2>Training</h2><div class="sub">No bc-metrics.jsonl: trained outside bc-train (${esc(cfg.trainer || 'unknown trainer')})</div></div>`}
+      <div class="card">
+        <h2>Snapshots</h2>
+        <div class="sub">${b.snapshots.length ? 'snapshots/epoch-NN.json, taken after each epoch; click to play one' : 'No snapshots/ (bc-train --snapshots, python backend)'}</div>
+        <div class="snaps">${b.snapshots.map(s => `<button type="button" data-snap="${esc(s.name)}" aria-pressed="${$('#pb-which').value === s.name}">${s.epoch}</button>`).join('')}</div>
+      </div>
+      ${demosCard(b.demos, b.demosRef, best && best.coreHash)}
+      ${evalsCard(info.evals || [])}
+      ${logCard}
+      ${cfgCard}
+    </div>`;
+  const xs = (r) => r.epoch + 1;
+  if ($('#c-loss')) lineChart($('#c-loss'), [{ name: 'Loss', color: css('--series-1'), markers: metrics.length <= 60, points: metrics.map(r => [xs(r), r.loss]) }],
+    { xLabel: 'epoch', yFmt: (x) => x.toFixed(3), tFmt: (x) => x.toFixed(5) });
+  if ($('#c-recall')) lineChart($('#c-recall'), classes.map((c, i) => ({ name: c, short: c, color: css(SERIES[i % SERIES.length]), markers: metrics.length <= 60,
+    points: metrics.filter(r => r.recall && Number.isFinite(r.recall[c])).map(r => [xs(r), r.recall[c]]) })),
+    { xLabel: 'epoch', yMinZero: false, yFmt: (x) => pct(x), tFmt: (x) => pct(x, 3) });
+  if ($('#c-secs')) lineChart($('#c-secs'), [{ name: 'Seconds', color: css('--series-1'), markers: metrics.length <= 60, points: metrics.map(r => [xs(r), r.seconds]) }],
+    { xLabel: 'epoch', yFmt: (x) => x.toFixed(1), tFmt: (x) => x.toFixed(2) + 's' });
+  for (const btn of document.querySelectorAll('.snaps button')) btn.onclick = () => { $('#pb-which').value = btn.dataset.snap; $('#pb-which').onchange(); renderBcDetail(d); };
+  const logEl = $('#log');
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
 async function refresh() {
   try {
     const runs = await (await fetch('/api/runs')).json();
@@ -361,12 +523,17 @@ async function refresh() {
       selected = runs.some(r => r.name === saved) ? saved : runs.length ? runs[0].name : null;
     }
     renderRuns(runs);
-    setPlaybackRun(selected);
+    if (!selected) setPlaybackRun(null);
     if (selected) {
-      const openDetails = document.querySelector('details') && document.querySelector('details').open;
-      lastData = await (await fetch('/api/runs/' + encodeURIComponent(selected))).json();
+      const openDetails = document.querySelector('#detail details') && document.querySelector('#detail details').open;
+      const name = selected;
+      const data = await (await fetch('/api/runs/' + encodeURIComponent(name))).json();
+      if (name !== selected) return;   // the user picked another run meanwhile
+      lastData = data;
+      setWeightOptions(lastData.info);
+      setPlaybackRun(selected);
       renderDetail(lastData);
-      if (openDetails) document.querySelector('details').open = true;
+      if (openDetails && document.querySelector('#detail details')) document.querySelector('#detail details').open = true;
     }
     $('#updated').textContent = `refreshed ${new Date().toLocaleTimeString()} · every ${REFRESH_MS / 1000}s`;
   } catch (e) {
@@ -387,12 +554,79 @@ async function loadModel() {
   return res.json();
 }
 
+// Teacher playback: the solver itself (test/solver.js via the dashboard's /teacher.js
+// shim), one fresh create*Solver() controller per episode. Not a network.
+const teacher = { factories: [], error: null };
+const teacherLabel = (f) => f === 'createSolver' ? 'teacher-jump' : 'teacher-' + f.replace(/^create|Solver$/g, '').toLowerCase();
+const teacherReady = new Promise((resolve) => {
+  const el = document.createElement('script');
+  el.src = '/teacher.js';
+  el.onload = () => {
+    teacher.factories = Object.keys(window.DinoTeacher || {}).filter(k => /^create\w*Solver$/.test(k) && typeof DinoTeacher[k] === 'function');
+    if (!teacher.factories.length) teacher.error = 'test/solver.js exports no create*Solver';
+    resolve();
+  };
+  el.onerror = () => { teacher.error = 'could not load /teacher.js'; resolve(); };
+  document.head.appendChild(el);
+});
+
+// The Weights menu. ES runs keep the original two entries; BC runs list best.json, every
+// snapshot epoch and every teacher; demos runs list the teachers.
+const ES_WEIGHTS = [{ v: 'current', t: 'Latest checkpoint' }, { v: 'best', t: 'Best (validation)' }];
+function weightOptions(info) {
+  if (info.kind === 'es') return ES_WEIGHTS;
+  const o = [];
+  if (info.best) o.push({ v: 'best', t: 'Clone: best.json (final)', g: 'Clone' });
+  for (const s of info.bc.snapshots) o.push({ v: s.name, t: `Clone: epoch ${s.epoch} snapshot`, g: 'Clone snapshots' });
+  for (const f of teacher.factories) o.push({ v: 'teacher:' + f, t: `Teacher: ${teacherLabel(f)} (${f})`, g: 'Teacher (solver)' });
+  return o;
+}
+let weightSig = JSON.stringify(ES_WEIGHTS);
+function setWeightOptions(info) {
+  pb.teacherVersion = (info.best && info.best.gameVersion) || (info.bc && info.bc.demos && info.bc.demos.gameVersion) || 'v2';
+  const opts = weightOptions(info), sig = JSON.stringify(opts);
+  if (sig === weightSig && pb.run === info.name) return;
+  const sel = $('#pb-which'), prev = sel.value;
+  weightSig = sig;
+  let html = '', group = null;
+  for (const o of opts) {
+    if (o.g !== group) { if (group) html += '</optgroup>'; if (o.g) html += `<optgroup label="${esc(o.g)}">`; group = o.g; }
+    html += `<option value="${esc(o.v)}">${esc(o.t)}</option>`;
+  }
+  if (group) html += '</optgroup>';
+  sel.innerHTML = html;
+  const keep = (pb.run === info.name || info.kind === 'es') && opts.some(o => o.v === prev);   // ES: as before, the choice persists across runs
+  const snaps = opts.filter(o => /^epoch-/.test(o.v));
+  sel.value = keep ? prev : info.kind === 'es' ? 'current'
+    : opts.some(o => o.v === 'best') ? 'best' : snaps.length ? snaps[snaps.length - 1].v : opts.length ? opts[0].v : '';
+  if (pb.run === info.name && sel.value !== prev) { pb.model = null; newEpisode(); }
+}
+
+function newTeacherEpisode(which) {
+  const f = which.slice('teacher:'.length), make = window.DinoTeacher && DinoTeacher[f];
+  if (!make) { $('#pb-caption').textContent = `Teacher unavailable: ${teacher.error || f}`; pb.game = null; return; }
+  pb.model = { teacher: f, gameVersion: pb.teacherVersion || 'v2', which };
+  pb.seed = Math.floor(Math.random() * 0x40000000);
+  $('#pb-stage').classList.remove('night');
+  pb.game = DinoCore.createGame({ rng: DinoCore.createRng(pb.seed), version: pb.model.gameVersion, hooks: { night: (on) => $('#pb-stage').classList.toggle('night', on) } });
+  pb.agent = { act: make() };
+  nn.clear('the teacher is the solver, not a network');
+  pb.overAt = 0;
+  pb.episodes++;
+}
+
 async function newEpisode() {
   if (pb.loading || !pb.run) return;
+  if ($('#pb-which').value.startsWith('teacher:')) {
+    pb.loading = true;
+    try { await teacherReady; newTeacherEpisode($('#pb-which').value); } finally { pb.loading = false; }
+    return;
+  }
   pb.loading = true;
   try {
     const m = await loadModel();
     if (m) pb.model = m;
+    if (pb.model && pb.model.teacher) pb.model = null;
     if (!pb.model) { $('#pb-caption').textContent = 'No weights yet for this run (they appear after the first checkpoint).'; pb.game = null; return; }
     pb.seed = Math.floor(Math.random() * 0x40000000);       // training seed range, never validation/held-out
     $('#pb-stage').classList.remove('night');
@@ -413,7 +647,7 @@ function playbackFrame(t) {
   const dt = Math.min(Math.max(t - pb.last, 0), 100);
   pb.last = t;
   const g = pb.game;
-  if (!g) return;
+  if (!g || !pb.model) return;   // weights reloading after a menu change
   if (g.state === 'over') {
     if (!pb.overAt) pb.overAt = t;
     if (t - pb.overAt > 1200) newEpisode();
@@ -428,7 +662,7 @@ function playbackFrame(t) {
     pb.behind = false;
     while (pb.acc >= DinoCore.FRAME_MS) {
       const keys = pb.agent.act(g);
-      if (g.state === 'running') nn.capture(g, keys);
+      if (g.state === 'running' && !pb.model.teacher) nn.capture(g, keys);
       g.step(keys);
       pb.acc -= DinoCore.FRAME_MS;
       if (g.state === 'over') { pb.acc = 0; break; }
@@ -438,8 +672,12 @@ function playbackFrame(t) {
   pb.renderer.draw(g, g.frameIndex * DinoCore.FRAME_MS, 0);
   nn.draw();
   const m = pb.model;
+  const src = m.teacher ? `${teacherLabel(m.teacher)} (${m.teacher} from test/solver.js; privileged teacher, not a network)`
+    : m.epoch ? `snapshot weights from epoch ${m.epoch}`
+    : m.generation === null || m.generation === undefined ? `${m.which === 'best' ? 'best' : 'latest'} weights (behaviour clone)`
+    : `${m.which === 'best' ? 'best' : 'latest'} weights from generation ${m.generation}`;
   $('#pb-caption').textContent = `game ${g.version}${g.version === 'v2' ? ` (level ${g.level.toFixed(2)})` : ''} · ` +
-    `${m.which === 'best' ? 'best' : 'latest'} weights from generation ${m.generation} · seed ${pb.seed} · ` +
+    `${src} · seed ${pb.seed} · ` +
     `score ${g.score()}${g.state === 'over' ? ' · crashed, next episode…' : ''} · speed ${g.speed.toFixed(2)}` +
     (pb.behind ? ' · playback can\'t keep up at this speed' : '');
 }
@@ -475,6 +713,13 @@ const nn = (() => {
   const canvas = $('#nn-canvas'), ctx = canvas.getContext('2d'), tip = $('#nn-tip');
   let model = null, acts = null, chosen = -1, fresh = false, mismatches = 0, nodes = [], dirty = true;
   const x = new Float64Array(DinoPolicy.OBS_DIM);
+
+  function clear(why) {
+    model = null; acts = null; nodes = []; chosen = -1;
+    $('#nn-arch').textContent = why ? `· ${why}` : '';
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
 
   function setModel(m) {
     if (model && m.params === model.params) return;
@@ -683,7 +928,7 @@ const nn = (() => {
   canvas.addEventListener('pointerleave', () => { tip.style.display = 'none'; });
   window.addEventListener('resize', () => { dirty = true; });
 
-  return { setModel, capture, draw, get mismatches() { return mismatches; }, get chosen() { return chosen; }, get acts() { return acts; } };
+  return { setModel, clear, capture, draw, get mismatches() { return mismatches; }, get chosen() { return chosen; }, get acts() { return acts; } };
 })();
 
 pb.renderer = DinoRender.createRenderer($('#pb-canvas'));
@@ -692,7 +937,8 @@ requestAnimationFrame(playbackFrame);
 
 let resizeTimer;
 window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => lastData && renderDetail(lastData), 150); });
-refresh();
+window.__dash = { pb, nn, teacher, teacherReady };   // for test/dashboard-check.js
+teacherReady.then(refresh);
 setInterval(refresh, REFRESH_MS);
 </script>
 </body>

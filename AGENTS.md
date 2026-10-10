@@ -17,7 +17,8 @@ node --test --test-name-pattern 'v2' test/   # tests matching a name
 node test/browser-check.js                # headless Chrome over CDP (CHROME env var overrides the macOS Chrome path)
 node test/smoke-trainer.js                # end-to-end trainer smoke test (lock, SIGINT, resume, hash mismatch, eval, export)
 node trainer/cli.js bench --seconds 5     # simulated frames/s
-node trainer/dashboard.js                 # live training dashboard at http://127.0.0.1:8080
+node trainer/dashboard.js                 # live dashboard at http://127.0.0.1:8080: ES, BC and bc-gen runs, runs/<group>/<run> too; playback incl. the teacher (solver)
+node test/dashboard-check.js              # headless Chrome check of the dashboard on a temp runs/ fixture
 ```
 
 There is no build step and no linter. To play, open `index.html` (or `index-css.html`) directly in a browser.
