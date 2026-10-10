@@ -143,6 +143,7 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 - A new trainer flag must leave defaults IDENTICAL against the pre-change commit.
 
 **Findings that constrain defaults.**
+- **Shape cap (user order, 2026-10-10):** at most 16 hidden layers and at most 32 units per layer in any run, sweep or brief. The code stays generic over `--hidden`.
 - Plateau escape is seed-dependent: on 32,32 with `--rank-ties mid --decay decoupled --weight-decay 0.01`, about 25% of seeds escape by generation 900 and 80–90% by generation 1500.
 - Decoupled weight decay 0.1 slows the climb; use about 0.01.
 - A tie-rate σ controller was tried and removed: σ ran away, because ties rise again at large σ.
