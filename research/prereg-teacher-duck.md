@@ -87,5 +87,17 @@ Is `teacher-duck` a valid teacher, one that never crashes and actually ducks, so
 - Mid pterodactyls (game-side: the box clears the ducking box but hits the standing box, i.e. y = 82): 41,372,440 encountered, 41,371,831 passed, 0 ducked.
 - `createSolver`'s body is unchanged by the merge of `createDuckSolver` (9616c3b; the diff touches only the import and export lines).
 
-### Duck arm (`createDuckSolver`, solver commit `9616c3b`)
-Running on the same seeds since 19:45:52Z (branch head `e635de4`). Results follow.
+### Duck arm (`createDuckSolver`, solver commit `9616c3b`): **0 crashes, fallback 0% → H-safe holds; `teacher-duck` is valid**
+- Run: same harness and seeds, `--solver duck`. Branch head `e635de4` (merge of 9616c3b); core hash `0f329d4e3493…`. 19:45:52Z → 20:04:22Z (1109 s).
+- **0 crashes in 5,000 full games to 1,000,000 points.** One-sided 95% CP upper bound on the crash rate: 0.060%.
+- Solver counters, summed over seeds:
+  - mid pterodactyls encountered 41,372,227; ducked 41,372,227; **fallback 0 (0.00%)** (takeoff 0, obstacle 0, newcomer 0);
+  - **conflicts 0** on every seed.
+- DOWN held on **2.221%** of frames (215,786,549; the solver's and the harness's counts agree). 14.31% of passed obstacles were ducked.
+- Game-side mid pterodactyls: 41,372,440 encountered, 41,371,831 passed. The harness counts 41,129,656 (99.41%) as ducked on *every* frame of overlap with the ducking box's x-extent.
+  - The 0.59% shortfall is definitional, not unsafe behaviour. A single-thread probe on seed 40,000,000 (to 200k points: 1,635 mid pterodactyls, 45 short) found the dino **never** standing while a mid pterodactyl overlapped the *standing* box's x-extent, and never jumping during the overlap.
+  - It stands up only while the pterodactyl is within the wider ducking box's front or back margin, where a standing dino can't be hit.
+  - The solver's own count (100% ducked) is the measure the pre-registration names.
+- The 213 extra game-side "encountered" pterodactyls are ones still ahead when the 1M cap ends the game, before the solver's decision frame.
+
+**Reading (§5):** the row "Duck solver: 0 crashes in 5,000, and fallback < 10% of mid pterodactyls" applies. **H-safe holds** at this scope (crash rate < 0.06% one-sided 95%; 5,000 seeds 40,000,000–40,004,999; rules v2 to 1M; solver 9616c3b). **`teacher-duck` is valid.** Next, per §5: step 2 (`bc-gen --teacher duck`, clone and compare), under a separate pre-registration.
