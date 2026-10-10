@@ -62,6 +62,15 @@ Is `teacher-duck` a valid teacher, one that never crashes and actually ducks, so
 
 **Cost:** the solver runs at about 0.9–1.4 µs/frame, and a full game is 1.94M frames. Two arms × 5,000 games × 1.94M frames is about 1.9e10 frames, roughly 5 h CPU, or about 20 min on 16 workers.
 
+## Amendment (2026-10-10, before the duck arm was read)
+Author: desktop-2, at mac-4's request. Recorded before any duck-arm result was read.
+
+1. **Deviation: the duck interval.** §4 says to hold DOWN through the overlap with the **ducking** box. `createDuckSolver` (test/solver.js, merged in `5d05253`) instead holds DOWN through the obstacle's overlap with the **standing** box, plus 1 frame on each side (`DUCK_MARGIN`).
+   - Why: a mid pterodactyl's box (y 95–103) never meets the ducking box (y 120–138) vertically, so the ducking box's horizontal overlap with it can never cause a collision. The only constraint the pterodactyl sets is that the dino must not be standing while it overlaps the standing box.
+   - The ducking box's wider reach matters only for *other* obstacles. The solver's fallback check (2) covers it: no obstacle that hits the ducking box may overlap that box horizontally while DOWN is held. Otherwise the solver takes the planned jump.
+   - Light checks on seeds 40,100,000+ (no survey seeds): with the margin at 0, there were still 0 crashes over 5 games to 200k. With the margin at −2, every game crashed on a mid pterodactyl. So the interval is exact, and the 1-frame margin is slack.
+2. **Correction: the ducking box's x-extent is 54–104**: x = DINO_X + 4 = 54, w = 50. The brief said 56–106, which is wrong. For comparison, the standing box is x 56–86. The solver doesn't hard-code it: `duckBox(dino)` uses `dino.x + 4`, with y = GROUND − DUCK_H + 4 = 120, w 50, h 18, as in `core.js` `dinoBox()`. A unit test (test/solver.test.js) asserts that `duckBox` gives `{x: dino.x + 4, y: 120, w: 50, h: 18}`.
+
 ## 5. Readings (fixed)
 | Result | Reading | Next |
 |---|---|---|
