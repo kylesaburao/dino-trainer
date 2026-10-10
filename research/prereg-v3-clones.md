@@ -225,3 +225,9 @@ The desktops are not used.
 - O5: **`--expect-hash`, defaulting to the model's own `coreHash`**.
 - O6: the margin levels of §4.5 item 2, as listed.
 - O7: **agreement per snapshot for every model** (cheap; descriptive).
+
+**§4.0 tooling done (merge `b0cd6b9`; all §4.0 controls pass: tests 133/133 with PYTHON, dashboard-check 46/46, scan/opening/duckshare/margin defaults identical, `--start` replays exact). Orchestrator rulings on the gaps it found (mac-5, before any §4.1 run):**
+- The scan header records the start score as **`startScore`** (`start` was already the ISO start time). Read §4.0 item 1's `start` as `startScore`.
+- **C-agree (§4.4) is dropped** as tautological: `agreement.py` scores snapshots only and has no labels-vs-themselves mode. The agreement tool's correctness rests on the §4.0 check that its `--split-x4` subsets recombine to the overall figure for all 15 epochs.
+- **Duck share is reported for whole games only**; `duckshare.js` has no split at 100k, and adding one is out of scope (the "where the tool allows" clause in §4.5 item 1).
+- The step-2 tier-B reference scan used by the scan control lives in the `wt/exp-bc-duck` worktree (not on main). Its model params were checked equal to the committed `v2-bc-duck-d2w8-s1/best.json`.
