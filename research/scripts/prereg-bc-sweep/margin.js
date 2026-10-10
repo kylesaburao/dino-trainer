@@ -12,7 +12,7 @@
 // Usage: node margin.js --model <best.json|model.js> [--out result.json]
 const fs = require('fs');
 const path = require('path');
-const ROOT = '/Users/kyle/Desktop/dino-game';
+const ROOT = path.resolve(__dirname, '../../..');   // the checkout this script lives in (worktree-safe)
 const Core = require(path.join(ROOT, 'core.js'));
 const P = require(path.join(ROOT, 'policy.js'));
 const args = process.argv.slice(2);
