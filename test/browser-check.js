@@ -226,9 +226,18 @@ function cdpClient(url) {
     await tap('ArrowDown');
     await click(canvasRect.x + 100, canvasRect.y + 50);
     check('human jump/duck input ignored while AI is on', (await T('humanJump')) === 0 && (await T('humanDown')) === 0);
-    const restarted = await waitUntil(`__t.runs >= 3`, 30000);
+    // A trained model may not crash for minutes, so once it has scored, force a
+    // crash (test-only): drop a copy of an on-screen obstacle onto the dino every
+    // frame until the run ends, then expect the AI to restart by itself.
+    const scored = await waitUntil(`__t.maxScore >= 100 && game.obstacles.length > 0`, 30000);
+    await evaluate(`(() => { const id = setInterval(() => {
+      if (game.state !== 'running') { clearInterval(id); return; }
+      const o = game.obstacles[0]; if (o) game.obstacles.push({ ...o, x: game.dino.x, y: game.dino.y });
+    }, 5); })()`);
+    const crashedAI = await waitUntil(`game.state === 'over'`, 3000);
+    const restarted = crashedAI && await waitUntil(`__t.runs >= 1 && game.state === 'running'`, 3000);
     const t = await evaluate('__t');
-    check('AI plays and scores, crashes and auto-restarts', restarted && t.maxScore > 0, `runs ${t.runs}, max score ${t.maxScore}`);
+    check('AI plays and scores, crashes and auto-restarts', scored && restarted && t.maxScore > 0, `runs ${t.runs}, max score ${t.maxScore}`);
     check('AI picks keys exactly once per fixed-timestep update', t.applyKeys === t.aiFramesApplied && t.applyKeys > 0, `applyKeys ${t.applyKeys}, updates with AI ${t.aiFramesApplied}`);
     check('AI issued key presses through the real input functions', t.aiPresses > 0, `in-run presses ${t.aiPresses}`);
     check('AI runs do not overwrite the human HI', (await evaluate(`localStorage.getItem('dino-hi')`)) === '1' && (await evaluate('hi')) === 1);
