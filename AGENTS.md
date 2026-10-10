@@ -113,6 +113,7 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
   - `--window`, `--start-zero-frac`, `--start-min`, `--start-dist log|points`, `--start-zero-cap`;
   - `--window-adapt`: gated, so the window shrinks while start-0 episodes mostly fail and only grows once the opening is learned. Decided every `--window-adapt-every` generations (default 5) on pooled pass counts. Needs `--start-dist points`;
   - `--fitness-agg mean|geomean`: geomean lets a failing stage (for example the opening) dominate. Needs `--window`.
+  - `--ramp-frac F --ramp-min P --ramp-max P`: natural-ramp starts. The solver (`test/solver.js`) plays from 0 and hands over to the student at a level in [P_min, P_max] (for example 400–800), when grounded with keys up. These count as "late" episodes for `--window-adapt`. Needs `--window`. Costs about 2.8 ms of teacher prefix per ramp episode.
 - Speed: `--wasm` runs the MLP forward pass as WASM SIMD in the trainer only (train, `eval --wasm`, `bench --wasm`). It is bit-identical to JS (verified on arm64 and x86) and about 1.65–1.7× faster. Use it for all experiments.
 - Selection and stopping: `--select median|count`, `--stop-rule median|allpass[:N]`, `--val-seeds N`, `--fold-validation` (validates every generation inside the training batch), `--eval-when-fit-max`.
 - ES:
