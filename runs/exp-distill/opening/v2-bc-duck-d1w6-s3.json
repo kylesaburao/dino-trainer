@@ -1,0 +1,1 @@
+{"model":"runs/exp-distill/v2-bc-duck-d1w6-s3/best.json","teacher":null,"layers":[44,6,3],"seeds":{"base":30003000,"n":1000},"target":2000,"games":1000,"passed":1000,"failed":0,"stuck":0,"lag":{"n":11776,"p50":2,"p99":3,"p999":3,"max":3,"ge5":0,"ge10":0,"ge20":0},"runs":{"midRuns":11776,"noMidRuns":0,"fatalMid":0,"fatalNoMid":0,"truncated":20},"fails":[],"seconds":4.206}
