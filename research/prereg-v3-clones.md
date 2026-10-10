@@ -65,8 +65,8 @@ Already fine: `bc-gen --game v3`, `bc-train` (tier A plays the demos' rules), `s
 
 Changes (each off or unchanged by default):
 1. **`scan.js`:**
-   - Plays the model's `gameVersion` (v2 or v3).
-   - Accepts the current core hash: the expected prefix becomes `--expect-hash <prefix>`, default the current `coreHash()`; the v2-era studies pass `0f329d4e`.
+   - Plays the model's `gameVersion` (v2 or v3), with **`--game <v>`** as an explicit cross-rules override. The override is warned and recorded in the header (`game`, `modelGameVersion`), as `assess --game` does. DC-post (§4.4) needs it.
+   - Core hash check: the expected prefix becomes `--expect-hash <prefix>`, **default the model's own `best.json` `coreHash`**, so a scan on a core other than the model's is refused unless overridden. A model trained on the pre-v3 core (`0f329d4e…`, every v2 model, including DC-post's) is scanned with `--expect-hash 65f3546c` passed explicitly. AGENTS.md ("Core hash", rules-v3 bullet) justifies this for rules-v2 play. The v3 models of this study carry `65f3546c…` and need no flag.
    - Adds **`--start S`**: every episode starts at score S (`createGame` `startScore`) and ends at `--target`, through the worker's existing per-job `starts`/`caps`. `caps` are absolute scores, as for the curriculum.
    - The header records `game` and `start`.
 2. **`opening.js`, `duckshare.js`:** play the model's `gameVersion` (the teacher: `--game`, default v2), with `--game` as an explicit cross-rules override (warned and recorded, as `assess`). `opening.js` also gets **`--start S`**.
@@ -80,7 +80,7 @@ Changes (each off or unchanged by default):
 |---|---|---|
 | `node --test test/` and `node test/dashboard-check.js` | all pass | STOP |
 | Defaults unchanged, opening and duck share | `opening.js` on the committed `runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json` (base 30,003,000, n 1,000, target 2,000) gives output identical to `runs/exp-bc-duck-stuck/opening/ctl-d2w8-s1.json`, apart from time fields; `--teacher duck` gives `ctl-teacher.json`. `duckshare.js --teacher duck --n 2` gives the same counts as before the change | fix the tool |
-| Defaults unchanged, scan | `scan.js --expect-hash 65f3546c` on a v2 model, `--n 20 --target 1000000`, equals the same 20 seeds of the step-2 tier B (`--n 20` is seconds) | fix |
+| Defaults unchanged, scan | `scan.js --expect-hash 65f3546c` on a v2 model (without the flag it must refuse: hash `0f329d4e…` in the model ≠ current), `--n 20 --target 1000000`, equals the same 20 seeds of the step-2 tier B (`--n 20` is seconds) | fix |
 | `--start` plumbing | `scan.js --start 2000 --target 3000` on a v2 model, `--n 5`: every row's game starts at 2,000 (checked by replaying one seed with `runEpisode(model, seed, 3000, 2000)`, same score and frames). On rules v3 the plumbing is checked by the detection control DC-post (§4.4) | fix |
 | `margin.js` with default levels | identical to its previous output on one committed model | fix |
 
@@ -107,13 +107,13 @@ The tooling commit changes no `core.js`, `policy.js`, `test/solver.js` or traini
 |---|---|---|---|---|---|
 | **A** | 1×6 (44-6-3) | `6` | 291 | 282 | The cleanest small shape on rules v2 (P7, 10/10); the cheap CSS candidate |
 | **B** | 2×32 (44-32-32-3) | `32,32` | 2,595 | 2,528 | The teacher-size shape: the most capacity under the cap (on width) at 2 layers. Its v2 early-release rate is high (P7) |
-| C (optional, orchestrator's ruling) | 2×8 (44-8-8-3) | `8,8` | 459 | 440 | The shipped v2 shape. Pairs the v3 result with the shipped architecture. 1×8 (395 params, 376 MACs) is the alternative if a one-layer midpoint is preferred |
+| C (optional, orchestrator's ruling) | 2×8 (44-8-8-3) | `8,8` | 459 | 440 | The shipped v2 shape. Pairs the v3 result with the shipped architecture. 1×8 (387 params, 376 MACs) is the alternative if a one-layer midpoint is preferred |
 
 `bc-train --backend python --hidden <h> --seed <k> --demos runs/exp-v3-clones/v3-demos-duck-s1-40 --snapshots --wasm --dir runs/exp-v3-clones/v3-bc-duck-d<D>w<W>-s<k>` (tier A runs inside it). Order: A s1–s10, B s1–s10, (C s1–s10). Each run is independent.
 
 ### 4.3 Screens (per model, in this order)
 All seed sets are disjoint from the demo seeds (1–60) and from the held-out `EVAL_SEEDS`.
-1. **Tier A (rules v3, built in):** the 25 `validationSeeds(25)` played as full rules-v3 games to 1M (the demos' rules, automatic). Recorded: count and min.
+1. **Tier A (rules v3, built in):** the 25 `validationSeeds(25)` played as full rules-v3 games to 1M (the demos' rules, automatic). Recorded: count and min. `best.json` stores no per-seed scores, so **every model with tier A < 25/25 is replayed with `opening.js --model <m> --val`** (the same 25 seeds to 1M on the model's rules; 22.6M frames, about 15–40 s single-threaded). That gives each failure's score, killer and final DOWN run, which §5's classes (step, late) need.
 2. **Opening scan, the stuck-duck screen (rules v3):** `opening.js --model <best.json> --base 30003000 --n 1000 --target 2000`. These are rules-v3 games, identical to rules v2 below 100k (P6). The stuck-duck study's classes, verbatim: **stuck** (the final DOWN run contains a mid overlap and lasts ≥ 20 frames), **early release** (killed by a mid pterodactyl while not holding DOWN), and **other** (with the killer).
 3. **Post-step screen (new):** `scan.js --model <best.json> --start 95000 --target 130000 --base 30003000 --n 1000 --wasm`. These are the 1,000 tier-B seeds, rules v3, from 95k (speed 19, e = 0) through the natural step at 100k to 130k (speed 43.2): about 39k frames per game, about 700 must-act obstacles past the step (§2 P8; the budget table's 553–557 must-act per 12 games × 2,000 points is about 46 per 2,000 points), including the first post-step obstacles that killed every v2 model. **Every model must pass 1,000/1,000.** Failures are classed by re-running `opening.js --start 95000 --target 130000` on that model (single-threaded, about 25–65 s), which records killer, score and final DOWN run.
    - Unlike the opening scan, these games are **not prefixes of the tier-B games** (`startScore` changes the trajectory), so post-step failures are not a subset of tier-B failures. The two screens are complementary: post-step concentrates 1,000 independent crossings of the step, and tier B crosses it once per game.
@@ -126,7 +126,7 @@ All seed sets are disjoint from the demo seeds (1–60) and from the held-out `E
 | **PC-open:** the teacher on the opening | `opening.js --teacher duck --game v3 --base 30003000 --n 1000 --target 2000` | 1,000/1,000, 0 fatal, max lag ≤ 2 (as the stuck study's control 1, which gave max lag 1) | the tool is wrong; fix it before reading |
 | **PC-post:** the teacher on the post-step screen | `survey.js --solver duck --game v3 --start 95000 --cap 130000 --base 30003000 --n 1000`, and `opening.js --teacher duck --game v3 --start 95000 --target 130000` (lag) | 0/1,000 crashes; max lag ≤ 2 at v3 speeds | a crash: the screen or the rules are wrong: STOP. Lag > 2: fix the lag definition for v3 speeds, record the fix, then read |
 | **PC-B:** the teacher on tier B | `survey.js --solver duck --game v3 --start 0 --cap 1000000 --base 30003000 --n 1000` | 0/1,000 (the survey's 0/3,000 used other seeds, 51M+) | STOP |
-| **DC-post (detection):** the shipped v2 model, a v2 model on rules v3 | `scan.js --model runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json --game v3 --start 95000 --target 130000 …` | ≥ 990/1,000 failures, none below 100,000 and ≥ 95 % of them in 100,000–102,000 (P2: 150/150 in 100,016–101,555) | the screen does not reach the step as a full game does: fix `--start` before reading |
+| **DC-post (detection):** the shipped v2 model, a v2 model on rules v3 | `scan.js --model runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json --game v3 --start 95000 --target 130000 …` | ≥ 975/1,000 failures (0/150 in P2 allows a pass rate up to 1.98 %, one-sided), none below 100,000 and ≥ 95 % of them in 100,000–102,000 (P2: 150/150 in 100,016–101,555) | the screen does not reach the step as a full game does: fix `--start` before reading |
 | **C-agree:** the teacher's labels against themselves | agreement tool on `v3-demos-duck-s41-60` with the solver's own labels | 1.000 | fix the tool |
 
 ### 4.5 Measures (per model)
@@ -153,7 +153,7 @@ All seed sets are disjoint from the demo seeds (1–60) and from the held-out `E
 | Any §4.0 or §4.4 control fails, or the §4.1 gate fails | the tools, the screen or the demos are wrong | STOP; fix and re-run that control; read nothing |
 | **An arm clean ≥ 9/10** | **H-learnable at that shape:** BC with the v3 grid learns rules v3 to 1M on legal inputs | Its tier-B models are candidates if §5's bars hold. The next registration is a certification on rules v3 on fresh offsets (from **625**, or past whatever the v2 1×6 certification spends), against the baseline that v2 models score 0/150 (P2); then the user decides |
 | An arm clean 3–8/10 | learnable but seed-dependent (a lottery, as d2w8 on rules v2). The failure classes say where | Its clean models (with tier B) are candidates; the class with the most seeds names the fix registration |
-| Every arm clean ≤ 2/10 | the default procedure does not learn rules v3 at these shapes | No candidate. The dominant class names the fix |
+| Every arm clean ≤ 2/10 | the default procedure does not learn rules v3 reliably at these shapes | Any clean model with tier B 0/1,000 that meets §5's bars is still a candidate, but the procedure is unreliable. The dominant class names the fix |
 | Failures mostly **step** (≥ half the failing seeds, at 100,000–102,000) | **H-step:** the step is the weak point, as for v2 models, despite the 98k level | Fix registration: more step demos (more seeds or extra demos at 95k–100k via `--extra-demos`), or DAgger at the step (`bc-gen --student --game v3 --levels 95000`) |
 | Failures mostly **late** (tier A/B above 130k, post-step clean) | **H-late:** the high-speed end is the weak point | Fix registration: a denser grid above 500k or more seeds there; check the margin by level |
 | Failures mostly **opening-stuck / opening-early** at rates like P7 | **H-opening-persists:** rules v3 adds no new failure mode; the v2 release problem is the bottleneck | Ties to the release-fix registration (`prereg-teacher-duck-release-fix.md`). The v3 part is not the problem |
@@ -213,6 +213,6 @@ The desktops are not used.
 - **O2, the grid:** the 15 levels of §4.1 (2-px/frame spacing). The alternative is `game-v3.md` §8's 7-level suggestion plus 98k, which is coarser (x4 gaps up to 0.85).
 - **O3, the post-step window end** (130k) and start (95k). A start at 98k would shorten the pre-step part from about 10.5k frames to about 4.2k at speed 19. That saves little (the screen costs seconds), and 95k leaves more time for the start's effects on the obstacle stream to wash out before the step.
 - **O4, the post-step tool:** `scan.js --start` (multi-threaded, shown on the dashboard), with `opening.js --start` only for classification (proposed). The alternative is `opening.js --start` alone (single-threaded, about 25–65 s per model, not a dashboard scan).
-- **O5, `scan.js` hash handling:** an `--expect-hash` flag defaulting to the current `coreHash()` (proposed), against a hard-coded new prefix.
+- **O5, `scan.js` hash handling:** an `--expect-hash` flag defaulting to the model's own `coreHash` (proposed; refuses a cross-core scan unless overridden), against a hard-coded new prefix.
 - **O6, the margin levels** (§4.5 item 2).
 - **O7:** whether to also record agreement per snapshot for every model (cheap), not only for the tier-B ones.

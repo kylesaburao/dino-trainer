@@ -43,14 +43,14 @@ Both use rules v2, the models' own rules, so no `--game`. Each appends one recor
 
 **Offsets.** **625–774 become spent; the next fresh offset is 775.**
 - **Precondition:** scan every `assess.jsonl` and `evals.jsonl` under the main checkout and every worktree for a `seedOffset` + `seeds` range reaching 625 or above. If one exists, STOP and report.
-- Known spent ranges: 0–24, 100–174 (ES), 175–324, 325–474, 475–624 (the rules-v3 cross-rules assessment).
+- **Checked at registration:** every `assess.jsonl`/`evals.jsonl` under the main checkout and all its worktrees (74 files, read-only sweep). Ranges in records: 0–24, 25–99, 175–324, 325–474 and 475–624 (the rules-v3 cross-rules assessment). 100–174 (ES) is spent per the decision log. **Nothing at ≥ 625.** The executor repeats the sweep just before running.
 - If the rules-v3 clone study (`prereg-v3-clones.md`) is certified later, it starts at 775 or above.
 
 **Positive control.** The shipped arm: expected 150/150, as on 325–474. It also checks the harness on these seeds.
 
 ## 4. CSS gate (candidate only, and only if it passes 150/150)
 `node test/css-agreement.js --dir runs/exp-distill/v2-bc-duck-d1w6-s1` with the defaults: `--min-ducks 50 --min-score 3000 --seed 12345 --speed 2048`, timeout 900 s.
-- It exports the candidate into a scratch directory with the real export path, and never reads or writes the root `model.js`/`model.css`.
+- It exports the candidate into a scratch directory with the real export path (`trainer/cli.js export --dir … --which best --out <scratch>/model.js`), and never reads or writes the root `model.js`/`model.css`.
 - It compares the CSS decision with the JS decision on every frame, through the pterodactyl and duck phase.
 - **Bar (the same as the shipped model's export check, AGENTS.md decision log):** **0 disagreements**, ≥ 50 frames whose JS action is duck, and the play target (3,000 points) reached, i.e. exit 0. The shipped model's record: 0 disagreements over 25,446 frames, 421 of them duck frames.
 - Recorded: frames, disagreements, duck frames, ducked mid pterodactyls, score, the smallest margin among compared frames, and the `model.css` byte size against the shipped `model.css`.
