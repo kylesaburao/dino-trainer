@@ -594,9 +594,9 @@ async function evalHeldOut(opts, targetOverride, wasm = false) {
   const workers = Number(opts.workers) || defaultWorkers();
   const offset = opts.seedOffset !== undefined ? Number(opts.seedOffset) : 0;
   const seeds = evalSeeds(offset + (opts.seeds !== undefined ? Number(opts.seeds) : 25)).slice(offset);
+  if (wasm) require('./wasm-net.js').assertAvailable();
   const pool = workers > 1 ? createPool(Math.min(workers, seeds.length)) : null;
   const t0 = Date.now();
-  if (wasm) require('./wasm-net.js').assertAvailable();
   const scores = await scoreSeeds(pool, model, seeds, target, wasm);
   if (pool) await pool.terminate();
   const s = summary(scores);

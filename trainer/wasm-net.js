@@ -193,7 +193,10 @@ function createWasmAgent(model, net = createWasmNet(model.layers, model.params))
 // An agent factory for env.js runEpisode that builds the net once for all episodes of `model`.
 function wasmAgents(model) {
   const net = createWasmNet(model.layers, model.params);
-  return (m) => createWasmAgent(m, net);
+  return (m) => {
+    if (m !== model) throw new Error('wasmAgents: the factory only plays the model it was built for');
+    return createWasmAgent(m, net);
+  };
 }
 
 module.exports = { assertAvailable, createWasmNet, createWasmAgent, wasmAgents, moduleBytes };
