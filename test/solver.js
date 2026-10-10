@@ -1,6 +1,7 @@
 'use strict';
-// Exact fairness-model controller, for tests only (it reads the planner, which
-// the policy must never do). It executes the canonical strategy the fairness
+// Exact fairness-model controller, for the tests and as the behaviour-cloning
+// teacher (trainer/bc.js, bc-gen). It reads the planner, which the policy must
+// never do; the clone's inputs come only from policy.observe. It executes the canonical strategy the fairness
 // model guarantees exists: for each obstacle that must be jumped, take off on
 // the whole frame nearest the centre of its takeoff window, using that
 // obstacle's frozen requirement (release frame), and stay grounded otherwise.
