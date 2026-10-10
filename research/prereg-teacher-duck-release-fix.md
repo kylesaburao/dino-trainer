@@ -1,6 +1,6 @@
 # Pre-registration: `teacher-duck` release fix. Which training change makes duck clones reliably clean at d2w8 and d2w32?
 
-Status: **registered (pending orchestrator review), 2026-10-10.** Written on main `319a51f` (core hash `0f329d4e3493f794daf9cf2d013bd7927b51ff848efed768922a10b582c7410e`). Nothing here has run. Every number below is either read from the repo (cited) or derived from cited numbers; derived numbers are marked as such, and the ones that matter are registered as checks (§4.2).
+Status: **registered (mac-4 rulings applied), 2026-10-10** (rulings in §12). Written on main `319a51f` (core hash `0f329d4e3493f794daf9cf2d013bd7927b51ff848efed768922a10b582c7410e`). Nothing here has run. Every number below is either read from the repo (cited) or derived from cited numbers; derived numbers are marked as such, and the ones that matter are registered as checks (§4.2).
 Continues `research/prereg-teacher-duck-stuck.md` (its Results, cited here as "stuck Results") and `research/prereg-teacher-duck-step2.md` ("step 2"). Context: AGENTS.md "Research method", "Naming scheme", the shape cap and the dashboard invariant.
 
 **User's choice (via the orchestrator):** "pre-register a fix". Target: the duck-release decision under the first mid pterodactyls, at both shapes, d2w8 (44-8-8-3) and d2w32 (44-32-32-3). The opening scan (`research/scripts/prereg-teacher-duck-stuck/opening.js`) becomes a required screen for every new duck clone (proposed AGENTS.md wording in §11).
@@ -107,7 +107,7 @@ All arms use the control's command with these additions. Shapes d2w8 and d2w32, 
 | Arm | Addition | Fixed parameters, and why |
 |---|---|---|
 | **(a) transition weight** | `--transition-weight 4` | **W = 4.** A release row then weighs 4 × 0.751 = 3.0, still below the 5.10 of the DOWN rows it follows (P5), so the boundary is no longer drowned but not reversed. The total weight added is about 6 % of the weighted loss (derived from §2 counts: onsets 7,244 × 5.10 × 3 + releases 7,244 × 0.751 × 3 ≈ 127k, against about 2.13M). Duck transitions only: jump takeoffs are not failing and are left unchanged, so the jump decision is not perturbed. Row count and RNG draws are unchanged, so **pairing with the control is exact**: same rows, same init, same permutations; only the transition weights differ. No dose-response is registered (open choice 2) |
-| **(c) opening demos** | demos: `bc-gen --teacher duck --seeds 1001-1200 --levels 0 --span0 800 --score-window 400-800 --dir runs/exp-bc-duck-fix/v2-demos-duck-s1001-1200-w400-800`; train with `--extra-demos` that dir | **200 extra seeds.** Each adds one natural-ramp window of the failure range (P4). The base demos have 40 such windows, so (c) multiplies the window's demonstrations by 6, before C-c1 gives the exact duck count. Added rows are at most about 1,750 frames per seed (derived: frames from 400 to 800 points), so at most about 350k rows (+17 %), fewer after the boring rule. Seeds 1,001–1,200 are disjoint from the training demos (1–40), the held-out demos (41–60), the validation seeds (≥ 2^30), the tier-B and opening seeds (30,003,000–30,003,999), the step-1 survey (40,000,000+) and the eval seeds (≥ 2^31). Seed-matched pairing only: the row count changes the permutations |
+| **(c) opening demos** | demos: `bc-gen --teacher duck --seeds 1001-1200 --levels 0 --span0 800 --score-window 400-800 --dir runs/exp-bc-duck-fix/v2-demos-duck-s1001-1200-w400-800`; train with `--extra-demos` that dir | **200 extra seeds.** Each adds one natural-ramp window of the failure range (P4). The base demos have 40 such windows, so (c) multiplies the window's demonstrations by 6, before C-c1 gives the exact duck count. Added rows are at most about 1,750 frames per seed (derived: frames from 400 to 800 points), so at most about 350k rows (+17 %), fewer after the boring rule. Seeds 1,001–1,200 are disjoint from the training demos (1–40), the held-out demos (41–60), the validation seeds (≥ 2^30), the tier-B and opening seeds (30,003,000–30,003,999), the step-1 survey (40,000,000+) and the held-out `assess` seeds (≥ 2^31). Seed-matched pairing only: the row count changes the permutations |
 | **(b1) DAgger, 1 round** | rollouts: `bc-gen --student runs/exp-bc-duck-stuck/v2-bc-duck-<shape>-s<k>/best.json --seeds 2001-2200 --levels 0 --span0 800 --score-window 400-800`; train with `--extra-demos` that dir | The round-1 student is the committed control model of the same shape and seed (equal to the re-run control by §4.3). **The same 200 episodes, window and row rule as (c)**, so (b1) against (c) isolates the state distribution, student against teacher (H-shift against H-coverage). Rollout seeds 2,001–2,200 are disjoint from everything above and from (c). Retrained from scratch with the same `--seed k` on base + rollouts. Seed-matched pairing only |
 | **(b2) DAgger, 2 rounds** | rollouts of the (b1) model on seeds 2,201–2,400 (same window); train on base + round-1 + round-2 rollouts | Standard DAgger aggregation. Fresh rollout seeds per round, so round 2 adds new states. It is fixed at 2 rounds, and (b2) is read on its own row, so (b1) is not chosen post hoc |
 | ~~(d)~~ | dropped | **Epoch selection on an opening scan** (snapshots exist) is the natural fourth arm. It is dropped here for three reasons. It is a selection, not a training change, so it answers a different decision. It could not select on 30,003,000–30,003,999 without contaminating the screen; it would need its own opening seed range. And it is the H-optimisation follow-up (§7), which is cheaper to register after this result. **Combinations** ((a)+(c), (a)+(b)) are also not registered: they are the follow-up if single arms are partial |
@@ -167,7 +167,7 @@ Per arm and shape, S = screen-clean seeds of 20. "Significant" = McNemar p ≤ 0
 | G1, G2 or §4.3 control fails | The demos, the tool or the default code path changed | STOP; explain; read no arm |
 | C-b1 fails (i), (ii) or (iii) | The shadow does not give valid or recoverable labels on the student's states | (b1), (b2) not run; report. (a), (c) proceed |
 | C-a1 or C-c2 outside its range | A premise of (a) or (c) is wrong | Fix and record before that arm runs (§4.2) |
-| **S ≥ 19 at both shapes, and every tier-B scan of that arm 0/1,000** | **The arm fixes the release decision** at both shapes, within §6's bounds | The first such arm in the order (a), (c), (b1), (b2) is the proposed procedure: an AGENTS.md BC-procedure change, approved separately. Confirmation on seeds 23–42 if the orchestrator rules it (open choice 1) |
+| **S ≥ 19 at both shapes, and every tier-B scan of that arm 0/1,000** | **The arm fixes the release decision** at both shapes, within §6's bounds | The first such arm in the order (a), (c), (b1), (b2) is the proposed procedure: an AGENTS.md BC-procedure change, approved separately. Confirmation on seeds 23–42 (§12 item 1) |
 | S ≥ 19 at one shape only | **Fixed at that shape only** | Report per shape. A d2w8-only fix serves the ship shape; d2w32 stays multi-seed plus screen |
 | S ≥ 19, but a tier-B failure in a screen-clean seed | The seed is not clean (S is recounted). A late mode exists, so P1 is wrong for this arm | Report; tier B for every passer of that arm at that shape before any reading of "fixed" |
 | Significant, but S < 19 | **Partial: the arm helps, not enough** | A combination or dose registration, chosen by which mode remains (below) |
@@ -201,13 +201,13 @@ A "no effect" or "partial" reading is scoped to: these doses (W = 4; 200 extra o
 | Tier B d2w8, one arm | up to 20 | 95–139 s | stuck §9 | 32–46 min |
 | Tier B d2w32, one arm | up to 6 | 176–294 s | stuck §9 | 18–29 min |
 | **Stage 2 total** (one arm) | | | | **about 50–75 min** |
-| Stage 3, optional confirmation (seeds 23–42, winning arm) | 40 trainings + openings + tier B per the cap | as above | | about 20 min + 50–75 min |
+| Stage 3, confirmation if an arm meets the bar (seeds 23–42, winning arm) | 40 trainings + openings + tier B per the cap | as above | | about 20 min + 50–75 min |
 
 Each arm and each scan is a separate job, so the queue can pause between them for other Mac work.
 
 ## 10. Scope, and execution order
 - **Scope:** rules v2, the 44 unchanged features, `teacher-duck` as merged in `9616c3b`, the base demos of §4.2, the python backend. No `observe()` change, no class-weight default change, no change to `core.js`, `policy.js` or `test/solver.js` (so the core hash stays `0f329d4e…`).
-- **Tier-B and opening seeds are not held out. Nothing here is a certification.** No held-out `eval` offsets are spent.
+- **Tier-B and opening seeds are not held out. Nothing here is a certification.** No held-out `assess` offsets are spent (the CLI command formerly `eval`).
 - **Never** `session`, `finish`, `--auto-export` or `export`. Root `model.js` and `model.css` are not touched.
 - **Order:**
   1. Orchestrator review and rulings (§12).
@@ -216,7 +216,7 @@ Each arm and each scan is a separate job, so the queue can pause between them fo
   4. Stage 1: control (the gate), then (a), (c), (b1), (b2), each with its opening scans.
   5. Commit, force-added because `runs/exp-*/` is gitignored: `best.json` and `bc-metrics.jsonl` of every new run, every new `demos.json`, and the opening JSONs. Provisional S counts may be reported here.
   6. Stage 2: tier B per the cap (§4.5); `diag.js` on any failure.
-  7. Stage 3, only if ruled (open choice 1).
+  7. Stage 3 (ruled, §12 item 1): only if an arm meets the bar.
   8. Results appended here, with the code commit, the core hash and the demo shas. The orchestrator merges.
 
 ## 11. Proposed AGENTS.md wording (not applied; for the orchestrator)
@@ -231,10 +231,13 @@ Proposed for "Invariants to preserve", after "Evaluation uses the unmodified gam
 
 And in "Behaviour cloning" (Commands), one line: "Duck clones: train, then screen (Invariants, 'Screen every new duck clone'); a clone that fails the screen is not used."
 
-## 12. Open choices for the orchestrator
-1. **Stage 3 (fresh confirmation on training seeds 23–42 for the winning arm):** proposed as optional, run only if an arm meets the bar. With 20/20 it takes the bound from 21.6 % to 11.3 % (§6). The default here is to run it only if ruled.
-2. **Dose:** a single W = 4 for (a), 200 episodes for (c) and per DAgger round. A second dose (for example W = 8, or 400 episodes) would double that arm's stage 1 (about 20 min). Not registered.
-3. **Tier-B cap:** d2w8 every passer, d2w32 the first 6, and only the first qualifying arm. The alternative is every passer at both shapes (d2w32 up to 20 × 3–5 min, about 60–100 min).
-4. **Backends:** the new `bc-train` flags are python only (as `--snapshots`). Porting them to the node backend is not needed for this study.
-5. **Arm (d):** dropped (§4.4). Epoch selection on a disjoint opening seed range is the follow-up if no arm is significant.
-6. **The AGENTS.md wording** of §11: where it goes and whether the opening scan's seed range should be fixed there or left to each registration.
+## 12. Rulings (mac-4, 2026-10-10)
+The draft's open choices, as ruled before any run. The draft's changes to the brief (row-local transition rows, natural-ramp opening demos, C-b1 registered rather than run, arm (d) dropped) were accepted with the reasons given.
+1. **Stage 3 runs:** if an arm meets the bar, it is confirmed on fresh training seeds 23–42 at both shapes. With 20/20 that takes the bound from 21.6 % to 11.3 % (§6). §10 step 7 is no longer optional.
+2. **Dose:** one only: W = 4 for (a), 200 episodes for (c) and per DAgger round.
+3. **Tier-B cap:** as proposed (§4.5). d2w8 every passer, d2w32 the first 6, only the first qualifying arm.
+4. **Backends:** the new `bc-train` flags are python only (as `--snapshots`).
+5. **Arm (d):** dropped (§4.4); confirmed.
+6. **AGENTS.md wording** (§11): it goes under "Invariants to preserve", and it fixes the opening seed range at 30,003,000–30,003,999, played to 2,000 points, as in `opening.js`.
+
+**Command rename (parallel change):** the CLI command `eval` becomes `assess` (`node trainer/cli.js assess`; record file `assess.jsonl`). This registration spends no held-out `assess` offsets.
