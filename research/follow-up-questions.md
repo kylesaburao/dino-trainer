@@ -7,7 +7,7 @@ Process: AGENTS.md "Research method". A question becomes an experiment only when
 ---
 
 ## Q1. Can a larger model trained on the policy be distilled into a smaller model (policy → large → small)?
-Raised by the user, 2026-10-10. Status: **open; waits on the depth × width sweep** (`research/prereg-bc-sweep.md`).
+Raised by the user, 2026-10-10. Status: **queued (2026-10-10, user): re-targeted below 8 units.** The sweep and the duck generation showed that 2×8 and 1×8 pass when trained directly, so the original precondition holds only for smaller shapes. The user chose to distill the duck d2w32-s1 clone into shapes below 8 units, where direct cloning fails. Pre-registration and the `--distill-from` implementation are in progress on `wt/distill` (`research/prereg-distill.md`). Execution comes after the stuck-duck study.
 
 ### What it means here
 - "Policy" is the teacher, `test/solver.js`: the exact solver that reads hidden state.
@@ -54,7 +54,7 @@ Don't build any of this before the precondition above holds.
 ---
 
 ## Q2. A teacher that ducks: the duck generation (`teacher-duck`)
-Raised by the user, 2026-10-10. Status: **open; not started.**
+Raised by the user, 2026-10-10. Status: **done and shipped (2026-10-10).** Step 1: `createDuckSolver` crashed 0/5,000. Step 2: 2×8 and 1×8 clones were reliable and ducked; one 2×32 seed got stuck ducking. Certification: 150/150. CSS check passed. The shipped model is `runs/exp-bc-duck/d2w8-s1` (AGENTS.md decision log). Still open: how often the stuck-duck failure happens (`research/prereg-teacher-duck-stuck.md`, running).
 
 **Naming:** see AGENTS.md "Naming scheme". Everything up to 2026-10-10 is the **jump generation** (`teacher-jump`). This question opens the **duck generation** (`teacher-duck`). The game rules stay rules v2. (The user first called these "v2" and "v3", then asked for a scheme without the clash with game-rules versions.)
 
