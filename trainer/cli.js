@@ -5,8 +5,8 @@
 //   node trainer/cli.js train  [--target 10000] [--resume [--force]] [--workers N]
 //                              [--time-budget MIN] [--generations N] [--dir runs/main] ...
 //   node trainer/cli.js eval   [--dir runs/main] [--which best|current] [--model model.js] [--target N]
-//                              [--seeds 25] [--seed-offset 0]
-//   node trainer/cli.js bench  [--seconds 3] [--workers N]
+//                              [--seeds 25] [--seed-offset 0] [--wasm]
+//   node trainer/cli.js bench  [--seconds 3] [--workers N] [--hidden 16] [--wasm]
 //   node trainer/cli.js export [--dir runs/main] [--which best|current] [--out model.js]
 //                              (also writes model.css next to it: the same weights for index-css.html)
 //   node trainer/cli.js export-css [--model model.js]   regenerate model.css from an existing model.js
@@ -70,6 +70,12 @@
 //                         sigma is checkpointed; an explicit --sigma on resume overrides it.
 //   --pair-episodes       each antithetic pair plays its own episode seeds (and starts);
 //                         gradient weights are pair fitness differences / std (ARS V1)
+// Speed:
+//   --wasm                run the policy network on a WebAssembly SIMD kernel (trainer/wasm-net.js)
+//                         in the training, validation and held-out workers. Decisions are
+//                         bit-identical to policy.js (test/wasm-net.test.js), so results do not
+//                         change; fails at startup if the runtime has no wasm SIMD. Also
+//                         accepted by eval and bench. The browser always uses policy.js.
 // Boolean options can be turned off on --resume with --no-<option>. Everything except
 // --hidden, --action-repeat and --game can change on --resume.
 //
@@ -129,12 +135,13 @@ const DEFAULTS = {
   sigmaAnneal: false,     // shrink sigma while perturbed candidates crash in the opening
   sigmaMin: 0.02,         // sigma-anneal floor
   pairEpisodes: false,    // per-pair episode seeds with pair-difference weights
+  wasm: false,            // network on the wasm SIMD kernel (same decisions, faster)
 };
 // Keys added after the first checkpoints: backfilled from DEFAULTS when resuming
 // checkpoints that predate them (their defaults reproduce the old behaviour).
 const BACKFILL = ['window', 'startZeroFrac', 'startMin', 'startDist', 'startZeroCap', 'windowAdapt', 'select', 'stopRule',
   'valSeeds', 'evalWhenFitMax', 'foldValidation', 'rankTies', 'decay', 'stallRule', 'sigmaScale', 'sigmaAnneal', 'sigmaMin', 'pairEpisodes',
-  'windowAdaptEvery', 'fitnessAgg'];
+  'windowAdaptEvery', 'fitnessAgg', 'wasm'];
 // Settings that change the parameter layout or the policy's behaviour cannot change on resume.
 const STRUCTURAL = ['hidden', 'actionRepeat', 'gameVersion'];
 
@@ -155,6 +162,7 @@ const FLAG_TO_KEY = {
 const BOOL_TO_KEY = {
   '--window-adapt': 'windowAdapt', '--eval-when-fit-max': 'evalWhenFitMax', '--fold-validation': 'foldValidation',
   '--stall-rule': 'stallRule', '--sigma-anneal': 'sigmaAnneal', '--pair-episodes': 'pairEpisodes',
+  '--wasm': 'wasm',
 };
 
 function parseArgs(argv) {
@@ -228,9 +236,13 @@ const fmt = (x) => (Number.isFinite(x) ? Math.round(x * 10) / 10 : x);
 // Evaluation helpers
 // ---------------------------------------------------------------------------
 // Score fixed seeds with one model (params), in parallel when a pool is given.
-async function scoreSeeds(pool, model, seeds, target) {
-  if (!pool) return seeds.map(s => runEpisode(model, s, target).score);
-  const setup = { theta: model.params, layers: model.layers, actionRepeat: model.actionRepeat, gameVersion: model.gameVersion || 'v1', sigma: 0, target };
+// wasm: run the network on trainer/wasm-net.js (same scores).
+async function scoreSeeds(pool, model, seeds, target, wasm = false) {
+  if (!pool) {
+    const makeAgent = wasm ? require('./wasm-net.js').wasmAgents(model) : undefined;
+    return seeds.map(s => runEpisode(model, s, target, undefined, makeAgent).score);
+  }
+  const setup = { theta: model.params, layers: model.layers, actionRepeat: model.actionRepeat, gameVersion: model.gameVersion || 'v1', sigma: 0, target, wasm };
   const res = await pool.run(setup, seeds.map(s => ({ noiseSeed: 0, sign: 0, seeds: [s] })));
   return res.map(r => r.scores[0]);
 }
@@ -311,6 +323,7 @@ async function train({ config: cli, opts }) {
   const committedMs = () => st.cumulativeMs + (Date.now() - lastCommitAt);
 
   checkConfig(config);
+  if (config.wasm) require('./wasm-net.js').assertAvailable();
   const stopRule = parseStopRule(config.stopRule);
   const valSeedList = validationSeeds(config.valSeeds);
   log(`train: dir=${dir} game=${config.gameVersion} workers=${workers} params=${numParams(layers)} layers=${layers.join('-')} core=${hash.slice(0, 12)}`);
@@ -374,7 +387,7 @@ async function train({ config: cli, opts }) {
     return { ...s, generation: gen };
   }
   async function validate() {
-    const scores = await scoreSeeds(pool, modelOf(st.theta), valSeedList, config.target);
+    const scores = await scoreSeeds(pool, modelOf(st.theta), valSeedList, config.target, config.wasm);
     return recordValidation(scores, st.theta, st.generation);
   }
 
@@ -383,7 +396,7 @@ async function train({ config: cli, opts }) {
     const best = st.best;
     const attempt = ((st.heldOut && st.heldOut.attempt) || 0) + 1;
     const seeds = evalSeeds(stopRule.seeds);
-    const score = (chunk) => scoreSeeds(pool, modelOf(best.params), chunk, config.target);
+    const score = (chunk) => scoreSeeds(pool, modelOf(best.params), chunk, config.target, config.wasm);
     if (stopRule.kind === 'median') {
       const scores = await score(seeds);
       const s = summary(scores);
@@ -423,7 +436,7 @@ async function train({ config: cli, opts }) {
     if (config.foldValidation) for (const s of valSeedList) jobs.push({ noiseSeed: 0, sign: 0, seeds: [s] });
     const sigmaEff = st.sigma * st.stallMult;
     const sigma = sigmaVector(layers, sigmaEff, config.sigmaScale);
-    const setup = { theta: st.theta, layers, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion, sigma, target: config.target };
+    const setup = { theta: st.theta, layers, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion, sigma, target: config.target, wasm: config.wasm };
     const { train: results, val: valResults } = splitFolded(await pool.run(setup, jobs), config.popSize);
 
     // Fitness: mean capped score, using fractional distance for a finer signal.
@@ -575,15 +588,16 @@ function loadModel(opts) {
 // certification eval of such a run should skip them: --seed-offset 25. Returns the
 // record, with the seeds that reached the target (passed) and the two-sided 95%
 // Clopper-Pearson interval for the pass rate.
-async function evalHeldOut(opts, targetOverride) {
+async function evalHeldOut(opts, targetOverride, wasm = false) {
   const { model, source, target: savedTarget } = loadModel(opts);
   const target = targetOverride || savedTarget || DEFAULTS.target;
   const workers = Number(opts.workers) || defaultWorkers();
   const offset = opts.seedOffset !== undefined ? Number(opts.seedOffset) : 0;
   const seeds = evalSeeds(offset + (opts.seeds !== undefined ? Number(opts.seeds) : 25)).slice(offset);
+  if (wasm) require('./wasm-net.js').assertAvailable();
   const pool = workers > 1 ? createPool(Math.min(workers, seeds.length)) : null;
   const t0 = Date.now();
-  const scores = await scoreSeeds(pool, model, seeds, target);
+  const scores = await scoreSeeds(pool, model, seeds, target, wasm);
   if (pool) await pool.terminate();
   const s = summary(scores);
   const passed = scores.filter(x => x >= target).length;
@@ -594,7 +608,7 @@ async function evalHeldOut(opts, targetOverride) {
 }
 
 async function evalCmd({ config: cli, opts }) {
-  const record = await evalHeldOut(opts, cli.target);
+  const record = await evalHeldOut(opts, cli.target, !!cli.wasm);
   const ci = record.passCI95;
   console.log(`held-out eval (${record.seeds} seeds${record.seedOffset ? ` from index ${record.seedOffset}` : ''}, cap ${record.target}) of ${record.source}:`);
   console.log(`  median ${record.median}  min ${record.min}  max ${record.max}  (${record.seconds.toFixed(1)}s)`);
@@ -647,25 +661,28 @@ function exportCmd({ opts }) {
 // ---------------------------------------------------------------------------
 // bench
 // ---------------------------------------------------------------------------
-async function benchCmd({ opts }) {
+async function benchCmd({ config: cli, opts }) {
   const { benchSingle } = require('./bench.js');
   const seconds = Number(opts.seconds) || 3;
   const workers = Number(opts.workers) || defaultWorkers();
-  console.log(`bench: ${seconds}s per measurement; workers detected: ${defaultWorkers()} (using ${workers})`);
+  const net = { hidden: cli.hidden || [16], wasm: !!cli.wasm };
+  if (net.wasm) require('./wasm-net.js').assertAvailable();
+  console.log(`bench: ${seconds}s per measurement; workers detected: ${defaultWorkers()} (using ${workers}); ` +
+    `net ${layersOf(net).join('-')}${net.wasm ? ' (wasm)' : ''}`);
   const sim = benchSingle('sim', seconds * 1000);
   console.log(`  1 core, simulation only:     ${Math.round(sim.fps).toLocaleString()} frames/s`);
-  const pol = benchSingle('policy', seconds * 1000);
+  const pol = benchSingle('policy', seconds * 1000, net);
   console.log(`  1 core, simulation + policy: ${Math.round(pol.fps).toLocaleString()} frames/s`);
   const { Worker } = require('worker_threads');
   const per = await Promise.all(Array.from({ length: workers }, () => new Promise((resolve, reject) => {
-    const w = new Worker(path.join(__dirname, 'bench.js'), { workerData: { mode: 'policy', ms: seconds * 1000 } });
+    const w = new Worker(path.join(__dirname, 'bench.js'), { workerData: { mode: 'policy', ms: seconds * 1000, net } });
     w.once('message', resolve);
     w.once('error', reject);
   })));
   const total = per.reduce((a, r) => a + r.fps, 0);
   console.log(`  ${workers} workers, simulation + policy: ${Math.round(total).toLocaleString()} frames/s total, ` +
     `${Math.round(total / workers).toLocaleString()} per worker`);
-  console.log(JSON.stringify({ seconds, workersDetected: defaultWorkers(), workers, simFps: Math.round(sim.fps), policyFps: Math.round(pol.fps), parallelFps: Math.round(total) }));
+  console.log(JSON.stringify({ seconds, workersDetected: defaultWorkers(), workers, layers: layersOf(net), wasm: net.wasm, simFps: Math.round(sim.fps), policyFps: Math.round(pol.fps), parallelFps: Math.round(total) }));
 }
 
 // ---------------------------------------------------------------------------

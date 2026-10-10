@@ -56,11 +56,13 @@ const windowFitness = (distance, startScore, span) =>
 // The agent's first action presses jump from idle (the run's start).
 // startScore (training curriculum only) starts the run at that score; capScore
 // is absolute, so a window episode passes startScore + window.
-function runEpisode(model, seed, capScore, startScore) {
+// makeAgent (default policy.js createAgent) builds the agent from the model; the
+// trainer's --wasm path passes a wasm-net.js factory with the same decisions.
+function runEpisode(model, seed, capScore, startScore, makeAgent = createAgent) {
   const gameOpts = { rng: createRng(seed), version: model.gameVersion || 'v1' };
   if (startScore) gameOpts.startScore = startScore;
   const game = createGame(gameOpts);
-  const agent = createAgent(model);
+  const agent = makeAgent(model);
   const capDistance = capScore / CFG.scoreCoef;
   let frames = 0;
   do {
