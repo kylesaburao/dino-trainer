@@ -191,3 +191,46 @@ Seeds 4–12, run to 1500 generations, plus seeds 1–3 from earlier.
   - `exp-esc-32x32-s3-hyg`: its source run.
 - **Mac `/Users/kyle/Desktop/dino-game/runs/`:** `exp-A-wd001` and the older `exp-A/B/window` runs.
 - **desktop-1 worktree `runs/`:** `exp-xarch`, `exp-rep-*`, `exp-esc-*-{wd01,stall001}` and `exp-surv-32x32-s4..s12`.
+
+---
+
+## 9. Addendum at 16:45Z: results that finished before transfer
+
+### 9.1 Feature sufficiency: the 44 features are sufficient (`research/feature-sufficiency.md`, main `1e8213b`)
+**Probe A: the shipped model's crashes are behavioural, not a lack of information.**
+- **Early crashes** (2.65% of 2,000 starts, at 461–688 points). All are a small cactus with a pterodactyl visible behind it. There are two mechanisms of about equal size:
+  1. **Premature jump.** The dino takes off about 31 frames before contact instead of about 12. In 24 of 27 cases it jumps on the frame a low pterodactyl first appears.
+  2. **Stuck jump key.** The dino presses DOWN then JUMP in mid-air and lands with the jump key held, so later JUMP outputs don't fire. "Jump key held" is the only unobserved state found; it is the player's own input, so it is allowed information.
+- **Late crashes** (0.36% of 10k windows from 960k, starting exactly at the derived 962.6k speed threshold). All are the same event: landing from a long jump into a fast, high pterodactyl. Holding DOWN to fast-drop would save the run, but the model never presses DOWN after level 0.
+- **Separability:** crash and pass situations are separable on the raw 44 features. AUC is 0.85–0.93 for early crashes and 1.0 for late ones.
+
+**Probe B: a clone of the exact solver plays to 1M on 25 of 25 full games** on the unchanged 44 features, with 0 crashes across 352 games and 30,000 windows.
+- This holds even for a 44-8-8-3 network, and for one trained on only 50k frames.
+- The candidate features (speed/22, time-to-reach, gap, jump key held) had nothing left to improve.
+- **The features can represent a near-perfect policy.** ES is not finding it.
+
+**Recommendation:** keep the 44 features. If `observe()` is ever reopened, add "jump key held". The fixes are behavioural and training-side.
+
+### 9.2 Pruned-branch register update (retrospective §6.4)
+- **Feature change in `policy.js`:** **pruned as a fix for the current failures.**
+  - Scope: the shipped model's early and late crash modes, and solver clones on 44-32-32-3 and 44-8-8-3.
+  - Validity: a positive control exists (clones reach 25/25).
+  - Reopen if a new failure mode appears that the features can't separate, or if the jump-key-held state proves causal and ES can't work around it.
+- **Behaviour-cloning initialisation from the solver:** **strongly promoted.**
+  - The necessary condition is met: the clones survive to 1M.
+  - **An owner decision is needed first.** The clone acts only on allowed features, but its labels come from the solver's privileged information (the hidden gap and lookahead). Ask the user whether a model trained this way, or one derived from it by ES fine-tuning, is acceptable to ship.
+
+### 9.3 Saved clone models (local, gitignored)
+- `/Users/kyle/Desktop/dino-game/runs/exp-bc-clones/m_base_s1.json` and `m_base_s2.json`: 44-32-32-3 clones of the solver on the unchanged features. The other `m_*` files are variants and 8,8 nets.
+- Format: `{variant, layers, params}`, which may need wrapping into the `model.js` format before use (`trainer/cli.js eval --model`).
+- **Suggested first experiment, pending the user's decision:**
+  1. Certify `m_base_s1` against the shipped model on fresh offsets **175–324 (150 seeds)**. 150 seeds is the minimum that can show an improvement over 72/75.
+  2. If it clearly wins and the user approves solver-derived models, it becomes a candidate to ship, or a starting θ for ES polishing with small σ.
+
+### 9.4 Revised priority (replaces §7 step 2)
+1. **Ask the user about solver-derived models.** That decides whether the BC route can be shipped.
+2. **Run the certification in 9.3 regardless.** It is cheap, about 1–2 minutes with `--wasm` once merged. Whatever the shipping decision, it measures how far ES is from what the features allow.
+3. For pure ES, the failure modes now point to specific training-side fixes:
+   - more training mass in the 400–800-point opening, for example a curriculum or hard-seed mining;
+   - exposure to fast, high pterodactyls past 962k, for example points-uniform late windows that reach 960k–1M.
+   - Each needs the pre-registration in AGENTS.md "Research method".
