@@ -9,7 +9,10 @@
 //     whenever a game ends (crash or 1,000,000 points) before the level's frame quota;
 //   - per running frame, margin = largest logit - second-largest logit, in float64 with the
 //     same weights; reported: min (with level, seed, score), 1st percentile, median.
-// Usage: node margin.js --model <best.json|model.js> [--out result.json]
+// Usage: node margin.js --model <best.json|model.js> [--levels a,b,...] [--out result.json]
+//   --levels (research/prereg-v3-clones.md §4.0): the start levels, 120,000 frames each; default
+//   the list above. The model plays its own gameVersion (v2 or v3). The output gains `levels`
+//   only when --levels is given, so the default output is unchanged.
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '../../..');   // the checkout this script lives in (worktree-safe)
@@ -19,7 +22,10 @@ const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; };
 const file = path.resolve(opt('--model'));
 const m = file.endsWith('.json') ? JSON.parse(fs.readFileSync(file, 'utf8')) : require(file);
-const LEVELS = [0, 2000, 50000, 300000, 900000], PER_LEVEL = 120000, SEED0 = 30003000, TARGET = 1000000;
+const DEFAULT_LEVELS = [0, 2000, 50000, 300000, 900000], PER_LEVEL = 120000, SEED0 = 30003000, TARGET = 1000000;
+const LEVELS_OPT = opt('--levels', null);
+const LEVELS = LEVELS_OPT === null ? DEFAULT_LEVELS : LEVELS_OPT.split(',').map(Number);
+if (!LEVELS.length || LEVELS.some(l => !Number.isInteger(l) || l < 0 || l >= TARGET)) throw new Error(`--levels must be integers in [0, ${TARGET}), got ${LEVELS_OPT}`);
 
 const L = m.layers, p = m.params;
 const bufs = L.map(n => new Float64Array(n));
@@ -65,5 +71,6 @@ for (const level of LEVELS) {
 }
 hist.sort((a, b) => a - b);
 const r = { model: file, layers: L.join('-'), frames, games, crashes, minMargin: min, at, p01: hist[Math.floor(hist.length * 0.01)], median: hist[hist.length >> 1] };
+if (LEVELS_OPT !== null) r.levels = LEVELS;
 console.log(JSON.stringify(r));
 if (opt('--out')) fs.writeFileSync(path.resolve(opt('--out')), JSON.stringify(r) + '\n');

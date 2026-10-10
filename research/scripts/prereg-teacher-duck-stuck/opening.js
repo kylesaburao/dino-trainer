@@ -1,6 +1,6 @@
 'use strict';
 // Opening scan and release lag (research/prereg-teacher-duck-stuck.md §4.4).
-// Plays rules-v2 games from 0 to --target (default 2000 points) on seeds BASE..BASE+N-1
+// Plays games (rules v2 by default; see Rules below) from 0 to --target (default 2000 points) on seeds BASE..BASE+N-1
 // (or, with --val, on trainer/env.js validationSeeds(25), default target 1,000,000) with a
 // model (policy.js createAgent, JS forward pass) or the duck teacher (test/solver.js
 // createDuckSolver), single-threaded.
@@ -15,7 +15,12 @@
 // Failing games record score, killer (as duckrun.js), and the final DOWN run (the run active at
 // the crash: length, mid, lag). Stuck criterion (prereg §4.6): final run mid and length >= 20.
 // Usage: node opening.js (--model <best.json> | --teacher duck) [--base 30003000] [--n 1000]
-//          [--target 2000] [--val] [--out f.json]
+//          [--target 2000] [--val] [--game v2|v3] [--start S] [--out f.json]
+// Rules (research/prereg-v3-clones.md §4.0): a model plays its own gameVersion (v2 or v3), the
+// teacher plays --game (default v2). --game on a model is a cross-rules override (warned). With
+// --start S every game starts at score S (createGame startScore) and ends at --target (absolute).
+// The report gains game/modelGameVersion/start only when --game or --start is given, so the
+// default output is unchanged.
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.join(__dirname, '..', '..', '..');
@@ -35,7 +40,13 @@ const BASE = Number(opt('--base', 30003000)), N = Number(opt('--n', 1000));
 const TARGET = Number(opt('--target', VAL ? 1000000 : 2000));
 const seeds = VAL ? validationSeeds(25) : Array.from({ length: N }, (_, i) => BASE + i);
 const m = modelFile ? JSON.parse(fs.readFileSync(path.resolve(modelFile), 'utf8')) : null;
-if (m && m.gameVersion !== 'v2') throw new Error(`model gameVersion ${m.gameVersion}`);
+const PLAYABLE = ['v2', 'v3'];
+if (m && !PLAYABLE.includes(m.gameVersion)) throw new Error(`model gameVersion ${m.gameVersion}`);
+const GAME_OPT = opt('--game', null), START = Number(opt('--start', 0));
+if (GAME_OPT !== null && !PLAYABLE.includes(GAME_OPT)) throw new Error(`--game must be one of ${PLAYABLE.join(', ')}`);
+const GAME = GAME_OPT || (m ? m.gameVersion : 'v2');
+if (m && GAME !== m.gameVersion) console.warn(`WARNING: cross-rules opening scan: a ${m.gameVersion} model on rules ${GAME}`);
+if (!(Number.isFinite(START) && START >= 0 && START < TARGET)) throw new Error(`--start must be in [0, --target), got ${START}`);
 const cap = TARGET / Core.CFG.scoreCoef;
 const stand = Core.standBox(Core.STAND_TOP);
 const STUCK_LEN = 20;
@@ -43,7 +54,7 @@ const PC = { 108: 'low', 82: 'mid', 58: 'high' };
 const name = o => o.t.name === 'ptero' ? `ptero-${PC[o.y]}` : `cactus-${o.t.name}${o.size > 1 ? 'x' + o.size : ''}`;
 
 function playSeed(seed, lags, agg) {
-  const g = Core.createGame({ rng: Core.createRng(seed), version: 'v2' });
+  const g = Core.createGame({ rng: Core.createRng(seed), version: GAME, startScore: START || undefined });
   const actor = teacher ? createDuckSolver() : null;
   const agent = m ? P.createAgent(m) : null;
   const duckY = duckBox(g.dino).y;
@@ -101,6 +112,7 @@ const report = {
     ge5: lags.filter(x => x >= 5).length, ge10: lags.filter(x => x >= 10).length, ge20: lags.filter(x => x >= 20).length },
   runs: agg, fails, seconds: (Date.now() - t0) / 1000,
 };
+if (GAME_OPT !== null || START) Object.assign(report, { game: GAME, modelGameVersion: m ? m.gameVersion : null, start: START });
 const out = opt('--out', null);
 if (out) fs.writeFileSync(out, JSON.stringify(report) + '\n');
 console.log(JSON.stringify({ ...report, fails: report.fails.length > 8 ? `${report.fails.length} (see --out)` : report.fails }));
