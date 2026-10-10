@@ -4,6 +4,8 @@
 // A scan file is any *.jsonl under the runs root (nested to MAX_DEPTH) whose first line is
 //   - a research/scripts/prereg-bc-robustness/scan.js header:
 //       {"header":true,"model":...,"base":B,"n":N,"target":T,...,"pid":P,"host":H}
+//     (newer headers add game, modelGameVersion and startScore: the rules played, the model's
+//     own rules and the score every game starts at; `start` is the ISO start time)
 //     then one {"seed","score","pass","frames"} line per seed (not necessarily in seed order),
 //     a {"resume":true,"pid","host","start"} line when a later scan.js resumes the file, and a
 //     {"footer":true,"seconds","end"} line at the end of every completed pass; or
@@ -117,6 +119,7 @@ function consume(st, line) {
     if (st.seeds.has(r.seed)) { st.dupes++; return; }
     st.seeds.add(r.seed);
     if (r.game && !st.game) st.game = r.game;          // survey.js --game (rules other than v2)
+    if (r.start && st.startScore === undefined) st.startScore = r.start;   // survey.js --start
     st.frames += r.frames || 0;
     const pass = st.kind === 'survey' ? !r.crashed : r.pass === true;
     if (pass) st.passes++; else st.failScores.push(r.score);
@@ -230,7 +233,10 @@ function summary(file, st, root, runNames, now) {
     modelRel: model && model.lastIndexOf('/runs/') >= 0 ? model.slice(model.lastIndexOf('/runs/') + 1) : model,
     owner: ownerOf(model, root, runNames),
     solver: meta.solver || null,
-    layers: h.layers || null, gameVersion: h.gameVersion || st.game || null, wasm: h.wasm ?? null, workers: h.workers ?? null,
+    layers: h.layers || null, gameVersion: h.game || h.gameVersion || st.game || null, wasm: h.wasm ?? null, workers: h.workers ?? null,
+    // scan.js --game (cross-rules) and --start, survey.js --start: rules played, the model's own
+    // rules, and the score every game starts at (0 = from the start; old headers have none).
+    modelGameVersion: h.modelGameVersion || null, startScore: (st.kind === 'scan' ? h.startScore : st.startScore) || 0,
     coreHash: h.coreHash || null,
     base: st.kind === 'scan' ? h.base : meta.base, n: n ?? null, target: target ?? null,
     games, passes: st.passes, failures, frames: st.frames, dupes: st.dupes, badLines: st.badLines,

@@ -23,7 +23,9 @@
 //                       pid, footer, seeds out of order, 2 failures; model grp/bc-run),
 //                       running.jsonl (pid = this process, partial last line; model es-run),
 //                       stalled.jsonl (pid of an exited process; model outside runs/),
-//                       survey-duck-40000000-3.jsonl (header-less survey), notes.jsonl (not a scan)
+//                       survey-duck-40000000-3.jsonl (header-less survey), notes.jsonl (not a scan),
+//                       poststep-v3.jsonl (scan.js --game v3 --start 95000 --target 130000 of a
+//                       v2 model: header game/modelGameVersion/startScore, footer, 2 failures)
 // Checks the JSON API (discovery, kinds, running detection, snapshot weights, name
 // whitelist, scans: counts, failure CI, status, owner, incremental tail), then the page: the
 // Scans table (running row live, failure scores on expand), a run's own scans, BC charts with every recall class, a BC model and a
@@ -130,6 +132,13 @@ function buildFixture(dir) {
   w('grp/scans/survey-duck-40000000-3.jsonl', [[40000002, false, 1000000], [40000000, true, 655], [40000001, false, 1000000]]
     .map(([seed, crashed, score]) => JSON.stringify({ seed, crashed, score, frames: 99, downFrames: 0, obstaclesSeen: 9, obstaclesPassed: 9 })).join('\n') + '\n');
   w('grp/scans/notes.jsonl', '{"note":"not a scan"}\n');
+  // scan.js --start on rules v3 (prereg-v3-clones §4.0/§4.4 DC-post shape): a v2 model scanned with
+  // --game v3 --start 95000 --target 130000; the header carries game, modelGameVersion, startScore.
+  w('grp/scans/poststep-v3.jsonl', [JSON.stringify({ header: true, model: '/elsewhere/runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json', layers: [44, 8, 8, 3],
+    gameVersion: 'v3', actionRepeat: 1, generation: null, coreHash: '65f3546c'.padEnd(64, '0'), base: 30003000, n: 3, target: 130000, wasm: true, workers: 18,
+    start: '2026-10-10T12:00:00.000Z', pid: dead, host: os.hostname(), game: 'v3', modelGameVersion: 'v2', startScore: 95000, expectHash: '65f3546c' }),
+  ...[[30003000, 100016], [30003001, 130000], [30003002, 100500]].map(([seed, score]) => JSON.stringify({ seed, score, pass: score >= 130000, frames: 9000 })),
+  JSON.stringify({ footer: true, seconds: 3.5, end: '2026-10-10T12:00:03.500Z' })].join('\n') + '\n');
 }
 
 async function connect() {
@@ -230,10 +239,14 @@ function cdpClient(url) {
     const getScans = async () => Object.fromEntries((await (await fetch(base + '/api/scans')).json()).map(s => [s.id, s]));
     let sc = await getScans();
     const sDone = sc['grp/scans/done.jsonl'] || {}, sRun = sc['grp/scans/running.jsonl'] || {}, sStall = sc['grp/scans/stalled.jsonl'] || {};
-    const sSurv = sc['grp/scans/survey-duck-40000000-3.jsonl'] || {};
+    const sSurv = sc['grp/scans/survey-duck-40000000-3.jsonl'] || {}, sV3 = sc['grp/scans/poststep-v3.jsonl'] || {};
     check('scans: every scan.js / survey.js file found, non-scan JSONL ignored, runs list unchanged',
-      Object.keys(sc).sort().join() === ['grp/scans/done.jsonl', 'grp/scans/running.jsonl', 'grp/scans/stalled.jsonl', 'grp/scans/survey-duck-40000000-3.jsonl'].join(),
+      Object.keys(sc).sort().join() === ['grp/scans/done.jsonl', 'grp/scans/poststep-v3.jsonl', 'grp/scans/running.jsonl', 'grp/scans/stalled.jsonl', 'grp/scans/survey-duck-40000000-3.jsonl'].join(),
       Object.keys(sc).join());
+    check('scan.js --start on rules v3: rules played, model rules, start score from the header; old headers default to start 0',
+      sV3.state === 'done' && sV3.gameVersion === 'v3' && sV3.modelGameVersion === 'v2' && sV3.startScore === 95000 && sV3.target === 130000 &&
+      sV3.games === 3 && sV3.failures === 2 && sV3.failMin === 100016 && sDone.startScore === 0 && sDone.gameVersion === 'v2' && sDone.modelGameVersion === null,
+      JSON.stringify({ ...sV3, failHist: undefined }));
     const cp = clopperPearson(2, 10);
     check('complete scan: done by footer, 8/10 passes, failure scores, 95% CP on the failure rate, owner from best.json',
       sDone.state === 'done' && sDone.games === 10 && sDone.n === 10 && sDone.passes === 8 && sDone.failures === 2 && sDone.failMin === 467 &&
@@ -301,7 +314,7 @@ function cdpClient(url) {
     // Scans table: running and stalled always shown, finished ones folded; expand one.
     const scansUi = await waitUntil(`!document.getElementById('scans-card').hidden && document.querySelector('tr.scan-row[data-scan="grp/scans/running.jsonl"][data-state="running"] .dot.live')`);
     const scanText = await evaluate(`document.getElementById('scans').textContent.replace(/\\s+/g, ' ')`);
-    check('Scans section: running scan marked live, stalled listed, counts', scansUi && /1 running · 1 stalled · 2 done/.test(scanText) &&
+    check('Scans section: running scan marked live, stalled listed, counts', scansUi && /1 running · 1 stalled · 3 done/.test(scanText) &&
       !!(await evaluate(`document.querySelector('tr.scan-row[data-state="stalled"] .dot.stall')`)), scanText.slice(0, 200));
     await evaluate(`(() => { const d = document.getElementById('scans-done'); d.open = true; d.ontoggle && d.ontoggle(); })()`);
     await evaluate(`document.querySelector('#scans .scan-toggle[data-key="all:grp/scans/done.jsonl"]').click()`);
@@ -310,6 +323,13 @@ function cdpClient(url) {
     const doneRow = await evaluate(`document.querySelector('#scans tr.scan-row[data-scan="grp/scans/done.jsonl"]').textContent.replace(/\\s+/g, ' ')`);
     check('finished scan row: 8 passed, 2 failed, min failure, failure rate with CP; expands to scores and histogram',
       expanded && /10\/10 8 2 467 20\.00% \(2\.52%–55\.61%\)/.test(doneRow), doneRow);
+    await evaluate(`document.querySelector('#scans .scan-toggle[data-key="all:grp/scans/poststep-v3.jsonl"]').click()`);
+    const v3Games = await waitUntil(`(() => { const d = document.querySelector('#scans tr.scan-detail[data-scan="grp/scans/poststep-v3.jsonl"] dd.scan-games');
+      return d && /rules v3 \\(cross-rules: a v2 model\\) · from 95,000 to 130,000 points/.test(d.textContent); })()`, 5000);
+    const v3Row = await evaluate(`document.querySelector('#scans tr.scan-row[data-scan="grp/scans/poststep-v3.jsonl"]').textContent.replace(/\\s+/g, ' ')`);
+    const doneGames = await evaluate(`(document.querySelector('#scans tr.scan-detail[data-scan="grp/scans/done.jsonl"] dd.scan-games') || {}).textContent || ''`);
+    check('scan.js --start on rules v3 in the Scans section: start→target and rules badge in the row, rules and start on expand; old scan shows rules v2 from 0',
+      v3Games && /95k→130k v3 3\/3 1 2 100,016/.test(v3Row) && /^rules v2 · from 0 to 1,000,000 points$/.test(doneGames.trim()), `${v3Row} | ${doneGames}`);
     await shot('dashboard-scans.png');
 
     // BC run: charts, chip, best weights playing.

@@ -586,7 +586,7 @@ function scanTable(scans, where) {
       <td><button type="button" class="scan-toggle" data-key="${esc(where + ':' + s.id)}" aria-expanded="${open}">${esc(s.id)}</button>${s.kind === 'survey' ? ' <span class="badge">survey</span>' : ''}</td>
       <td>${model}</td>
       <td>${s.base !== null ? `${num(s.base)}+` : '–'}</td>
-      <td>${s.target ? compact(s.target) : '–'}</td>
+      <td>${s.startScore ? `<span title="every game starts at ${num(s.startScore)}">${compact(s.startScore)}→</span>` : ''}${s.target ? compact(s.target) : '–'}${s.gameVersion && s.gameVersion !== 'v2' ? ` <span class="badge">${esc(s.gameVersion)}</span>` : ''}</td>
       <td>${num(s.games)}${s.n ? '/' + num(s.n) : ''}${s.n ? `<span class="bar" aria-hidden="true"><i style="width:${(frac * 100).toFixed(1)}%"></i></span>` : ''}</td>
       <td>${num(s.passes)}</td>
       <td class="${s.failures ? 'bad' : ''}">${num(s.failures)}</td>
@@ -601,6 +601,7 @@ function scanTable(scans, where) {
     return main + `<tr class="scan-detail" data-scan="${esc(s.id)}"><td colspan="11"><dl class="kv">
       <dt>Status</dt><dd>${esc(s.state)}: ${esc(s.how)}</dd>
       <dt>${s.kind === 'survey' ? 'Teacher' : 'Model'}</dt><dd>${s.kind === 'survey' ? `test/solver.js ${esc(s.solver || '?')} (survey.js)` : esc(s.model || '–')}${s.layers ? ` · ${esc(layersText(s.layers))}` : ''}${s.gameVersion ? ` · ${esc(s.gameVersion)}` : ''}</dd>
+      <dt>Games</dt><dd class="scan-games">rules ${esc(s.gameVersion || '?')}${s.modelGameVersion && s.modelGameVersion !== s.gameVersion ? ` (cross-rules: a ${esc(s.modelGameVersion)} model)` : ''} · from ${num(s.startScore || 0)} to ${s.target ? num(s.target) : '?'} points</dd>
       <dt>Seeds</dt><dd>${s.seedRange ? `${num(s.seedRange[0])}–${num(s.seedRange[1])}` : '–'} (${num(s.games)} games${s.n ? ` of ${num(s.n)} from ${num(s.base)}` : ''}) · ${compact(s.frames)} frames</dd>
       <dt>Process</dt><dd>${s.pid !== null ? `pid ${s.pid}${s.host ? ' on ' + esc(s.host) : ''}` : 'no pid recorded'}${s.workers ? ` · ${s.workers} workers` : ''}${s.wasm ? ' · wasm' : ''}${s.coreHash ? ` · core ${esc(short(s.coreHash))}` : ''}</dd>
       <dt>Time</dt><dd>${s.startedAt ? 'started ' + esc(new Date(s.startedAt).toLocaleString()) : ''}${s.endedAt ? ' · ended ' + esc(new Date(s.endedAt).toLocaleString()) : ''}${s.seconds ? ` · ${dur(s.seconds * 1000)}` : ''} · last write ${ago(s.updated)}</dd>

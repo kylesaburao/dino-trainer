@@ -1,6 +1,6 @@
 'use strict';
 // Duck share in play (research/prereg-teacher-duck-step2.md §5.3 step 4).
-// Plays full rules-v2 games (0 -> --target) on seeds BASE..BASE+N-1 with a model
+// Plays full games (0 -> --target; rules v2 by default, see Rules below) on seeds BASE..BASE+N-1 with a model
 // (policy.js createAgent, JS forward pass) or with the duck teacher (test/solver.js
 // createDuckSolver), single-threaded, and classifies every DUCKABLE obstacle: one whose box
 // overlaps the standing box vertically but clears the ducking box (mid pterodactyls; computed
@@ -18,7 +18,10 @@
 // ducked <= stats.midDucked <= ducked + pending (the teacher counts an obstacle at its decision
 // frame, which can precede the end of the game by less than one obstacle's approach).
 // Usage: node duckshare.js (--model <best.json> | --teacher duck) [--base 30003000] [--n 10]
-//          [--target 1000000] [--out f.json]
+//          [--target 1000000] [--game v2|v3] [--out f.json]
+// Rules (research/prereg-v3-clones.md §4.0): a model plays its own gameVersion (v2 or v3), the
+// teacher plays --game (default v2). --game on a model is a cross-rules override (warned). The
+// report gains game/modelGameVersion only when --game is given, so the default is unchanged.
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.join(__dirname, '..', '..', '..');
@@ -34,7 +37,12 @@ if (!!modelFile === !!teacher) throw new Error('give exactly one of --model <bes
 if (teacher && teacher !== 'duck') throw new Error(`--teacher must be duck, got ${teacher}`);
 const BASE = Number(opt('--base', 30003000)), N = Number(opt('--n', 10)), TARGET = Number(opt('--target', 1000000));
 const m = modelFile ? JSON.parse(fs.readFileSync(path.resolve(modelFile), 'utf8')) : null;
-if (m && m.gameVersion !== 'v2') throw new Error(`model gameVersion ${m.gameVersion}`);
+const PLAYABLE = ['v2', 'v3'];
+if (m && !PLAYABLE.includes(m.gameVersion)) throw new Error(`model gameVersion ${m.gameVersion}`);
+const GAME_OPT = opt('--game', null);
+if (GAME_OPT !== null && !PLAYABLE.includes(GAME_OPT)) throw new Error(`--game must be one of ${PLAYABLE.join(', ')}`);
+const GAME = GAME_OPT || (m ? m.gameVersion : 'v2');
+if (m && GAME !== m.gameVersion) console.warn(`WARNING: cross-rules duck share: a ${m.gameVersion} model on rules ${GAME}`);
 const cap = TARGET / Core.CFG.scoreCoef;
 const stand = Core.standBox(Core.STAND_TOP);
 
@@ -44,7 +52,7 @@ function duckable(o, duckY) {
 }
 
 function playSeed(seed) {
-  const g = Core.createGame({ rng: Core.createRng(seed), version: 'v2' });
+  const g = Core.createGame({ rng: Core.createRng(seed), version: GAME });
   const actor = teacher ? createDuckSolver() : null;
   const agent = m ? P.createAgent(m) : null;
   const track = new Map();       // obstacle -> { overlap, ducked, air, done, crashed }
@@ -107,6 +115,7 @@ const report = {
   duckShare: met ? sum('ducked') / met : null, perGameDuckShare: games.map(r => { const n = r.ducked + r.jumped + r.mixed + r.crashed; return n ? r.ducked / n : null; }),
   downFrames: sum('downFrames'), downAir: sum('downAir'), games, seconds: (Date.now() - t0) / 1000,
 };
+if (GAME_OPT !== null) Object.assign(report, { game: GAME, modelGameVersion: m ? m.gameVersion : null });
 let ok = true;
 if (teacher) {
   const fails = [];
