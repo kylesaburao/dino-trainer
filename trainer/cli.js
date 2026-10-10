@@ -19,6 +19,10 @@
 //   node trainer/cli.js bc-train --dir runs/<name> --hidden 32,32 [--backend node|python] [--epochs 15]
 //                              [--batch 1024] [--lr 2e-3] [--seed 1] [--demos <dir or demos.json>]
 //                              [--target 1000000] [--workers N] [--wasm] [--force] [--overwrite] [--snapshots]
+//                              [--distill-from <best.json> [--distill-mode soft|hard] [--tau 1] [--alpha 0]]
+//                              [--quant-bits N [--quant-scheme row|layer]]
+//   node trainer/cli.js bc-quantize --from <best.json> --dir runs/<name> --quant-bits N [--quant-scheme row|layer]  (refuses another core hash unless --force)
+//                              [--target 1000000] [--workers N] [--wasm] [--overwrite]
 //
 // Behaviour cloning of test/solver.js (trainer/bc.js; supervised, no ES):
 //   bc-gen    plays the teacher on each seed (inclusive range) from each start level, for
@@ -46,6 +50,24 @@
 //             params to <dir>/snapshots/epoch-NN.json ({layers, params, epoch}, NN from 01,
 //             the policy.createNet flat layout), taken after the epoch's last optimiser
 //             step; it does not change training. Replaces any existing <dir>/snapshots/.
+//             --distill-from FILE (off by default; both backends) trains on a trained model's
+//             logits on the same demo rows instead of only the solver labels (Hinton et al.
+//             2015): --distill-mode soft (default; alpha * CE(solver) + (1 - alpha) * tau^2 *
+//             CE(softmax(z_t / tau), softmax(z / tau)), --tau default 1, --alpha default 0) or
+//             hard (CE on the teacher's argmax). Row weights stay the solver-label class
+//             weights. best.json config gains distillFrom {path, paramsSha256, layers,
+//             teacherName}, distillMode, tau, alpha; bc-metrics rows gain distillLoss, and
+//             `loss` stays the CE against the solver labels. Definitions: trainer/bc.js header.
+//             --quant-bits N (2..8; off by default; both backends) is quantization-aware
+//             training: symmetric integer weights (qmax 2^(N-1) - 1, so 2 = ternary), scale
+//             max|w| / qmax per output row (--quant-scheme row, default) or per layer, fake-
+//             quantized in forward and backward with a straight-through estimator; biases
+//             stay float. The saved params are the float64 q * scale (still dino-mlp-v1), and
+//             config.quant records bits, scheme, mode 'qat', the scales and the levels used;
+//             the write fails unless every weight is exactly an integer times its scale.
+//   bc-quantize post-training quantization of --from (a best.json) with the same rule,
+//             into a new run dir: best.json (config.quant mode 'ptq', quantFrom {path,
+//             paramsSha256}), after the same 25-seed validation. No training, no bc-metrics.
 //
 // Training-only curriculum (off by default; validation, held-out eval, the stop
 // check, eval and export always play full games from 0 to --target):
@@ -234,7 +256,8 @@ function parseArgs(argv) {
     } else if (['--resume', '--force', '--overwrite', '--auto-export', '--no-commit', '--skip-browser', '--snapshots'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = true;
     } else if (['--workers', '--time-budget', '--dir', '--which', '--model', '--out', '--seconds', '--log-every', '--seeds', '--seed-offset',
-      '--levels', '--span0', '--span', '--keep-boring', '--backend', '--epochs', '--batch', '--demos', '--teacher'].includes(a)) {
+      '--levels', '--span0', '--span', '--keep-boring', '--backend', '--epochs', '--batch', '--demos', '--teacher',
+      '--distill-from', '--tau', '--distill-mode', '--alpha', '--quant-bits', '--quant-scheme', '--from'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = takesValue();
     } else {
       throw new Error(`unknown argument ${a}`);
@@ -809,6 +832,52 @@ async function bcGenCmd({ config: cli, opts }) {
   if (manifest.solverCrashes) throw new Error(`the solver crashed in ${manifest.solverCrashes} episode(s); the demonstrations are not trustworthy`);
 }
 
+// A trained model file (best.json, or a snapshot epoch-NN.json) for --distill-from / --from.
+function loadTrainedModel(file, flag) {
+  const abs = path.resolve(file);
+  if (!abs.endsWith('.json') || !fs.existsSync(abs)) throw new Error(`${flag}: no model JSON at ${file}`);
+  const m = JSON.parse(fs.readFileSync(abs, 'utf8'));
+  if (m.format && m.format !== FORMAT) throw new Error(`${flag}: unsupported model format ${m.format}`);
+  if (!Array.isArray(m.layers) || m.layers[0] !== OBS_DIM || m.layers[m.layers.length - 1] !== 3) throw new Error(`${flag}: layers must be ${OBS_DIM}-...-3`);
+  if (!Array.isArray(m.params) || m.params.length !== numParams(m.layers)) throw new Error(`${flag}: params do not match layers`);
+  return { abs, model: m };
+}
+
+// --distill-from FILE [--distill-mode soft|hard] [--tau T] [--alpha A]; null when off.
+function parseDistill(opts) {
+  if (opts.distillFrom === undefined) {
+    for (const k of ['distillMode', 'tau', 'alpha']) if (opts[k] !== undefined) throw new Error('--distill-mode, --tau and --alpha need --distill-from');
+    return null;
+  }
+  const mode = opts.distillMode || 'soft';
+  if (!['soft', 'hard'].includes(mode)) throw new Error(`--distill-mode must be soft or hard, got ${mode}`);
+  if (mode === 'hard' && (opts.tau !== undefined || opts.alpha !== undefined)) throw new Error('--tau and --alpha apply to --distill-mode soft only');
+  const tau = opts.tau !== undefined ? Number(opts.tau) : 1, alpha = opts.alpha !== undefined ? Number(opts.alpha) : 0;
+  if (!(Number.isFinite(tau) && tau > 0)) throw new Error('--tau must be > 0');
+  if (!(alpha >= 0 && alpha <= 1)) throw new Error('--alpha must be in [0, 1]');
+  const { abs, model } = loadTrainedModel(opts.distillFrom, '--distill-from');
+  return { mode, tau, alpha, abs, model };
+}
+
+// --quant-bits N [--quant-scheme row|layer]; null when off.
+function parseQuant(opts, bc) {
+  if (opts.quantBits === undefined) {
+    if (opts.quantScheme !== undefined) throw new Error('--quant-scheme needs --quant-bits');
+    return null;
+  }
+  const q = { bits: Number(opts.quantBits), scheme: opts.quantScheme || 'row' };
+  bc.checkQuantOptions(q);
+  return q;
+}
+
+const distillConfig = (dz, bc) => ({
+  distillFrom: { path: path.relative(ROOT, dz.abs), paramsSha256: bc.paramsSha256(dz.model.params), layers: dz.model.layers,
+    teacherName: (dz.model.config && dz.model.config.teacherName) || null },
+  distillMode: dz.mode, ...(dz.mode === 'soft' ? { tau: dz.tau, alpha: dz.alpha } : {}),
+});
+const distillText = (dz) => ` distill=${dz.mode}${dz.mode === 'soft' ? ` tau=${dz.tau} alpha=${dz.alpha}` : ''} from=${path.relative(ROOT, dz.abs)}`;
+const quantText = (q) => ` quant=int${q.bits}/${q.scheme}`;
+
 async function bcTrainCmd({ config: cli, opts }) {
   const bc = require('./bc.js');
   const dir = requireDir(opts, 'bc-train');
@@ -816,6 +885,8 @@ async function bcTrainCmd({ config: cli, opts }) {
   const backend = opts.backend || 'node';
   if (!['node', 'python'].includes(backend)) throw new Error(`--backend must be node or python, got ${backend}`);
   if (opts.snapshots && backend !== 'python') throw new Error('--snapshots is only supported with --backend python');
+  const dz = parseDistill(opts);
+  const quant = parseQuant(opts, bc);
   const d = bc.TRAIN_DEFAULTS;
   const o = {
     hidden: cli.hidden,
@@ -838,8 +909,21 @@ async function bcTrainCmd({ config: cli, opts }) {
   const snapshotDir = opts.snapshots ? path.join(dir, 'snapshots') : null;
   if (snapshotDir) fs.rmSync(snapshotDir, { recursive: true, force: true });
   const gameVersion = demos.manifest.gameVersion;
+  if (dz && dz.model.gameVersion && dz.model.gameVersion !== gameVersion) throw new Error(`--distill-from: teacher plays ${dz.model.gameVersion}, demos are ${gameVersion}`);
   log(`bc-train: dir=${dir} backend=${backend} layers=${[OBS_DIM, ...o.hidden, 3].join('-')} epochs ${o.epochs} batch ${o.batch} lr ${o.lr} seed ${o.seed} ` +
-    `demos ${path.relative(ROOT, demos.manifestFile)} (${demos.manifest.rows} rows, sha ${sha.slice(0, 12)}) core=${hash.slice(0, 12)}`);
+    `demos ${path.relative(ROOT, demos.manifestFile)} (${demos.manifest.rows} rows, sha ${sha.slice(0, 12)}) core=${hash.slice(0, 12)}` +
+    `${dz ? distillText(dz) : ''}${quant ? quantText(quant) : ''}`);
+  // Teacher logits on every demo row, straight from the Float32 rows (no Float64 copy).
+  let logits = null;
+  if (dz) {
+    const buf = fs.readFileSync(demos.binFile);
+    const f = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+    logits = bc.teacherLogits(dz.model, { X: f, n: f.length / bc.ROW, dim: OBS_DIM, stride: bc.ROW });
+    const ya = bc.argmaxLabels(logits);
+    let agree = 0;
+    for (let i = 0; i < ya.length; i++) if (ya[i] === f[i * bc.ROW + OBS_DIM]) agree++;
+    log(`distill: teacher ${path.relative(ROOT, dz.abs)} (${dz.model.layers.join('-')}) argmax = solver label on ${agree}/${ya.length} rows`);
+  }
 
   const metricsFile = path.join(dir, 'bc-metrics.jsonl');
   fs.rmSync(metricsFile, { force: true });
@@ -850,19 +934,30 @@ async function bcTrainCmd({ config: cli, opts }) {
   };
   const t0 = Date.now();
   let result;
+  const extra = { ...(quant ? { quant } : {}) };
   if (backend === 'node') {
-    result = bc.trainNode(bc.loadDemos(demos.binFile), { ...o, onEpoch });
+    if (dz) extra.distill = { logits, mode: dz.mode, tau: dz.tau, alpha: dz.alpha };
+    result = bc.trainNode(bc.loadDemos(demos.binFile), { ...o, ...extra, onEpoch });
   } else {
     const outFile = path.join(dir, `bc-python.${process.pid}.tmp`);
+    const logitsFile = path.join(dir, `teacher-logits.${process.pid}.tmp`);
     try {
-      result = await bc.trainPython(demos.binFile, outFile, snapshotDir ? { ...o, snapshotDir } : o, ROOT, (line) => {
+      if (dz) { bc.writeLogits(logitsFile, logits); extra.distill = { logitsFile, mode: dz.mode, tau: dz.tau, alpha: dz.alpha }; }
+      result = await bc.trainPython(demos.binFile, outFile, { ...o, ...(snapshotDir ? { snapshotDir } : {}), ...extra }, ROOT, (line) => {
         if (line.startsWith('{')) onEpoch(JSON.parse(line)); else if (line) log(line);
       });
     } finally {
       fs.rmSync(outFile, { force: true });
+      fs.rmSync(logitsFile, { force: true });
     }
   }
+  logits = null;
   const trainSeconds = (Date.now() - t0) / 1000;
+  let quantConfig = null;
+  if (quant) {
+    quantConfig = { bits: quant.bits, scheme: quant.scheme, mode: 'qat', biases: 'float', scales: result.scales };
+    quantConfig.levels = bc.checkQuantized(result.layers, result.params, quantConfig);   // throws unless exactly k * scale
+  }
   const model = { format: FORMAT, layers: result.layers, params: result.params, actionRepeat: 1, gameVersion };
 
   const valSeedList = validationSeeds(25);
@@ -882,11 +977,62 @@ async function bcTrainCmd({ config: cli, opts }) {
     demos: path.relative(ROOT, demos.manifestFile), demosSha256: sha, demosRows: demos.manifest.rows,
     trainSeconds, final: last ? { loss: last.loss, recall: last.recall } : null,
     ...(snapshotDir ? { snapshots: path.relative(ROOT, snapshotDir) } : {}),
+    ...(dz ? distillConfig(dz, bc) : {}),
+    ...(quantConfig ? { quant: quantConfig } : {}),
   };
   writeJsonAtomic(bestFile, bc.assembleBest({ layers: result.layers, params: result.params, validation, coreHash: hash, config }));
   release();
   log(`validation: median ${validation.median} min ${validation.min} count ${validation.count}/${valSeedList.length}; ` +
     `trained in ${trainSeconds.toFixed(1)}s -> ${path.relative(ROOT, bestFile)}`);
+}
+
+// bc-quantize: post-training quantization of a trained model into a new run dir.
+async function bcQuantizeCmd({ config: cli, opts }) {
+  const bc = require('./bc.js');
+  const dir = requireDir(opts, 'bc-quantize');
+  if (!opts.from) throw new Error('bc-quantize needs --from <best.json>');
+  const quant = parseQuant(opts, bc);
+  if (!quant) throw new Error('bc-quantize needs --quant-bits N');
+  const { abs, model: src } = loadTrainedModel(opts.from, '--from');
+  const hash = coreHash();
+  if (src.coreHash && src.coreHash !== hash) {
+    if (!opts.force) throw new Error(`core hash mismatch: --from was trained on ${src.coreHash.slice(0, 12)}, current core/policy is ${hash.slice(0, 12)}; pass --force to quantize it anyway`);
+    log(`WARNING: --from core hash ${src.coreHash.slice(0, 12)} differs from the current ${hash.slice(0, 12)}, continuing because of --force`);
+  }
+  const target = cli.target || 1000000;
+  fs.mkdirSync(dir, { recursive: true });
+  const bestFile = path.join(dir, 'best.json');
+  if (fs.existsSync(bestFile) && !opts.overwrite) throw new Error(`${bestFile} exists; pass --overwrite to replace it`);
+  const release = acquireLock(dir);
+  process.on('exit', release);
+  const gameVersion = src.gameVersion || (src.config && src.config.gameVersion) || 'v2';
+  log(`bc-quantize: dir=${dir} from=${path.relative(ROOT, abs)} layers=${src.layers.join('-')}${quantText(quant)}`);
+  const q = bc.quantizeParams(src.layers, src.params, quant);
+  const quantConfig = { bits: quant.bits, scheme: quant.scheme, mode: 'ptq', biases: 'float', scales: q.scales };
+  quantConfig.levels = bc.checkQuantized(src.layers, q.params, quantConfig);
+  let changed = 0, maxErr = 0;
+  q.params.forEach((v, i) => { if (v !== src.params[i]) changed++; maxErr = Math.max(maxErr, Math.abs(v - src.params[i])); });
+  log(`bc-quantize: ${changed}/${q.params.length} params changed, max |change| ${maxErr.toExponential(3)}, ${quantConfig.levels} integer levels`);
+  const model = { format: FORMAT, layers: src.layers, params: q.params, actionRepeat: 1, gameVersion };
+  const valSeedList = validationSeeds(25);
+  const workers = Number(opts.workers) || defaultWorkers();
+  const pool = createPool(Math.min(workers, valSeedList.length));
+  log(`validation: ${valSeedList.length} seeds to ${target} (${gameVersion})`);
+  const scores = await scoreSeeds(pool, model, valSeedList, target, !!cli.wasm);
+  await pool.terminate();
+  const validation = valSummary(scores, target);
+  const sc = src.config || {};
+  const config = {
+    target, hidden: src.layers.slice(1, -1), actionRepeat: 1, gameVersion,
+    method: 'behaviour cloning of test/solver.js, then post-training quantization (no training)',
+    trainer: 'trainer/cli.js bc-quantize', teacherName: sc.teacherName || 'jump',
+    ...(sc.demos ? { demos: sc.demos, demosSha256: sc.demosSha256, demosRows: sc.demosRows } : {}),
+    quantFrom: { path: path.relative(ROOT, abs), paramsSha256: bc.paramsSha256(src.params), method: sc.method || null, seed: sc.seed ?? null },
+    quant: quantConfig,
+  };
+  writeJsonAtomic(bestFile, bc.assembleBest({ layers: src.layers, params: q.params, validation, coreHash: src.coreHash || hash, config }));
+  release();
+  log(`validation: median ${validation.median} min ${validation.min} count ${validation.count}/${valSeedList.length} -> ${path.relative(ROOT, bestFile)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -896,7 +1042,7 @@ const COMMANDS = {
   report: (a) => ops().reportCmd(a),
   finish: (a) => ops().finishCmd(a),
   session: (a) => ops().sessionCmd(a),
-  'bc-gen': bcGenCmd, 'bc-train': bcTrainCmd,
+  'bc-gen': bcGenCmd, 'bc-train': bcTrainCmd, 'bc-quantize': bcQuantizeCmd,
 };
 
 async function main() {
@@ -909,7 +1055,7 @@ async function main() {
   }
   const cmd = COMMANDS[args.cmd];
   if (!cmd) {
-    console.error('usage: node trainer/cli.js <train|eval|bench|export|export-css|report|finish|session|bc-gen|bc-train> [options]  (see the header of trainer/cli.js)');
+    console.error('usage: node trainer/cli.js <train|eval|bench|export|export-css|report|finish|session|bc-gen|bc-train|bc-quantize> [options]  (see the header of trainer/cli.js)');
     process.exit(2);
   }
   await cmd(args);

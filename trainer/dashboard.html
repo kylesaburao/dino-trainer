@@ -325,10 +325,21 @@ function layersText(L) {
   return L.join('-');
 }
 
+// Distillation / quantization labels (bc.distill, bc.quant from the server).
+function kdText(b) {
+  const d = b.distill, q = b.quant;
+  return `${d ? ` · distill ${d.mode}${d.mode === 'soft' && d.tau !== null ? ` τ${d.tau}` : ''}` : ''}${q ? ` · int${q.bits} ${q.mode || ''}`.trimEnd() : ''}`;
+}
+function kdTiles(b) {
+  const d = b.distill, q = b.quant;
+  return `${d ? tile('Distilled from', esc(d.from || '–'), `${esc(d.mode)}${d.mode === 'soft' ? ` · τ ${esc(d.tau)} · α ${esc(d.alpha)}` : ''}${d.layers ? ` · ${esc(layersText(d.layers))}` : ''}${d.teacherName ? ` · teacher-${esc(d.teacherName)}` : ''}${d.paramsSha256 ? ` · sha ${esc(short(d.paramsSha256))}` : ''}`) : ''}
+    ${q ? tile('Quantized', `int${esc(q.bits)}`, `${q.mode === 'ptq' ? 'post-training' : q.mode === 'qat' ? 'quantization-aware training' : esc(q.mode || '')} · ${esc(q.scheme)} scales${q.levels !== null ? ` · ${esc(q.levels)} levels` : ''}${q.biases ? ` · biases ${esc(q.biases)}` : ''}${q.from ? ` · from ${esc(q.from)}` : ''}${q.fromSha256 ? ` (sha ${esc(short(q.fromSha256))})` : ''}`) : ''}`;
+}
+
 function bcChip(r) {
   const b = r.bc;
   const what = r.kind === 'demos' ? `demos · ${b.demos ? compact(b.demos.rows) + ' rows' : 'generating'}`
-    : `${layersText(b.layers)}${b.backend ? ' · ' + b.backend : ''}${b.epochsDone ? ` · epoch ${b.epochsDone}${b.epochs ? '/' + b.epochs : ''}` : ''}`;
+    : `${layersText(b.layers)}${b.backend ? ' · ' + b.backend : ''}${b.epochsDone ? ` · epoch ${b.epochsDone}${b.epochs ? '/' + b.epochs : ''}` : ''}${kdText(b)}`;
   return `<button class="run-chip" type="button" aria-pressed="${r.name === selected}" data-run="${esc(r.name)}">
     <span class="dot ${r.running ? 'live' : ''}" aria-hidden="true"></span><span class="badge">${r.kind === 'demos' ? 'BC demos' : 'BC'}</span>${esc(r.name)}<span style="color:var(--text-muted)">${r.running ? 'running' : 'stopped'} · ${esc(b.teacher)} · ${esc(what)}</span></button>`;
 }
@@ -495,6 +506,7 @@ function renderBcDetail(d) {
       ${tile('Status', status, statusSub)}
       ${tile('Teacher', esc(b.teacher), `${esc(b.teacherSource || 'test/solver.js')} · behaviour cloning`)}
       ${tile('Network', esc(layersText(b.layers)), `${esc(b.backend || '–')}${cfg.seed !== undefined ? ` · seed ${cfg.seed}` : ''}${cfg.lr ? ` · lr ${cfg.lr}` : ''}`)}
+      ${kdTiles(b)}
       ${metrics.length || info.running ? tile('Epoch', `${num(b.epochsDone)}${b.epochs ? ' / ' + num(b.epochs) : ''}`, last ? `loss ${last.loss.toFixed(4)} · ${classes.map(c => `${esc(c)} ${pct(last.recall[c], 2)}`).join(' · ')}` : 'no epochs logged yet') : ''}
       ${tile('Validation', v ? `${num(v.count)}/25` : '–', v ? `seeds reaching ${compact(cfg.target)} · median ${num(v.median)} · min ${num(v.min)}` : info.running ? 'after training' : 'no best.json')}
       ${tile('Held-out eval', ev ? `${num(ev.passed)}/${num(ev.seeds)}` : '–', ev ? `offset ${num(ev.seedOffset)} · target ${compact(ev.target)}${ev.passCI95 ? ` · CP ${ev.passCI95.lower.toFixed(3)}–${ev.passCI95.upper.toFixed(3)}` : ''}` : 'not evaluated')}
@@ -503,7 +515,7 @@ function renderBcDetail(d) {
     <div class="charts">
       ${metrics.length || info.running ? `<div class="card">
         <h2>Training loss</h2>
-        <div class="sub">Class-weighted cross-entropy, mean over the epoch's batches</div>
+        <div class="sub">Class-weighted cross-entropy against the solver's labels, mean over the epoch's batches${metrics.some(r => Number.isFinite(r.distillLoss)) ? '; distilled runs also show the optimised distillation objective' : ''}</div>
         <div class="chart" id="c-loss"></div>
       </div>
       <div class="card">
@@ -516,7 +528,7 @@ function renderBcDetail(d) {
         <h2>Seconds per epoch</h2>
         <div class="sub">Wall time of each epoch (${esc(b.backend || 'backend')})</div>
         <div class="chart" id="c-secs"></div>
-      </div>` : `<div class="card wide"><h2>Training</h2><div class="sub">No bc-metrics.jsonl: trained outside bc-train (${esc(cfg.trainer || 'unknown trainer')})</div></div>`}
+      </div>` : `<div class="card wide"><h2>Training</h2><div class="sub">${b.quant && b.quant.mode === 'ptq' ? `No bc-metrics.jsonl: post-training quantization of ${esc(b.quant.from || 'another model')} (${esc(cfg.trainer || 'bc-quantize')}), no training epochs` : `No bc-metrics.jsonl: trained outside bc-train (${esc(cfg.trainer || 'unknown trainer')})`}</div></div>`}
       <div class="card">
         <h2>Snapshots</h2>
         <div class="sub">${b.snapshots.length ? 'snapshots/epoch-NN.json, taken after each epoch; click to play one' : 'No snapshots/ (bc-train --snapshots, python backend)'}</div>
@@ -529,7 +541,9 @@ function renderBcDetail(d) {
       ${cfgCard}
     </div>`;
   const xs = (r) => r.epoch + 1;
-  if ($('#c-loss')) lineChart($('#c-loss'), [{ name: 'Loss', color: css('--series-1'), markers: metrics.length <= 60, points: metrics.map(r => [xs(r), r.loss]) }],
+  const kdLoss = metrics.filter(r => Number.isFinite(r.distillLoss));
+  if ($('#c-loss')) lineChart($('#c-loss'), [{ name: 'Loss', short: 'loss', color: css('--series-1'), markers: metrics.length <= 60, points: metrics.map(r => [xs(r), r.loss]) },
+    ...(kdLoss.length ? [{ name: 'Distillation objective', short: 'distill', color: css('--series-2'), markers: metrics.length <= 60, points: kdLoss.map(r => [xs(r), r.distillLoss]) }] : [])],
     { xLabel: 'epoch', yFmt: (x) => x.toFixed(3), tFmt: (x) => x.toFixed(5) });
   if ($('#c-recall')) lineChart($('#c-recall'), classes.map((c, i) => ({ name: c, short: c, color: css(SERIES[i % SERIES.length]), markers: metrics.length <= 60,
     points: metrics.filter(r => r.recall && Number.isFinite(r.recall[c])).map(r => [xs(r), r.recall[c]]) })),

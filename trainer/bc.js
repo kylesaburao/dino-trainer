@@ -28,6 +28,31 @@
 // cancels, and keeping it leaves jump-demo training bit-identical.
 // Recall (per epoch, on a 200k-row subsample) reports none and jump, plus duck when
 // the demo set has any label-2 row; without duck rows the output is unchanged.
+//
+// Distillation (bc-train --distill-from; off by default, and then nothing below runs).
+// The teacher is another trained model (a best.json); its logits z_t on every demo row
+// are computed once in Node by teacherLogits (policy.createNet's summation order) and
+// fed to both backends (the python one through a float64 file), so both see the same
+// teacher. Row weights stay sw * classWeight[solver label] in every mode, so modes
+// differ only in the target. Hinton, Vinyals & Dean 2015 (arXiv:1503.02531) section 2:
+//   soft: q = softmax(z_t / tau), p_tau = softmax(z / tau);
+//         per-row objective = alpha * CE(solver label, softmax(z))
+//                           + (1 - alpha) * tau^2 * CE(q, p_tau);
+//         gradient w.r.t. z = alpha * (softmax(z) - onehot(solver))
+//                           + (1 - alpha) * tau * (p_tau - q).
+//         alpha (default 0) is the weight of the solver's hard labels.
+//   hard: plain CE on argmax(z_t) (first index wins ties, as policy.js); tau, alpha unused.
+// With a one-hot teacher at tau 1 and alpha 0, soft is the hard-label update exactly.
+// bc-metrics `loss` is always the weighted CE against the SOLVER labels (comparable
+// across modes); distilled runs add `distillLoss`, the objective actually optimised.
+//
+// Quantization (bc-train --quant-bits, bc-quantize; off by default). Weights only, in
+// symmetric integers: qmax = 2^(bits-1) - 1 (bits 2 = ternary {-1, 0, 1}), scale =
+// max|w| / qmax per output row (scheme 'row') or per layer ('layer'), q = clamp(
+// round-half-up(w / scale), -qmax, qmax), stored as the float64 q * scale. Biases stay
+// float. QAT: each step's forward and backward use the quantized weights and the
+// gradient updates the float weights (straight-through estimator); the final params are
+// the quantized ones. The model stays dino-mlp-v1, so policy.js and CSS run it unchanged.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -300,7 +325,11 @@ function createTrainer(layers) {
   const acts = layers.map(n => new Float64Array(n));      // per-row activations
   const delta = [new Float64Array(maxW), new Float64Array(maxW)];
 
-  function lossAndGrad(params, X, dim, y, wRow, idx, grad) {
+  // dist (optional; distillation only): { ySolver, Q (n x nOut soft targets at tau, or
+  // null for hard mode, where y holds the teacher's labels), tau, alpha, solverLoss }.
+  // With dist, the return value is the weighted objective sum and dist.solverLoss
+  // accumulates the weighted CE against ySolver.
+  function lossAndGrad(params, X, dim, y, wRow, idx, grad, dist) {
     grad.fill(0);
     let wsum = 0;
     for (const i of idx) wsum += wRow[i];
@@ -324,10 +353,34 @@ function createTrainer(layers) {
       let se = 0;
       for (let c = 0; c < nOut; c++) se += Math.exp(out[c] - mx);
       const wi = wRow[i], yi = y[i];
-      loss += wi * -(out[yi] - mx - Math.log(se));
       const scale = wi / wsum;
       let d = delta[0];
-      for (let c = 0; c < nOut; c++) d[c] = (Math.exp(out[c] - mx) / se - (c === yi ? 1 : 0)) * scale;
+      if (!dist) {
+        loss += wi * -(out[yi] - mx - Math.log(se));
+        for (let c = 0; c < nOut; c++) d[c] = (Math.exp(out[c] - mx) / se - (c === yi ? 1 : 0)) * scale;
+      } else {
+        const ys = dist.ySolver[i];
+        const hce = -(out[ys] - mx - Math.log(se));
+        dist.solverLoss += wi * hce;
+        if (dist.Q) {
+          const { Q, tau, alpha } = dist;
+          let mt = -Infinity;
+          for (let c = 0; c < nOut; c++) if (out[c] / tau > mt) mt = out[c] / tau;
+          let st = 0;
+          for (let c = 0; c < nOut; c++) st += Math.exp(out[c] / tau - mt);
+          let sce = 0;
+          for (let c = 0; c < nOut; c++) {
+            const q = Q[i * nOut + c];
+            if (q > 0) sce -= q * (out[c] / tau - mt - Math.log(st));
+            const soft = (1 - alpha) * tau * (Math.exp(out[c] / tau - mt) / st - q);
+            d[c] = (alpha > 0 ? alpha * (Math.exp(out[c] - mx) / se - (c === ys ? 1 : 0)) + soft : soft) * scale;
+          }
+          loss += wi * (alpha * hce + (1 - alpha) * tau * tau * sce);
+        } else {
+          loss += wi * -(out[yi] - mx - Math.log(se));
+          for (let c = 0; c < nOut; c++) d[c] = (Math.exp(out[c] - mx) / se - (c === yi ? 1 : 0)) * scale;
+        }
+      }
       for (let l = L - 1; l >= 0; l--) {
         const { nin, nout, w, b } = offs[l];
         const a = acts[l];
@@ -366,8 +419,126 @@ function predict(layers, params, X, dim, i, net) {
   return net(x);
 }
 
-// Train on data { X, y, sw, n, dim }. o: { hidden, epochs, batch, lr, seed, onEpoch }.
-// Returns { layers, params (Array), log }.
+// ---------------------------------------------------------------------------
+// Distillation and quantization helpers
+// ---------------------------------------------------------------------------
+// A teacher model's logits on every row of data: Float64Array n x nOut. Each unit sums
+// bias + w0*x0 + w1*x1 + ... in index order, as policy.createNet does (its 4-row blocks
+// keep that order), so argmax(row) is createNet's decision (test/bc.test.js checks it).
+// stride (default dim) lets X be the raw Float32 demo rows (stride ROW).
+function teacherLogits(model, { X, n, dim, stride = dim }) {
+  const L = model.layers, p = model.params;
+  if (L[0] !== dim) throw new Error(`teacher expects ${L[0]} inputs, demos have ${dim}`);
+  if (p.length !== P.numParams(L)) throw new Error(`teacher: expected ${P.numParams(L)} params, got ${p.length}`);
+  const nOut = L[L.length - 1];
+  const out = new Float64Array(n * nOut);
+  const bufs = L.map(k => new Float64Array(k));
+  for (let r = 0; r < n; r++) {
+    let input = X.subarray(r * stride, r * stride + dim), k = 0;
+    for (let l = 1; l < L.length; l++) {
+      const nIn = L[l - 1], nO = L[l], o = bufs[l], bBase = k + nO * nIn, last = l === L.length - 1;
+      for (let i = 0; i < nO; i++) {
+        let s = p[bBase + i];
+        const row = k + i * nIn;
+        for (let j = 0; j < nIn; j++) s += p[row + j] * input[j];
+        o[i] = last ? s : Math.tanh(s);
+      }
+      input = o; k = bBase + nO;
+    }
+    for (let c = 0; c < nOut; c++) out[r * nOut + c] = input[c];
+  }
+  return out;
+}
+
+// Per-row argmax of n x nOut logits (first index wins ties, as policy.js): Uint8Array.
+function argmaxLabels(Z, nOut = 3) {
+  const n = Z.length / nOut, y = new Uint8Array(n);
+  for (let r = 0; r < n; r++) {
+    let b = 0;
+    for (let c = 1; c < nOut; c++) if (Z[r * nOut + c] > Z[r * nOut + b]) b = c;
+    y[r] = b;
+  }
+  return y;
+}
+
+// softmax(Z / tau) per row: Float64Array n x nOut.
+function softTargets(Z, tau, nOut = 3) {
+  const n = Z.length / nOut, Q = new Float64Array(Z.length);
+  for (let r = 0; r < n; r++) {
+    let mx = -Infinity;
+    for (let c = 0; c < nOut; c++) mx = Math.max(mx, Z[r * nOut + c] / tau);
+    let s = 0;
+    for (let c = 0; c < nOut; c++) s += (Q[r * nOut + c] = Math.exp(Z[r * nOut + c] / tau - mx));
+    for (let c = 0; c < nOut; c++) Q[r * nOut + c] /= s;
+  }
+  return Q;
+}
+
+const QUANT_SCHEMES = ['row', 'layer'];
+const quantMax = (bits) => 2 ** (bits - 1) - 1;
+function checkQuantOptions(q) {
+  if (!(Number.isInteger(q.bits) && q.bits >= 2 && q.bits <= 8)) throw new Error(`--quant-bits must be an integer in 2..8, got ${q.bits}`);
+  if (!QUANT_SCHEMES.includes(q.scheme)) throw new Error(`--quant-scheme must be one of ${QUANT_SCHEMES.join(', ')}, got ${q.scheme}`);
+}
+
+// Quantize the weights of params (policy.createNet layout) into out (may be params);
+// biases are copied unchanged. Returns scales: one array per layer (one entry per
+// output row for 'row', one for 'layer'). See the header for the rule.
+function quantizeInto(layers, params, q, out) {
+  const qmax = quantMax(q.bits);
+  const scales = [];
+  for (const { nin, nout, w, b } of layerOffsets(layers)) {
+    const rowMax = [];
+    for (let o = 0; o < nout; o++) {
+      let m = 0;
+      for (let j = 0; j < nin; j++) m = Math.max(m, Math.abs(params[w + o * nin + j]));
+      rowMax.push(m);
+    }
+    const layerMax = Math.max(...rowMax);
+    const sc = (m) => (m > 0 ? m / qmax : 1);
+    const s = q.scheme === 'row' ? rowMax.map(sc) : [sc(layerMax)];
+    for (let o = 0; o < nout; o++) {
+      const so = s[q.scheme === 'row' ? o : 0];
+      for (let j = 0; j < nin; j++) {
+        const k = Math.min(qmax, Math.max(-qmax, Math.floor(params[w + o * nin + j] / so + 0.5)));
+        out[w + o * nin + j] = k * so;
+      }
+      out[b + o] = params[b + o];
+    }
+    scales.push(s);
+  }
+  return scales;
+}
+
+function quantizeParams(layers, params, q) {
+  const out = new Float64Array(params.length);
+  const scales = quantizeInto(layers, params, q, out);
+  return { params: Array.from(out), scales };
+}
+
+// Throws unless every weight is exactly k * scale with an integer |k| <= qmax, for the
+// recorded scales. Returns the number of distinct integer levels used.
+function checkQuantized(layers, params, quant) {
+  const qmax = quantMax(quant.bits);
+  const levels = new Set();
+  layerOffsets(layers).forEach(({ nin, nout, w }, l) => {
+    const s = quant.scales[l];
+    if (!s || s.length !== (quant.scheme === 'row' ? nout : 1)) throw new Error(`layer ${l}: scales do not match scheme ${quant.scheme}`);
+    for (let o = 0; o < nout; o++) {
+      const so = s[quant.scheme === 'row' ? o : 0];
+      for (let j = 0; j < nin; j++) {
+        const v = params[w + o * nin + j], k = Math.round(v / so);
+        if (!(Math.abs(k) <= qmax && k * so === v)) throw new Error(`layer ${l} row ${o} col ${j}: ${v} is not an integer multiple (|k| <= ${qmax}) of scale ${so}`);
+        levels.add(k);
+      }
+    }
+  });
+  return levels.size;
+}
+
+// Train on data { X, y, sw, n, dim }. o: { hidden, epochs, batch, lr, seed, onEpoch,
+// distill (optional: { logits: Float64Array n x 3, mode: 'soft'|'hard', tau, alpha }),
+// quant (optional: { bits, scheme }) }. Returns { layers, params (Array), log[, scales] }.
 function trainNode(data, o) {
   const { X, y, sw, n, dim } = data;
   const layers = [dim, ...o.hidden, 3];
@@ -385,13 +556,26 @@ function trainNode(data, o) {
   const perm = new Uint32Array(n);
   const log = [];
   let t = 0;
+  let dist = null, yTrain = y;
+  if (o.distill) {
+    const dz = o.distill;
+    if (dz.logits.length !== n * 3) throw new Error(`teacher logits: ${dz.logits.length / 3} rows, demos have ${n}`);
+    dist = { ySolver: y, Q: null, tau: dz.tau, alpha: dz.alpha || 0, solverLoss: 0 };
+    if (dz.mode === 'hard') yTrain = argmaxLabels(dz.logits);
+    else dist.Q = softTargets(dz.logits, dz.tau);
+  }
+  if (o.quant) checkQuantOptions(o.quant);
+  const qparams = o.quant ? new Float64Array(np) : null;
   for (let ep = 0; ep < o.epochs; ep++) {
     const t0 = Date.now();
     for (let i = 0; i < n; i++) perm[i] = i;
     for (let i = n - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); const s = perm[i]; perm[i] = perm[j]; perm[j] = s; }
     let tot = 0;
+    if (dist) dist.solverLoss = 0;
     for (let s = 0; s < perEpoch; s++) {
-      tot += lossAndGrad(params, X, dim, y, wRow, perm.subarray(s * B, (s + 1) * B), grad);
+      if (qparams) quantizeInto(layers, params, o.quant, qparams);
+      if (dist || qparams) tot += lossAndGrad(qparams || params, X, dim, yTrain, wRow, perm.subarray(s * B, (s + 1) * B), grad, dist || undefined);
+      else tot += lossAndGrad(params, X, dim, y, wRow, perm.subarray(s * B, (s + 1) * B), grad);
       t++;
       const lr = o.lr * 0.5 * (1 + Math.cos(Math.PI * t / steps));
       const c1 = 1 - Math.pow(0.9, t), c2 = 1 - Math.pow(0.999, t);
@@ -402,10 +586,17 @@ function trainNode(data, o) {
         params[k] -= lr * (m[k] / c1) / (Math.sqrt(v[k] / c2) + 1e-8);
       }
     }
-    const recall = recallOn(layers, params, data, rng, hasDuck);
-    const row = { epoch: ep, loss: tot / wTotal, recall, seconds: (Date.now() - t0) / 1000 };
+    if (qparams) quantizeInto(layers, params, o.quant, qparams);
+    const recall = recallOn(layers, qparams || params, data, rng, hasDuck);
+    const row = dist
+      ? { epoch: ep, loss: dist.solverLoss / wTotal, recall, seconds: (Date.now() - t0) / 1000, distillLoss: tot / wTotal }
+      : { epoch: ep, loss: tot / wTotal, recall, seconds: (Date.now() - t0) / 1000 };
     log.push(row);
     if (o.onEpoch) o.onEpoch(row);
+  }
+  if (qparams) {
+    const q = quantizeParams(layers, params, o.quant);
+    return { layers, params: q.params, log, scales: q.scales };
   }
   return { layers, params: Array.from(params), log };
 }
@@ -446,6 +637,12 @@ function trainPython(binFile, outFile, o, root, onLine = () => {}) {
   const args = [path.join(__dirname, 'bc_train.py'), '--demos', binFile, '--obs-dim', String(OBS_DIM), '--hidden', o.hidden.join(','),
     '--epochs', String(o.epochs), '--batch', String(o.batch), '--lr', String(o.lr), '--seed', String(o.seed), '--out', outFile];
   if (o.snapshotDir) args.push('--snapshot-dir', o.snapshotDir);
+  // o.distill: { logitsFile (float64 n x 3, writeLogits), mode, tau, alpha }; o.quant: { bits, scheme }.
+  if (o.distill) {
+    args.push('--teacher-logits', o.distill.logitsFile, '--distill-mode', o.distill.mode);
+    if (o.distill.mode === 'soft') args.push('--tau', String(o.distill.tau), '--alpha', String(o.distill.alpha || 0));
+  }
+  if (o.quant) { checkQuantOptions(o.quant); args.push('--quant-bits', String(o.quant.bits), '--quant-scheme', o.quant.scheme); }
   return new Promise((resolve, reject) => {
     const child = spawn(pythonPath(root), ['-W', 'ignore', ...args], { stdio: ['ignore', 'pipe', 'inherit'] });
     let buf = '';
@@ -463,6 +660,16 @@ function trainPython(binFile, outFile, o, root, onLine = () => {}) {
   });
 }
 
+// Write n x 3 logits as little-endian float64 for bc_train.py --teacher-logits.
+function writeLogits(file, Z) {
+  const b = Buffer.alloc(Z.length * 8);
+  for (let i = 0; i < Z.length; i++) b.writeDoubleLE(Z[i], i * 8);
+  fs.writeFileSync(file, b);
+}
+
+// Identifies a model's weights: sha256 of JSON.stringify(params) (a plain array).
+const paramsSha256 = (params) => crypto.createHash('sha256').update(JSON.stringify(Array.from(params))).digest('hex');
+
 // ---------------------------------------------------------------------------
 // best.json (Node owns the schema; same as ES runs and runs/v2-bc-jump-d2w32-s1)
 // ---------------------------------------------------------------------------
@@ -476,4 +683,6 @@ function assembleBest({ layers, params, validation, coreHash, config }) {
 module.exports = {
   DEMOS_FORMAT, ROW, GEN_DEFAULTS, TRAIN_DEFAULTS, TEACHERS, resolveTeacher, actionLabel, isBoring, genEpisode, genSeed, generateDemos, resolveDemos, checkDemos,
   loadDemos, sha256File, layerOffsets, createTrainer, classWeights, trainNode, pythonPath, trainPython, assembleBest,
+  teacherLogits, argmaxLabels, softTargets, QUANT_SCHEMES, quantMax, checkQuantOptions, quantizeInto, quantizeParams, checkQuantized,
+  writeLogits, paramsSha256,
 };
