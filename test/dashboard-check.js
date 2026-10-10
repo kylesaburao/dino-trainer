@@ -15,6 +15,9 @@
 //   grp/v2-quant-duck-d2w32-s1-int8-pow2  pow2 PTQ (real pow2 params; quant.k, biases int)
 //   grp/demos-set       nested bc-gen output, generating: demos.json (teacherName) and
 //                       demos.bin.<this pid>.tmp
+//   grp/dagger-set      nested DAgger rollouts (bc-gen --student --score-window), finished;
+//                       the student is grp/bc-old's best.json. grp/bc-run's config lists it in
+//                       extraDemos and has transitionWeight 4
 //   plain               an empty directory (listed as before)
 //   grp/scans/          scan.js / survey.js output (not a run): done.jsonl (old header without
 //                       pid, footer, seeds out of order, 2 failures; model grp/bc-run),
@@ -62,11 +65,21 @@ function buildFixture(dir) {
     solverCrashes: 0, sha256: '0'.repeat(64), createdAt: '2026-10-10T00:00:00.000Z', episodes: [],
   }));
   w(`grp/demos-set/demos.bin.${process.pid}.tmp`, '');
+  // DAgger rollouts (bc-gen --student --score-window), finished; the student is grp/bc-old.
+  const daggerFile = path.join(dir, 'grp', 'dagger-set', 'demos.json');
+  w('grp/dagger-set/demos.json', JSON.stringify({
+    format: 'dino-bc-demos-v1', file: 'demos.bin', obsDim: 44, rowFloats: 46, coreHash: 'f'.repeat(64), gameVersion: 'v2',
+    teacher: 'test/solver.js', teacherName: 'duck', seeds: [2001, 2002], levels: [0], span0: 800, span: 5000, keepBoring: 10,
+    rows: 500, counts: { rows: { none: 440, jump: 40, duck: 20 }, weighted: { none: 470, jump: 40, duck: 20 } },
+    sha256: '1'.repeat(64), createdAt: '2026-10-10T00:00:00.000Z', episodes: [], scoreWindow: [400, 800],
+    source: 'dagger', student: { path: path.join(dir, 'grp', 'bc-old', 'best.json'), paramsSha256: 'a'.repeat(64) }, studentCrashes: 7, undefinedAir: 3,
+  }));
 
   const best = JSON.parse(src('runs/v2-bc-jump-d2w32-s1/best.json'));
   best.config = { target: 1000000, hidden: [32, 32], actionRepeat: 1, gameVersion: 'v2', method: 'behaviour cloning of test/solver.js (supervised; no ES)',
     trainer: 'trainer/cli.js bc-train --backend python', backend: 'python', epochs: 3, batch: 1024, lr: 0.002, seed: 1,
-    demos: demosFile, demosRows: 1000, trainSeconds: 6, snapshots: 'grp/bc-run/snapshots' };
+    demos: demosFile, demosRows: 1000, trainSeconds: 6, snapshots: 'grp/bc-run/snapshots',
+    extraDemos: [{ demos: daggerFile, demosSha256: '1'.repeat(64), demosRows: 500 }], transitionWeight: 4, transitions: { onset: 11, release: 12, releaseToJump: 1 } };
   w('grp/bc-run/best.json', JSON.stringify(best));
   w('grp/bc-run/bc-metrics.jsonl', [0, 1].map(e => JSON.stringify({ backend: 'python', epoch: e, loss: 0.1 / (e + 1),
     recall: { none: 0.99 + e * 0.004, jump: 0.98 + e * 0.01, duck: 0.9 + e * 0.05 }, seconds: 2 + e })).join('\n') + '\n');
@@ -166,7 +179,7 @@ function cdpClient(url) {
     for (let i = 0; i < 50 && !list; i++) { try { list = await (await fetch(base + '/api/runs')).json(); } catch (e) { await sleep(100); } }
     const by = Object.fromEntries((list || []).map(r => [r.name, r]));
     check('run list: top-level, nested and plain dirs; a group is not a run',
-      ['es-run', 'grp/bc-run', 'grp/bc-old', 'grp/demos-set', 'plain', KD, PTQ, POW2].every(n => by[n]) && !by.grp && list.length === 8, (list || []).map(r => r.name).join(', '));
+      ['es-run', 'grp/bc-run', 'grp/bc-old', 'grp/demos-set', 'grp/dagger-set', 'plain', KD, PTQ, POW2].every(n => by[n]) && !by.grp && list.length === 9, (list || []).map(r => r.name).join(', '));
     const kd = by[KD] || {}, ptq = by[PTQ] || {};
     check('distilled QAT run: kind bc, teacher model path/sha/tau/mode, quant bits/scheme/mode',
       kd.kind === 'bc' && kd.bc.distill && kd.bc.distill.from === 'runs/exp-bc-duck/v2-bc-duck-d2w32-s1/best.json' && kd.bc.distill.tau === 2 &&
@@ -177,6 +190,12 @@ function cdpClient(url) {
     check('pow2 PTQ run: quant scheme pow2, k per layer, biases int',
       p2.kind === 'bc' && p2.bc.quant && p2.bc.quant.scheme === 'pow2' && Array.isArray(p2.bc.quant.k) && p2.bc.quant.k.length === 3 && p2.bc.quant.biases === 'int',
       JSON.stringify(p2.bc && p2.bc.quant));
+    const dg = by['grp/dagger-set'] || {};
+    check('DAgger demos: kind demos, stopped, source/student/score window/student crashes, student available',
+      dg.kind === 'demos' && !dg.running && dg.bc.demos.source === 'dagger' && dg.bc.demos.studentCrashes === 7 && dg.bc.demos.undefinedAir === 3 &&
+      dg.bc.demos.scoreWindow.join('-') === '400-800' && dg.bc.student && dg.bc.student.available === true, JSON.stringify(dg.bc && dg.bc.student));
+    const stu = await (await fetch(base + '/api/runs/' + encodeURIComponent('grp/dagger-set') + '/model?which=student')).json();
+    check('DAgger demos: the student model is served for playback', stu.student === true && stu.layers.join('-') === '44-32-32-3' && stu.params.length > 0);
     const bc = by['grp/bc-run'] || {}, dm = by['grp/demos-set'] || {};
     check('ES run is kind es, generation from metrics', by['es-run'] && by['es-run'].kind === 'es' && by['es-run'].generation === 970);
     const old = by['grp/bc-old'] || {};
@@ -268,7 +287,7 @@ function cdpClient(url) {
     const loaded = new Promise((res) => cdp.on((m) => { if (m.method === 'Page.loadEventFired') res(); }));
     await send('Page.navigate', { url: base + '/' });
     await loaded;
-    await waitUntil(`document.querySelectorAll('.run-chip').length === 5`);
+    await waitUntil(`document.querySelectorAll('.run-chip').length === 9`);
 
     // Scans table: running and stalled always shown, finished ones folded; expand one.
     const scansUi = await waitUntil(`!document.getElementById('scans-card').hidden && document.querySelector('tr.scan-row[data-scan="grp/scans/running.jsonl"][data-state="running"] .dot.live')`);
@@ -342,6 +361,19 @@ function cdpClient(url) {
     check('pow2 PTQ run view: int8 tile with pow2 scales, the per-layer k and int biases; plays',
       await waitUntil(`__dash.pb.run === ${JSON.stringify(POW2)} && __dash.pb.model && __dash.pb.game && __dash.pb.game.score() >= 50 &&
         document.getElementById('detail').textContent.includes(${JSON.stringify(`post-training · pow2 scales 2^-k, k ${p2k}`)}) && /biases int/.test(document.getElementById('detail').textContent)`, 15000));
+    // DAgger demos: student named, student crashes (not solver crashes), score window; the student plays by default.
+    await pick('grp/dagger-set');
+    const dagOk = await waitUntil(`__dash.pb.run === 'grp/dagger-set' && __dash.pb.model && __dash.pb.model.student === true && __dash.pb.game`, 10000);
+    const dagText = await evaluate(`document.getElementById('detail').textContent`);
+    const dagOpts = await evaluate(`[...document.querySelectorAll('#pb-which option')].map(o => o.value)`);
+    check('DAgger demos view: student, shadow-teacher labels, student crashes, score window; student playback first',
+      dagOk && /Student \(played\)/.test(dagText) && /Student crashes/.test(dagText) && !/Solver crashes/.test(dagText) && /400–800 points/.test(dagText) &&
+      dagOpts[0] === 'student' && dagOpts.includes('teacher:createDuckSolver'), dagOpts.join());
+    // BC run with --extra-demos and --transition-weight: both listed.
+    await pick('grp/bc-run');
+    check('BC view lists the extra demos and the transition weight',
+      await waitUntil(`(() => { const t = document.getElementById('detail').textContent;
+        return /Extra demonstrations 1 \\(--extra-demos\\)/.test(t) && /DAgger rollouts/.test(t) && /weigh 4×/.test(t) && /onset 11/.test(t); })()`, 10000));
 
     // ES run: unchanged view and playback.
     await setSpeed(16);
