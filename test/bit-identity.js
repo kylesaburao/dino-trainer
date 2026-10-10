@@ -40,6 +40,15 @@ const SCENARIOS = [
     name: 'heldout', phases: [[...SMALL, '--seed', '2', '--target', '52', '--generations', '300', '--eval-every', '1']],
     expectReason: /^held-out /,
   },
+  // The allpass stop path: seed 3 at target 48 (measured at 322fcaf, 4 workers) aborts
+  // held-out attempt 1 (best of gen 18) after its first round of --workers seeds (1/4
+  // passed); phase 1 ends at generation 19 so its checkpoint records that attempt. The
+  // resume stops at generation 20, when attempt 2 passes all 8 seeds.
+  {
+    name: 'allpass', phases: [[...SMALL, '--seed', '3', '--target', '48', '--generations', '19', '--eval-every', '1',
+      '--select', 'count', '--stop-rule', 'allpass:8', '--val-seeds', '6'], ['--resume', '--generations', '150']],
+    expectReason: /^held-out 8\/8 seeds reached target 48$/,
+  },
   {
     name: 'hygiene', phases: [[...SMALL, '--target', '2000', '--generations', '20', '--rank-ties', 'mid', '--decay', 'decoupled',
       '--weight-decay', '0.01', '--select', 'count', '--stop-rule', 'allpass:5', '--val-seeds', '6', '--fold-validation', '--stall-rule'],
