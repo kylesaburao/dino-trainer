@@ -164,4 +164,10 @@ Validation doesn't affect the θ trajectory; it is only there to measure the eve
 
 ## 8. Premise and launch-gate results
 
-(Appended as they come in.)
+1. **Reproduction gate: PASS.**
+   - Run: frozen `ckpt-s12.json` (sha256 checked) resumed in the hyg configuration on main `f39302c`, `--wasm --eval-every 10 --val-seeds 12`, gens 1501–1600, in `runs/exp-bp-repro-s12`.
+   - fitMean, fitMax, thetaNorm and tiedPairs match the ee6995c resume `runs/exp-surv-32x32-s12` to 1e-9 on all 100 generations (0 mismatches). fitMean first exceeds 2000 at gen 1565, as before.
+   - This also confirms premise 3 (validation cadence 50 → 10 doesn't move θ) and that `--wasm` is bit-identical on this path.
+   - Validation medians: 1510–1590 between 695 and 1360, then 88,532 at gen 1600. **The two-reading validation event isn't reached by gen 1600** (the confirming reading would come at 1610), so per §4.6 the hyg-s12 arm is rerun in full in the batch.
+   - Cost note: once past the wall, a generation costs about 4.8 s (17.7M frames). This is why the watcher stops runs at the event.
+2. **Selection/validation flags don't move θ: PASS.** Frozen `ckpt-s9.json` resumed for 5 generations (1017 → 1022) with `--wasm`, with and without `--select count --fold-validation --stop-rule allpass:59 --val-seeds 12`. θ (0/2595 elements differ), Adam m and the RNG state are bit-identical.
