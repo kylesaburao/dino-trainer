@@ -43,7 +43,7 @@ Written for a new session with no context. It records everything found while inv
 - **The goal:** make training more efficient and more robust. In particular, models where *all* held-out seeds reach the target (1,000,000 points on game v2), in less wall time.
 - **Generic over network shape.** No micro-optimising for one layer configuration. The user plans a **sweep of hidden layer sizes and layer counts**; 32,32 is only the starting point. Every trainer change must be generic over `--hidden`.
 - **`AGENTS.md` is self-contained.** The user asked that it not reference `PROGRESS.md` or the training prompt; keep it that way. The user had `/init` write it as `AGENTS.md`. It still starts with the `# CLAUDE.md` header that `/init` requires. `AGENTS.md` is untracked.
-- **Commits:** none without the user's explicit request. Never push. The user has been asked, and hasn't answered, whether to commit the trainer changes, and whether on a branch or main.
+- **Commits:** none without the user's explicit request. The user has been asked, and hasn't answered, whether to commit the trainer changes, and whether on a branch or main.
 - **Working style:**
   - The user likes delegating to subagents, including Opus and Fable models in parallel.
   - Subagents should report findings to the main session as they go, so the main session can relay them to the other agents.
