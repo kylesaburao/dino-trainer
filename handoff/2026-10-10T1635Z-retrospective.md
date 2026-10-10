@@ -1,5 +1,11 @@
 # Retrospective: multi-machine training-efficiency work (2026-10-10, about 14:50–16:35 UTC)
 
+> **Guiding principle (from the user): work as a methodical researcher, not someone throwing ideas at the wall to see what sticks.**
+> - Each experiment is a deliberate test of stated hypotheses, chosen because its result changes a decision.
+> - Each conclusion carries its scope and its uncertainty.
+>
+> AGENTS.md "Research method" summarises the rules. §4 and §6 below give them in full.
+
 Written by the outgoing orchestrator (`dino-game-3e`) for the next one (`mac-2`) and for the user. Its purpose is to sharpen how experiments are chosen and designed, not just to list what happened. Facts are cited from `handoff/2026-10-10T1549Z-orchestrator.md` and `handoff/2026-10-10T1626Z-orchestrator-transfer.md`.
 
 ---
