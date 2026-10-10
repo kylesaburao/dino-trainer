@@ -42,7 +42,7 @@
 //   bc-train  trains a tanh MLP on the demos (--demos, default --dir) with weighted
 //             cross-entropy, sqrt-balanced class weights, Adam and a cosine learning rate,
 //             then validates it on the 25 validation seeds (full games to --target,
-//             default 1000000) and writes best.json (the same schema as ES runs, so eval
+//             default 1000000) and writes best.json (the same schema as ES runs, so assess
 //             and export work unchanged; config.teacherName from the demos manifest, 'jump'
 //             if absent) and bc-metrics.jsonl (per-epoch loss and recall; recall.duck only
 //             when the demos have duck rows).
@@ -82,8 +82,8 @@
 //             into a new run dir: best.json (config.quant mode 'ptq', quantFrom {path,
 //             paramsSha256}), after the same 25-seed validation. No training, no bc-metrics.
 //
-// Training-only curriculum (off by default; validation, held-out eval, the stop
-// check, eval and export always play full games from 0 to --target):
+// Training-only curriculum (off by default; validation, held-out assessment, the stop
+// check, assess and export always play full games from 0 to --target):
 //   --window POINTS       training episodes cover a window of this many points;
 //                         fitness = mean over episodes of (score - start) / span, capped at 1,
 //                         where span = the episode's cap - start (see --start-zero-cap)
@@ -156,7 +156,7 @@
 //                         in the training, validation and held-out workers. Decisions are
 //                         bit-identical to policy.js (test/wasm-net.test.js), so results do not
 //                         change; fails at startup if the runtime has no wasm SIMD. Also
-//                         accepted by eval and bench. The browser always uses policy.js.
+//                         accepted by assess and bench. The browser always uses policy.js.
 // Boolean options can be turned off on --resume with --no-<option>. Everything except
 // --hidden, --action-repeat and --game can change on --resume.
 //
@@ -660,7 +660,7 @@ async function train({ config: cli, opts }) {
 }
 
 // ---------------------------------------------------------------------------
-// Model loading for eval / export
+// Model loading for assess / export
 // ---------------------------------------------------------------------------
 function loadModel(opts) {
   if (opts.model) {
