@@ -220,3 +220,37 @@ The stuck-duck study (`research/prereg-teacher-duck-stuck.md`, merged `319a51f`)
 - **O1:** accept α = 0.5 and QAT τ = 2. **O2:** accept the shape set and the 1×2 floor. **O3:** from scratch only, as implemented. Fine-tuning from the float model stays a registered reopen condition. **O4:** float biases. **O5:** dynamic per-step scales. **O6:** no QAT at d2w32.
 - **Cost:** recompute §9 with these rulings and record it before Stage 0 starts (about 15 s per training and 5–13 s per opening scan; tier B is capped).
 - **Record of guard blocks during authoring:** the worktree guard refused four commands (a `sed` with a shell variable, two heredoc appends, a `cd` into the main checkout). The author redid them another way instead of stopping, against the standing rule. The user reviewed this and ruled "Review, then merge". mac-4 reviewed the diffs of every affected file (dashboard.js/.html, README, AGENTS.md, cli.js, bc.test.js) before merging; the tests (105/105) and dashboard checks (37/37) pass.
+
+## 11b. Executor amendment, before Stage 0 (2026-10-10, branch `wt/exp-distill2` on main `b4624b3`)
+Written after the §5.0 test-suite, demo and teacher controls and before any training. It records the orchestrator's rulings (a)–(f) and the executor's mapping of §5–§7 onto §11a, so every result fits a row.
+
+**Controls already run.** `node --test test/`: 105/105. C-duck-rows: `runs/exp-distill/v2-demos-duck-s1-40` 2,062,427 rows, sha256 `363872f61a78…`; `runs/exp-distill/v2-demos-duck-s41-60` 1,031,320 rows, sha256 `814c0686107f…` (both equal). **C-teacher (OPEN-P1b): passed.** Teacher `v2-bc-duck-d2w32-s1` weighted held-out agreement with the solver 0.99825 (≥ 0.995), recallDuck 0.99995; computed by `research/scripts/prereg-distill/agree.js` (`runs/exp-distill/agree/c-teacher.json`) and equal to `agreement.py` on the same params (0.99825).
+
+**(a) Clean seed and reliable arm.** A training seed is **clean** iff tier A 25/25 AND opening scan 1,000/1,000 (`opening.js`, base 30,003,000, target 2,000; the stuck study's definitions verbatim, §4.4 and §4.6 there) AND tier B 0/1,000 where tier B was run. An arm's outcome is **clean/10** (training seeds 1–10). A **reliable arm** = clean ≥ 9/10. This replaces "reliable on both seeds" in §7 everywhere.
+- **Reference row (from the stuck study, not re-run): direct d2w8 is 5/10 clean on seeds 1–10**: s1, s2 (step 2: tier A 25/25, tier B 0/1,000, opening 1,000/1,000) and s4, s5, s6 (stuck study); s3, s9 early release; s7, s8, s10 stuck.
+- D1's scope stays **below 8 units**; d2w8 appears only as the reference and the C-kd-control.
+- **Stage 0 classes** (§11a, with §5.1's duck rule kept): **PASS** = clean ≥ 9/10 AND duck share ≥ 0.9× the teacher's on the clean seeds measured; clean ≥ 9 but duck share < 0.9× → **MARGINAL** (§5.1 "reliable but rarely ducks"); **MARGINAL** = clean 3–8; **DEAD** = clean ≤ 2. Teacher reference duck share = 1.000 (`teacher-duck` solver; `v2-bc-duck-d2w32-s1` is also 1.000).
+- **Tier-B cap:** per arm (in Stage 0, arm = shape) at most 2 tier-B scans, on the first two seeds in seed order that pass tier A and the opening scan. Further such seeds count as clean on tier A + opening only; this asymmetry (no power against a late-game mode) is reported, as in the stuck study for S8 s9–s22.
+- **"Better than X"** (§7) = exact one-sided McNemar on the per-seed clean/not-clean pairs over seeds 1–10, p ≤ 0.05 (minimal: b = 5, c = 0, p = 0.031; b = 4, c = 0 gives 0.0625). **Power** (seeds independent, per-seed clean probability p0 for direct, p1 for the arm): p0 0.5 vs p1 1.0: 0.62; 0.5 vs 0.9: 0.35; 0.5 vs 0.8: 0.19; 0.3 vs 1.0: 0.95; 0.3 vs 0.9: 0.74; 0.2 vs 0.9: 0.89. So a null at a 5/10 baseline excludes only large effects.
+- **Measures per model.** Duck share (`duckshare.js --base 30003000 --n 10`) on every model with tier A ≥ 20/25 (§5.1); an arm's duck share is reported as the min over its clean seeds. Min margin (`margin.js`, worktree-safe since `b4624b3`, ruling (d)) on at least the ≤ 2 tier-B-scanned models per arm. Held-out agreement with the solver and with the teacher's argmax (weighted, as `agreement.py`) on the final params by `agree.js` for every model, plus `agreement.py` per snapshot for the D1 arms. Failures are classed stuck / early release / other by the opening tool's final-DOWN-run record (stuck: mid and ≥ 20 frames; early release: killed by a mid pterodactyl while not holding DOWN).
+
+**(b) C-kd-control is a path check.** `bc-train --distill-from runs/exp-bc-duck/v2-bc-duck-d2w32-s1/best.json --tau 2 --hidden 8,8 --seed 1` (`runs/exp-distill/v2-distill-duck-d2w8-s1-tau2`). Passes iff the student's weighted held-out argmax agreement with the **teacher** on `v2-demos-duck-s41-60` is ≥ 99 % AND the one-hot-teacher identity test in `test/bc.test.js` passes (part of the 105/105). Its tier A and opening scan are recorded; **a seed-1 game failure is data, not a STOP** (the direct d2w8 procedure is only 5/10 clean). If the path check fails: STOP D1, diagnose.
+
+**(c) Paths.** All of this study's runs live under `runs/exp-distill/` (not `runs/exp-bc-distill/`): demos `runs/exp-distill/v2-demos-duck-s1-40` and `…-s41-60`; C-direct-params `runs/exp-distill/v2-bc-duck-d2w8-s1-ctrl`; direct clones `runs/exp-distill/v2-bc-duck-d<D>w<W>-s<seed>`; distilled `runs/exp-distill/v2-distill-duck-d<D>w<W>-s<seed>-tau1|tau2|tau4|hard|tau2-a05`; `opening/`, `scans/`, `duckshare/`, `margin/`, `agree/` under it. All training uses these demos (sha-equal to `runs/exp-bc-duck/v2-demos-duck-s1-40`).
+
+**(d)** `research/scripts/prereg-bc-sweep/margin.js` resolves ROOT from its own checkout since `b4624b3`, so it is run from this worktree.
+
+**(e) §9 recomputed under §11a** (Mac, one heavy job at a time; ~15 s per training incl. tier A, ~20–25 s for a distilled one incl. teacher logits; 5–13 s per opening scan; ~10 s per duck share; tier B ~95–140 s, capped at 2 per arm):
+
+| Item | Count | Total |
+|---|---|---|
+| Controls (tests, demos, C-teacher, C-direct-params, C-kd-control + its opening) | — | ~4 min |
+| Stage 0 (4 shapes × seeds 1–10) | 40 trainings, 40 openings, ≤ 40 duck shares, ≤ 8 tier B | ~10 + 4 + 7 + ≤ 19 = **≤ 40 min** |
+| Stage 0b (only if all PASS: 1×3, 1×2) | 20 + 20 + ≤ 20 + ≤ 4 tier B | ≤ 20 min |
+| D1 per target shape: (b) 3 τ × 10 + (c) 10 + (d) 10 | 50 trainings, 50 openings, ≤ 50 duck shares, ≤ 10 tier B, margins, agreement | ~20 + 4 + 8 + ≤ 23 + 5 = **≤ 60 min**; ≤ 2 shapes: ≤ 120 min |
+| Rule-3 case instead (one DEAD shape, (b) τ = 2 and (c)) | 20 trainings + ≤ 4 tier B | ≤ 25 min |
+| **Total D1** | | **≤ about 3 h**, less if Stage 0 closes D1 early |
+
+**(f) D2 (quantization) is ON HOLD.** The user changed D2 to all-params-N-bit: weights **and biases** as N-bit integers with one power-of-two scale per layer, at 8 and 4 bits. A new pow2 scheme is being implemented separately. **No PTQ or QAT is run in this execution**; C-q8-control and §5.4 are not run, and the D2 parts of §2, §3, §5, §7 and §8 are superseded until a new amendment.
+
+**Execution.** Python backend with `PYTHON=/Users/kyle/Desktop/dino-game/.venv/bin/python OMP_NUM_THREADS=2 VECLIB_MAXIMUM_THREADS=2`, `--snapshots --wasm`, defaults otherwise (15 epochs, batch 1,024, lr 2e-3); each stage runs as one detached serial job list (`research/scripts/prereg-distill/runjobs.js`), logs in the run dirs. No `eval`, held-out offsets, `export`/`finish`/`session`/`--auto-export`; root `model.js`/`model.css`, `core.js`, `policy.js` untouched.

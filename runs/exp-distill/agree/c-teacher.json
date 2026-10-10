@@ -1,0 +1,31 @@
+{
+ "demos": "runs/exp-distill/v2-demos-duck-s41-60",
+ "demosSha256": "814c0686107f9a5933a668a56260adac908b171cf37528c3d3bbb749297ae4ea",
+ "rows": 1031320,
+ "teacher": "runs/exp-bc-duck/v2-bc-duck-d2w32-s1/best.json",
+ "teacherVsSolver": {
+  "solver": 0.9982519481190003,
+  "solverUnweighted": 0.9981615793352209,
+  "teacher": 1,
+  "teacherUnweighted": 1,
+  "recallDuck": 0.9999528635399482
+ },
+ "models": [
+  {
+   "model": "runs/exp-bc-duck/v2-bc-duck-d2w32-s1/best.json",
+   "solver": 0.9982519481190003,
+   "solverUnweighted": 0.9981615793352209,
+   "teacher": 1,
+   "teacherUnweighted": 1,
+   "recallDuck": 0.9999528635399482
+  },
+  {
+   "model": "runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json",
+   "solver": 0.9954399448294174,
+   "solverUnweighted": 0.9952042043206765,
+   "teacher": 0.9969169380326672,
+   "teacherUnweighted": 0.9967575534266765,
+   "recallDuck": 1
+  }
+ ]
+}
