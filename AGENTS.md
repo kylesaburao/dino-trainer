@@ -109,7 +109,7 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 - `eval --seeds N --seed-offset K` scores held-out seeds K..K+N-1 and reports a 95% Clopper–Pearson interval for the pass rate. The stop check uses the first N held-out seeds, so certify a run from an offset past them.
 
 **Verification tools.**
-- `node test/bit-identity.js <oldTree> <newTree>` runs 6 small training scenarios in two checkouts (for example a `git worktree` at the pre-change commit, and yours) and diffs metrics, checkpoints and `best.json` (about 9 s). It refuses to start while another trainer is running unless `--allow-busy`.
+- `node test/bit-identity.js <oldTree> <newTree>` runs 7 small training scenarios, including one that fires the `allpass` held-out stop, in two checkouts (for example a `git worktree` at the pre-change commit, and yours) and diffs metrics, checkpoints and `best.json` (about 9 s). It refuses to start while another trainer is running unless `--allow-busy`.
 - A new trainer flag must leave defaults IDENTICAL against the pre-change commit.
 
 **Findings that constrain defaults.**
