@@ -12,16 +12,23 @@
 //   grp/demos-set       nested bc-gen output, generating: demos.json (teacherName) and
 //                       demos.bin.<this pid>.tmp
 //   plain               an empty directory (listed as before)
+//   grp/scans/          scan.js / survey.js output (not a run): done.jsonl (old header without
+//                       pid, footer, seeds out of order, 2 failures; model grp/bc-run),
+//                       running.jsonl (pid = this process, partial last line; model es-run),
+//                       stalled.jsonl (pid of an exited process; model outside runs/),
+//                       survey-duck-40000000-3.jsonl (header-less survey), notes.jsonl (not a scan)
 // Checks the JSON API (discovery, kinds, running detection, snapshot weights, name
-// whitelist), then the page: BC charts with every recall class, a BC model and a
+// whitelist, scans: counts, failure CI, status, owner, incremental tail), then the page: the
+// Scans table (running row live, failure scores on expand), a run's own scans, BC charts with every recall class, a BC model and a
 // snapshot playing, the teacher (test/solver.js through /teacher.js) playing past
 // 500 points without crashing, the ES view and playback, and no console errors.
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
+const { clopperPearson } = require(path.join(ROOT, 'trainer', 'rules.js'));
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const CDP_PORT = 9800 + Math.floor(Math.random() * 100);
 const DASH_PORT = 9900 + Math.floor(Math.random() * 90);
@@ -61,6 +68,23 @@ function buildFixture(dir) {
   const old = JSON.parse(src('runs/bc-v2-h32x32/best.json'));   // research-trained: no bc-metrics, no demos, no teacherName
   w('grp/bc-old/best.json', JSON.stringify(old));
   w('grp/bc-run.log', 'bc-train: dir=grp/bc-run backend=python layers=44-32-32-3 epochs 3\nepoch 0: loss 0.1000\nepoch 1: loss 0.0500\n');
+
+  const hdr = (model, n, extra = {}) => JSON.stringify({ header: true, model, layers: [44, 32, 32, 3], gameVersion: 'v2', actionRepeat: 1, generation: null,
+    coreHash: '0f329d4e'.padEnd(64, '0'), base: 30000000, n, target: 1000000, wasm: true, workers: 18, start: '2026-10-10T12:00:00.000Z', ...extra });
+  const row = (seed, score) => JSON.stringify({ seed, score, pass: score >= 1000000, frames: 1000 });
+  const doneScores = [1000000, 1000000, 467, 1000000, 1000000, 1000000, 994235, 1000000, 1000000, 1000000];
+  const order = [3, 0, 1, 2, 5, 4, 7, 6, 9, 8];
+  w('grp/scans/done.jsonl', [hdr(path.join(dir, 'grp', 'bc-run', 'best.json'), 10), ...order.map(i => row(30000000 + i, doneScores[i])),
+    JSON.stringify({ footer: true, seconds: 61.5, end: '2026-10-10T12:01:01.500Z' })].join('\n') + '\n');
+  w('grp/scans/done.log', '[2026-10-10T12:01:01.000Z] 10/10 seeds, 2 failures, 61s\ndone: 2 failures in 10 games, 61.5s\n');
+  w('grp/scans/running.jsonl', [hdr(path.join(dir, 'es-run', 'best.json'), 2000, { pid: process.pid, host: os.hostname() }),
+    ...[1000000, 740, 1000000, 1000000, 1000000].map((sc, i) => row(30000000 + i, sc))].join('\n') + '\n' + row(30000005, 1000000).slice(0, 20));
+  const dead = Number(spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']).stdout.toString());
+  w('grp/scans/stalled.jsonl', [hdr('/elsewhere/runs/exp-x/node-s1.json', 100, { pid: dead, host: os.hostname() }),
+    ...[1000000, 1000000, 512].map((sc, i) => row(30000000 + i, sc))].join('\n') + '\n');
+  w('grp/scans/survey-duck-40000000-3.jsonl', [[40000002, false, 1000000], [40000000, true, 655], [40000001, false, 1000000]]
+    .map(([seed, crashed, score]) => JSON.stringify({ seed, crashed, score, frames: 99, downFrames: 0, obstaclesSeen: 9, obstaclesPassed: 9 })).join('\n') + '\n');
+  w('grp/scans/notes.jsonl', '{"note":"not a scan"}\n');
 }
 
 async function connect() {
@@ -137,6 +161,33 @@ function cdpClient(url) {
     const shim = await (await fetch(base + '/teacher.js')).text();
     check('/teacher.js wraps test/solver.js', shim.includes(fs.readFileSync(path.join(ROOT, 'test', 'solver.js'), 'utf8')));
 
+    // Scans.
+    const getScans = async () => Object.fromEntries((await (await fetch(base + '/api/scans')).json()).map(s => [s.id, s]));
+    let sc = await getScans();
+    const sDone = sc['grp/scans/done.jsonl'] || {}, sRun = sc['grp/scans/running.jsonl'] || {}, sStall = sc['grp/scans/stalled.jsonl'] || {};
+    const sSurv = sc['grp/scans/survey-duck-40000000-3.jsonl'] || {};
+    check('scans: every scan.js / survey.js file found, non-scan JSONL ignored, runs list unchanged',
+      Object.keys(sc).sort().join() === ['grp/scans/done.jsonl', 'grp/scans/running.jsonl', 'grp/scans/stalled.jsonl', 'grp/scans/survey-duck-40000000-3.jsonl'].join(),
+      Object.keys(sc).join());
+    const cp = clopperPearson(2, 10);
+    check('complete scan: done by footer, 8/10 passes, failure scores, 95% CP on the failure rate, owner from best.json',
+      sDone.state === 'done' && sDone.games === 10 && sDone.n === 10 && sDone.passes === 8 && sDone.failures === 2 && sDone.failMin === 467 &&
+      sDone.failScores.join() === '467,994235' && sDone.failCI95.lower === cp.lower && sDone.failCI95.upper === cp.upper &&
+      sDone.owner === 'grp/bc-run' && sDone.seconds === 61.5 && /done: 2 failures/.test(sDone.logLine), JSON.stringify({ ...sDone, failHist: undefined }));
+    check('partial scan: running from its live pid, partial last line not counted',
+      sRun.state === 'running' && sRun.pid === process.pid && sRun.games === 5 && sRun.failures === 1 && sRun.failMin === 740 && sRun.owner === 'es-run', `${sRun.state} ${sRun.how} ${sRun.games}`);
+    check('scan whose pid exited without a footer is stalled; model outside runs/ has no owner',
+      sStall.state === 'stalled' && /exited/.test(sStall.how) && sStall.owner === null && sStall.failMin === 512, `${sStall.state} ${sStall.how}`);
+    check('header-less survey: solver, base/n from the file name, crashed = failure, done',
+      sSurv.kind === 'survey' && sSurv.solver === 'duck' && sSurv.base === 40000000 && sSurv.n === 3 && sSurv.passes === 2 && sSurv.failMin === 655 && sSurv.state === 'done');
+    fs.appendFileSync(path.join(runs, 'grp', 'scans', 'running.jsonl'), JSON.stringify({ seed: 30000005, score: 1000000, pass: true, frames: 1000 }).slice(20) + '\n' +
+      JSON.stringify({ seed: 30000006, score: 999, pass: false, frames: 10 }) + '\n');
+    sc = await getScans();
+    const sRun2 = sc['grp/scans/running.jsonl'] || {};
+    check('appended seed lines show up on the next poll (incremental tail)', sRun2.games === 7 && sRun2.failures === 2 && sRun2.failMin === 740, `${sRun2.games} games`);
+    const bcScans = (await (await fetch(base + '/api/runs/' + encodeURIComponent('grp/bc-run'))).json()).scans;
+    check("run detail carries the scans of the run's best.json", bcScans.length === 1 && bcScans[0].id === 'grp/scans/done.jsonl');
+
     // ---- 2. Page ----------------------------------------------------------
     chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${path.join(scratch, 'profile')}`,
       '--mute-audio', '--no-first-run', '--no-default-browser-check', '--window-size=1200,900', 'about:blank'], { stdio: 'ignore' });
@@ -182,6 +233,20 @@ function cdpClient(url) {
     await loaded;
     await waitUntil(`document.querySelectorAll('.run-chip').length === 5`);
 
+    // Scans table: running and stalled always shown, finished ones folded; expand one.
+    const scansUi = await waitUntil(`!document.getElementById('scans-card').hidden && document.querySelector('tr.scan-row[data-scan="grp/scans/running.jsonl"][data-state="running"] .dot.live')`);
+    const scanText = await evaluate(`document.getElementById('scans').textContent.replace(/\\s+/g, ' ')`);
+    check('Scans section: running scan marked live, stalled listed, counts', scansUi && /1 running · 1 stalled · 2 done/.test(scanText) &&
+      !!(await evaluate(`document.querySelector('tr.scan-row[data-state="stalled"] .dot.stall')`)), scanText.slice(0, 200));
+    await evaluate(`(() => { const d = document.getElementById('scans-done'); d.open = true; d.ontoggle && d.ontoggle(); })()`);
+    await evaluate(`document.querySelector('#scans .scan-toggle[data-key="all:grp/scans/done.jsonl"]').click()`);
+    const expanded = await waitUntil(`(() => { const r = document.querySelector('#scans tr.scan-detail[data-scan="grp/scans/done.jsonl"]');
+      return r && /467, 994,235/.test(r.textContent) && r.querySelectorAll('.hist .hb').length > 0; })()`, 5000);
+    const doneRow = await evaluate(`document.querySelector('#scans tr.scan-row[data-scan="grp/scans/done.jsonl"]').textContent.replace(/\\s+/g, ' ')`);
+    check('finished scan row: 8 passed, 2 failed, min failure, failure rate with CP; expands to scores and histogram',
+      expanded && /10\/10 8 2 467 20\.00% \(2\.52%–55\.61%\)/.test(doneRow), doneRow);
+    await shot('dashboard-scans.png');
+
     // BC run: charts, chip, best weights playing.
     await pick('grp/bc-run');
     const charts = await waitUntil(`(() => { const r = document.querySelector('#c-recall svg');
@@ -192,6 +257,7 @@ function cdpClient(url) {
       options: [...document.querySelectorAll('#pb-which option')].map(o => o.value) })`);
     check('BC charts render: loss, seconds per epoch, recall for none/jump/duck', charts && view.legend.join() === 'none,jump,duck', view.legend.join());
     check('BC chip shows the badge, teacher, backend and layers', /BC.*grp\/bc-run.*running.*teacher-duck.*44-32-32-3.*python/.test(view.chip), view.chip);
+    check('BC view lists the scans of its model', await evaluate(`!!document.querySelector('#run-scans tr.scan-row[data-scan="grp/scans/done.jsonl"]')`));
     check('BC view shows the demos manifest, validation and snapshots',
       view.snaps === 2 && /teacher-duck/.test(view.text) && /Solver crashes/.test(view.text) && /25\/25/.test(view.text));
     check('BC weights menu: best, both snapshots, the teacher(s)',
@@ -227,6 +293,8 @@ function cdpClient(url) {
     const esView = await waitUntil(`document.querySelector('#c-fit svg path') && document.querySelector('#c-val svg') && __dash.pb.model && __dash.pb.model.generation === 970`, 15000);
     const esOpts = await evaluate(`[...document.querySelectorAll('#pb-which option')].map(o => o.value + '=' + o.textContent).join()`);
     check('ES run renders (fitness/validation charts, original weights menu)', esView && esOpts === 'current=Latest checkpoint,best=Best (validation)', esOpts);
+    check('ES view: evals table and the running scan of its model',
+      await evaluate(`!!document.querySelector('#run-scans tr.scan-row.running[data-scan="grp/scans/running.jsonl"]') && /Held-out evaluations/.test(document.getElementById('detail').textContent)`));
     check('ES model plays', await waitUntil(`__dash.pb.game && __dash.pb.game.score() >= 100`, 20000));
     await shot('dashboard-es.png');
 

@@ -3,10 +3,14 @@
 // Plays full v2 games from 0 to --target on seeds BASE..BASE+N-1 with one model,
 // on the trainer's worker pool (the same job path as `trainer/cli.js eval`:
 // setup sigma 0, noiseSeed 0, sign 0, one seed per job), and appends one JSON
-// line per seed to --out. The first line is a header (model, hash, flags).
+// line per seed to --out. The first line is a header (model, hash, flags, and the
+// runner's pid and host, so trainer/dashboard.js can tell a live scan from a dead one);
+// a resumed scan appends a {resume, pid, host, start} line before its new seeds, and every
+// completed pass ends with a footer line. Readers select seed lines with `seed !== undefined`.
 // Usage: node scan.js --model <best.json> --out <arm.jsonl> [--base 30000000] [--n 2000]
 //          [--target 1000000] [--workers 18] [--chunk 180] [--wasm]
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const ROOT = path.join(__dirname, '..', '..', '..');
 const { createPool, defaultWorkers } = require(path.join(ROOT, 'trainer', 'pool.js'));
@@ -32,11 +36,15 @@ async function main() {
   const seeds = Array.from({ length: N }, (_, i) => BASE + i);
   // Resume: skip seeds already in --out.
   const done = new Set();
-  if (fs.existsSync(out)) for (const l of fs.readFileSync(out, 'utf8').split('\n')) {
-    if (!l) continue; const r = JSON.parse(l); if (r.seed !== undefined) done.add(r.seed);
+  if (fs.existsSync(out)) {
+    for (const l of fs.readFileSync(out, 'utf8').split('\n')) {
+      if (!l) continue; const r = JSON.parse(l); if (r.seed !== undefined) done.add(r.seed);
+    }
+    fs.appendFileSync(out, JSON.stringify({ resume: true, pid: process.pid, host: os.hostname(), start: new Date().toISOString() }) + '\n');
   } else {
     fs.writeFileSync(out, JSON.stringify({ header: true, model: modelFile, layers: m.layers, gameVersion: m.gameVersion, actionRepeat: m.actionRepeat,
-      generation: m.generation ?? null, coreHash: hash, base: BASE, n: N, target: TARGET, wasm, workers: WORKERS, start: new Date().toISOString() }) + '\n');
+      generation: m.generation ?? null, coreHash: hash, base: BASE, n: N, target: TARGET, wasm, workers: WORKERS, start: new Date().toISOString(),
+      pid: process.pid, host: os.hostname() }) + '\n');
   }
   const todo = seeds.filter(s => !done.has(s));
   const pool = createPool(WORKERS);
