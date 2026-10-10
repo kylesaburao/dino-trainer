@@ -59,6 +59,19 @@
 //                         window x1.5 if >60% of late windows were passed, /1.5 if <30%;
 //                         clamped to [5000, target] (a shrink never grows the window).
 //                         Needs --start-dist points. The window and counts are checkpointed.
+//   --ramp-frac F         share of training episodes (after the start-0 share) that start
+//                         on the natural ramp (default 0 = off): the solver (test/solver.js)
+//                         plays from 0 to a level uniform in points on [--ramp-min,
+//                         --ramp-max] (default 400..800) and hands over to the candidate at
+//                         the first grounded, keys-up frame; the candidate then plays
+//                         --window points. Unlike late starts this is faithful below 2000
+//                         (late starts begin at the speed cap). Costs the solver's frames
+//                         (metric teacherFrames); start-0 + ramp shares must be <= 1.
+//                         For --window-adapt, ramp episodes count as late windows (a
+//                         window of the same length from a non-zero start); the gate's
+//                         opening signal comes from start-0 episodes only, so ramp passes
+//                         cannot hide a failing opening (with --start-zero-frac 0 there is
+//                         no gate, as before).
 //   --fitness-agg mean|geomean  per-candidate fitness over its episodes: mean (default) or
 //                         geometric mean of max(progress, 1/span), so a failing stage
 //                         (e.g. the opening) dominates. geomean needs --window.
@@ -151,6 +164,9 @@ const DEFAULTS = {
   windowAdapt: false,     // curriculum: adapt the window to the late-window pass rate
   windowAdaptEvery: 5,    // curriculum: generations between window adaptation decisions
   fitnessAgg: 'mean',     // curriculum: per-candidate episode aggregate (mean | geomean)
+  rampFrac: 0,            // curriculum: share of episodes starting on the natural ramp (solver handover)
+  rampMin: 400,           // curriculum: natural-ramp start levels, uniform in points on [rampMin, rampMax]
+  rampMax: 800,
   select: 'median',       // best-model selection (median | count)
   stopRule: 'median',     // held-out stop rule (median | allpass[:N])
   valSeeds: 25,           // validation seeds
@@ -169,7 +185,7 @@ const DEFAULTS = {
 // checkpoints that predate them (their defaults reproduce the old behaviour).
 const BACKFILL = ['window', 'startZeroFrac', 'startMin', 'startDist', 'startZeroCap', 'windowAdapt', 'select', 'stopRule',
   'valSeeds', 'evalWhenFitMax', 'foldValidation', 'rankTies', 'decay', 'stallRule', 'sigmaScale', 'sigmaAnneal', 'sigmaMin', 'pairEpisodes',
-  'windowAdaptEvery', 'fitnessAgg', 'wasm'];
+  'windowAdaptEvery', 'fitnessAgg', 'wasm', 'rampFrac', 'rampMin', 'rampMax'];
 // Settings that change the parameter layout or the policy's behaviour cannot change on resume.
 const STRUCTURAL = ['hidden', 'actionRepeat', 'gameVersion'];
 
@@ -184,7 +200,8 @@ const FLAG_TO_KEY = {
   '--select': ['select', String], '--stop-rule': ['stopRule', String], '--val-seeds': ['valSeeds', Number],
   '--rank-ties': ['rankTies', String], '--decay': ['decay', String], '--sigma-scale': ['sigmaScale', String],
   '--sigma-min': ['sigmaMin', Number], '--window-adapt-every': ['windowAdaptEvery', Number],
-  '--fitness-agg': ['fitnessAgg', String],
+  '--fitness-agg': ['fitnessAgg', String], '--ramp-frac': ['rampFrac', Number], '--ramp-min': ['rampMin', Number],
+  '--ramp-max': ['rampMax', Number],
 };
 // Boolean config options: --x sets true, --no-x sets false.
 const BOOL_TO_KEY = {
@@ -232,13 +249,21 @@ function checkCurriculum(c) {
   oneOf(c, 'startDist', '--start-dist', ['log', 'points']);
   if (!(c.startZeroFrac >= 0 && c.startZeroFrac <= 1)) throw new Error('--start-zero-frac must be in [0, 1]');
   if (!(c.startMin >= 2000)) throw new Error('--start-min must be >= 2000 (below that, natural speed is still ramping)');
-  if (c.startDist === 'log' && c.startZeroFrac < 1 && c.startMin + c.window > c.target) {
+  const late = c.startZeroFrac + (c.rampFrac || 0) < 1;   // any late (startScore) episodes
+  if (c.startDist === 'log' && late && c.startMin + c.window > c.target) {
     throw new Error(`--start-min + --window (${c.startMin + c.window}) must not exceed --target (${c.target})`);
   }
-  if (c.startDist === 'points' && c.startZeroFrac < 1 && c.startMin >= c.target) throw new Error('--start-min must be below --target');
+  if (c.startDist === 'points' && late && c.startMin >= c.target) throw new Error('--start-min must be below --target');
   if (c.window > c.target) throw new Error('--window must not exceed --target');
   if (!(c.startZeroCap > 0 && c.startZeroCap <= c.target)) throw new Error('--start-zero-cap must be in (0, target]');
   if (c.windowAdapt && c.startDist !== 'points') throw new Error('--window-adapt needs --start-dist points');
+  if (c.rampFrac > 0) {
+    if (!(c.startZeroFrac + c.rampFrac <= 1)) throw new Error('--start-zero-frac + --ramp-frac must not exceed 1');
+    if (!(c.rampMin > 0 && c.rampMin <= c.rampMax)) throw new Error('--ramp-min must be in (0, --ramp-max]');
+    // The handover can come up to MAX_OVERSHOOT points after the ramp level.
+    const { MAX_OVERSHOOT } = require('./ramp.js');
+    if (!(c.rampMax + MAX_OVERSHOOT < c.target)) throw new Error(`--ramp-max + ${MAX_OVERSHOOT} (handover slack) must be below --target`);
+  }
 }
 
 function checkConfig(c) {
@@ -253,6 +278,8 @@ function checkConfig(c) {
   oneOf(c, 'fitnessAgg', '--fitness-agg', ['mean', 'geomean']);
   if (c.fitnessAgg === 'geomean' && !(c.window > 0)) throw new Error('--fitness-agg geomean needs the curriculum (--window)');
   if (!(Number.isInteger(c.windowAdaptEvery) && c.windowAdaptEvery > 0)) throw new Error('--window-adapt-every must be a positive integer');
+  if (!(c.rampFrac >= 0 && c.rampFrac <= 1)) throw new Error('--ramp-frac must be in [0, 1]');
+  if (c.rampFrac > 0 && !(c.window > 0)) throw new Error('--ramp-frac needs the curriculum (--window)');
   checkCurriculum(c);
 }
 
@@ -390,7 +417,8 @@ async function train({ config: cli, opts }) {
   const metricsCsv = path.join(dir, 'metrics.csv');
   const CSV_COLS = ['generation', 'time', 'genMs', 'cumulativeMs', 'fitMean', 'fitMedian', 'fitMax', 'fitMin',
     'valMedian', 'valMin', 'valMax', 'bestValMedian', 'frames', 'fps', 'sigma', 'lr', 'thetaNorm',
-    'valCount', 'valMeanLog', 'valGeneration', 'valFrames', 'bestValCount', 'tiedPairs', 'stepSkipped', 'sigmaEff', 'window'];
+    'valCount', 'valMeanLog', 'valGeneration', 'valFrames', 'bestValCount', 'tiedPairs', 'stepSkipped', 'sigmaEff', 'window',
+    ...(config.rampFrac > 0 ? ['teacherFrames'] : [])];
   if (!fs.existsSync(metricsCsv)) fs.writeFileSync(metricsCsv, CSV_COLS.join(',') + '\n');
   // A resumed run keeps its file's header (older runs have fewer columns).
   const csvCols = fs.readFileSync(metricsCsv, 'utf8').split('\n', 1)[0].split(',');
@@ -458,8 +486,12 @@ async function train({ config: cli, opts }) {
     const { noiseSeeds, pairEp } = drawGeneration(rng, config, cur);
     const jobs = [];
     for (let k = 0; k < half; k++) {
-      const { seeds, starts, caps } = pairEp[k];
-      for (const sign of [1, -1]) jobs.push(starts ? { noiseSeed: noiseSeeds[k], sign, seeds, starts, caps } : { noiseSeed: noiseSeeds[k], sign, seeds });
+      const { seeds, starts, caps, ramp } = pairEp[k];
+      for (const sign of [1, -1]) {
+        const job = starts ? { noiseSeed: noiseSeeds[k], sign, seeds, starts, caps } : { noiseSeed: noiseSeeds[k], sign, seeds };
+        if (ramp) Object.assign(job, { ramp, window: cur.window });   // natural-ramp episodes
+        jobs.push(job);
+      }
     }
     // Folded validation: the pre-update θ on the validation seeds, full games (sign 0 = θ itself).
     if (config.foldValidation) for (const s of valSeedList) jobs.push({ noiseSeed: 0, sign: 0, seeds: [s] });
@@ -474,7 +506,8 @@ async function train({ config: cli, opts }) {
     let latePassed = 0, lateTotal = 0, zeroPassed = 0, zeroTotal = 0, reachedTarget = false;
     const zeroStartScores = [];
     const fitness = results.map((r, i) => {
-      const { starts, caps } = pairEp[i >> 1];
+      // Natural-ramp results carry every episode's actual start (the handover score) and cap.
+      const { starts, caps } = r.starts ? r : pairEp[i >> 1];
       if (!starts) {
         zeroStartScores.push(...r.scores);
         return r.distances.reduce((a, d) => a + Math.min(d * CFG.scoreCoef, config.target), 0) / r.distances.length;
@@ -496,6 +529,7 @@ async function train({ config: cli, opts }) {
       }, 0) / r.distances.length;
     });
     const frames = results.reduce((a, r) => a + r.frames, 0);
+    const teacherFrames = results.reduce((a, r) => a + (r.teacherFrames || 0), 0);
     const valFrames = valResults.reduce((a, r) => a + r.frames, 0);
     const tied = tiedPairs(fitness);
     const stall = config.stallRule ? stallUpdate(st.stallMult, tied / half) : { skip: false, stallMult: st.stallMult };
@@ -556,6 +590,7 @@ async function train({ config: cli, opts }) {
       valFrames, bestValCount: st.best ? st.best.valCount ?? null : null,
       tiedPairs: tied, stepSkipped: stall.skip, sigmaEff, window: cur ? cur.window : null,
     };
+    if (config.rampFrac > 0) row.teacherFrames = teacherFrames;   // absent when off: rows stay as before
     fs.appendFileSync(metricsJsonl, JSON.stringify(row) + '\n');
     fs.appendFileSync(metricsCsv, csvCols.map(k => row[k] ?? '').join(',') + '\n');
     if (val || Date.now() - lastGenLog >= logEveryMs || stopReason) {
@@ -566,6 +601,7 @@ async function train({ config: cli, opts }) {
         ` (best ${st.best.valMedian} @ gen ${st.best.generation})` : '') +
       (config.stallRule || config.rankTies !== 'index' ? ` | tied ${tied}/${half}${stall.skip ? ' step skipped' : ''}` : '') +
       (cur && config.windowAdapt ? ` | window ${st.window}` : '') +
+      (config.rampFrac > 0 ? ` | teacher ${teacherFrames} frames` : '') +
       ` | ${frames} frames in ${(genMs / 1000).toFixed(1)}s (${row.fps} fps)`);
     }
 

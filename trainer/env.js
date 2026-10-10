@@ -29,16 +29,34 @@ const trainSeed = (rng) => Math.floor(rng() * 0x40000000);
 //            target is clipped there (see episodeCaps).
 // Levels must be 0 or >= ~2000: below that, natural speed is still ramping and
 // a late start would not match natural play.
+// With c.rampFrac > 0 a third stratum, right after the zeros, starts on the natural
+// ramp instead: the solver plays from 0 to a level uniform in points on
+// [rampMin, rampMax] and hands over (trainer/ramp.js), so any level is faithful.
 const START_SALT = 0x5EED5A17;
 const uniform = (seed, k) => createRng((hashSeed(seed, START_SALT) + Math.imul(k, 0x632BE5AB)) >>> 0)();
-function startScores(seeds, c) {
+const zeroCount = (seeds, c) => {
   const want = c.startZeroFrac * seeds.length;
-  const zeros = Math.floor(want) + (uniform(seeds[0], 0) < want - Math.floor(want) ? 1 : 0);
+  return Math.floor(want) + (uniform(seeds[0], 0) < want - Math.floor(want) ? 1 : 0);
+};
+function rampCount(seeds, c, zeros) {
+  if (!(c.rampFrac > 0)) return 0;
+  const want = c.rampFrac * seeds.length;
+  return Math.min(seeds.length - zeros, Math.floor(want) + (uniform(seeds[0], 2) < want - Math.floor(want) ? 1 : 0));
+}
+const rampStart = (s, c) => Math.round(c.rampMin + uniform(s, 3) * (c.rampMax - c.rampMin));
+function startScores(seeds, c) {
+  const zeros = zeroCount(seeds, c);
+  const ramps = zeros + rampCount(seeds, c, zeros);
   if (c.startDist === 'points') {
-    return seeds.map((s, j) => (j < zeros ? 0 : Math.min(c.target - 1, Math.round(c.startMin + uniform(s, 1) * (c.target - c.startMin)))));
+    return seeds.map((s, j) => (j < zeros ? 0 : j < ramps ? rampStart(s, c) : Math.min(c.target - 1, Math.round(c.startMin + uniform(s, 1) * (c.target - c.startMin)))));
   }
   const hi = c.target - c.window;
-  return seeds.map((s, j) => (j < zeros ? 0 : Math.round(c.startMin * Math.pow(hi / c.startMin, uniform(s, 1)))));
+  return seeds.map((s, j) => (j < zeros ? 0 : j < ramps ? rampStart(s, c) : Math.round(c.startMin * Math.pow(hi / c.startMin, uniform(s, 1)))));
+}
+// Which episodes start on the natural ramp (null when none do).
+function rampMask(seeds, c) {
+  const zeros = zeroCount(seeds, c), ramps = zeros + rampCount(seeds, c, zeros);
+  return ramps > zeros ? seeds.map((s, j) => j >= zeros && j < ramps) : null;
 }
 
 // Absolute end score of each curriculum episode: start-0 episodes end at
@@ -78,4 +96,4 @@ const median = (xs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-module.exports = { runEpisode, median, trainSeed, startScores, episodeCaps, windowFitness, validationSeeds, evalSeeds, VALIDATION_SEEDS, EVAL_SEEDS };
+module.exports = { runEpisode, median, trainSeed, startScores, rampMask, episodeCaps, windowFitness, validationSeeds, evalSeeds, VALIDATION_SEEDS, EVAL_SEEDS };
