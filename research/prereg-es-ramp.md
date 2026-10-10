@@ -90,8 +90,7 @@ The batch's frames budget, matched across arms. The ramp's ~1.0–1.15× frames 
 
 ### 4.6 Launch gates (needs CPU: run only in a slot desktop-1 offers; about 2 min in total)
 - **(a) Fitness plumbing is neutral.** Resume frozen `ckpt-s9.json` for 5 generations at hyg8, and again with `--episodes 8 --window 1000000 --start-zero-cap 1000000 --start-zero-frac 1`. θ, Adam m and the RNG state must be bit-identical.
-  - If they differ, first check the summation order: hyg sums the scores and then divides; the curriculum divides each episode by 1M and then sums, so floating-point ties could break differently. Report the first differing generation.
-  - Any other cause blocks the arm, because the pairing wouldn't be clean.
+  - **Exact, with no floating-point allowance** (mac-3, on approval). Any difference blocks the arm. Before anything else runs, find and report the first differing value.
 - **(b) Handover robustness.** A single-thread solver sweep over about 10k training-range seeds to 800 + 330 points. No throw is allowed. Report the largest handover delay.
 - **(c) Probe on the start θs** (single thread, 40 episodes each, as in the B′ prereg's §2):
   - each θ's share of from-0 deaths below 800 (the stratum);
