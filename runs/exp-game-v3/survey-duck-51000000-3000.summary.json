@@ -1,0 +1,35 @@
+{
+ "file": "survey-duck-51000000-3000.jsonl",
+ "seeds": 3000,
+ "seedRange": [
+  51000000,
+  51002999
+ ],
+ "crashes": 0,
+ "crashRate": 0,
+ "crashRateUpper95oneSided": 0.0009980790119965867,
+ "reachedCap": 3000,
+ "frames": 2023074000,
+ "downShare": 0.015444770680657258,
+ "obstaclesPassed": 65623636,
+ "obstaclesDuckedShare": 0.14615323966504995,
+ "midEncountered": 9605653,
+ "midPassed": 9591107,
+ "midDucked": 9591107,
+ "midDuckedShare": 1,
+ "solver": {
+  "seedsWithStats": 3000,
+  "midEncountered": 9605552,
+  "midDucked": 9605552,
+  "fallback": 0,
+  "fallbackShare": 0,
+  "fallbackWhy": {
+   "takeoff": 0,
+   "obstacle": 0,
+   "newcomer": 0
+  },
+  "solverDownFrames": 31245914,
+  "conflicts": 0
+ },
+ "crashList": []
+}
