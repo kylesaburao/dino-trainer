@@ -13,15 +13,15 @@
 // 4. No console errors or exceptions on the page.
 // 5. index-css.html: the model.css network (CSS-evaluated weights) plays, every
 //    decision equals policy.js on model.js, speeds 1x-2048x, auto-restart.
-const { spawn, execFileSync } = require('child_process');
+//    (This covers the opening only; test/css-agreement.js compares any run's
+//    model on CSS vs JS decisions through the pterodactyl/duck phase.)
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { sleep, seedMathRandom, launch } = require('./cdp.js');
 
 const ROOT = path.join(__dirname, '..');
-const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const PORT = 9300 + Math.floor(Math.random() * 500);
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const results = [];
 function check(name, ok, detail = '') {
@@ -30,46 +30,7 @@ function check(name, ok, detail = '') {
 }
 
 // Seeded Math.random for both baseline and new pages (mulberry32, seed 12345).
-const SEED_SCRIPT = `(() => { let a = 12345; Math.random = function () {
-  a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a);
-  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; })();`;
-
-async function connect() {
-  const t0 = Date.now();
-  for (;;) {
-    try {
-      const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-      const page = list.find(t => t.type === 'page');
-      if (page) return page.webSocketDebuggerUrl;
-    } catch (e) { /* not up yet */ }
-    if (Date.now() - t0 > 15000) throw new Error('Chrome did not start');
-    await sleep(100);
-  }
-}
-
-function cdpClient(url) {
-  const ws = new WebSocket(url);
-  let id = 0;
-  const pending = new Map();
-  const listeners = [];
-  ws.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.id && pending.has(msg.id)) {
-      const { resolve, reject } = pending.get(msg.id);
-      pending.delete(msg.id);
-      msg.error ? reject(new Error(msg.error.message)) : resolve(msg.result);
-    } else if (msg.method) {
-      for (const l of listeners) l(msg);
-    }
-  };
-  const ready = new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-  const send = (method, params = {}) => new Promise((resolve, reject) => {
-    const i = ++id;
-    pending.set(i, { resolve, reject });
-    ws.send(JSON.stringify({ id: i, method, params }));
-  });
-  return { ready, send, on: (f) => listeners.push(f), close: () => ws.close() };
-}
+const SEED_SCRIPT = seedMathRandom(12345);
 
 (async () => {
   // Baseline page from commit 2da34de in a scratch directory.
@@ -80,41 +41,10 @@ function cdpClient(url) {
     fs.writeFileSync(path.join(baseDir, f), execFileSync('git', ['show', `2da34de:${f}`], { cwd: ROOT }));
   }
 
-  const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${PORT}`, `--user-data-dir=${path.join(scratch, 'profile')}`,
-    '--mute-audio', '--no-first-run', '--no-default-browser-check', '--window-size=900,500', '--allow-file-access-from-files', 'about:blank'],
-  { stdio: 'ignore' });
-  let cdp;
+  const browser = await launch(path.join(scratch, 'profile'), SEED_SCRIPT);
+  const { chrome, cdp } = browser;
   try {
-    cdp = cdpClient(await connect());
-    await cdp.ready;
-    const { send } = cdp;
-    const problems = [];
-    cdp.on((m) => {
-      if (m.method === 'Runtime.exceptionThrown') problems.push('exception: ' + (m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text));
-      if (m.method === 'Runtime.consoleAPICalled' && (m.params.type === 'error' || m.params.type === 'warning')) {
-        problems.push(`console.${m.params.type}: ` + m.params.args.map(a => a.value ?? a.description).join(' '));
-      }
-      if (m.method === 'Log.entryAdded' && (m.params.entry.level === 'error' || m.params.entry.level === 'warning')) {
-        problems.push(`log ${m.params.entry.level}: ${m.params.entry.text} ${m.params.entry.url || ''}`);
-      }
-    });
-    await send('Page.enable');
-    await send('Runtime.enable');
-    await send('Log.enable');
-    await send('Page.addScriptToEvaluateOnNewDocument', { source: SEED_SCRIPT });
-
-    const evaluate = async (expr) => {
-      const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
-      if (r.exceptionDetails) throw new Error(`evaluate failed: ${expr}: ${r.exceptionDetails.exception?.description || r.exceptionDetails.text}`);
-      return r.result.value;
-    };
-    const load = async (file) => {
-      problems.length = 0;
-      const loaded = new Promise((res) => cdp.on((m) => { if (m.method === 'Page.loadEventFired') res(); }));
-      await send('Page.navigate', { url: 'file://' + file });
-      await loaded;
-      await sleep(600);
-    };
+    const { send, evaluate, load, waitUntil, problems } = browser;
     const canvasShot = async () => {
       const rect = await evaluate(`(() => { const r = document.getElementById('game').getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })()`);
       const shot = await send('Page.captureScreenshot', { format: 'png', clip: { x: rect.x, y: rect.y, width: rect.w, height: rect.h, scale: 1 } });
@@ -129,15 +59,6 @@ function cdpClient(url) {
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
     };
-    const waitUntil = async (expr, ms = 15000) => {
-      const t0 = Date.now();
-      while (Date.now() - t0 < ms) {
-        if (await evaluate(expr)) return true;
-        await sleep(30);
-      }
-      return false;
-    };
-
     // ---- 1. Look: idle canvas vs baseline ---------------------------------
     await load(path.join(baseDir, 'index.html'));
     const base = await canvasShot();
@@ -302,7 +223,7 @@ function cdpClient(url) {
     check('CSS page: crash, then a new run starts by itself', await waitUntil(`game !== window.__cssGame && game.state === 'running'`, 5000));
     check('no console errors, warnings or exceptions on the CSS page', problems.length === 0, problems.join('; '));
   } finally {
-    if (cdp) cdp.close();
+    cdp.close();
     chrome.kill();
   }
   const failed = results.filter(r => !r.ok).length;
