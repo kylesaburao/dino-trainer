@@ -70,11 +70,18 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 - `bc-gen` reproduces the prototype's rows (`cloneB.js gen`), except that the boring-frame counter now resets every episode, so a few down-weighted rows differ.
 - To ship a new BC model: `bc-train` into a `runs/bc-*` directory, certify it with `eval`, then `export --dir runs/bc-... --which best`.
 
-**Project generations ("v2", "v3"): not game versions.** The user's convention, 2026-10-10:
-- **"v2"** is everything up to that date: the jump-only solver teacher, the shipped clone and the sweeps.
-- **"v3"** is a teacher that ducks, and training on it (`research/follow-up-questions.md` Q2).
+**Naming scheme (unambiguous; the user asked for it, 2026-10-10).** A bare `v<N>` means **game rules only**. Nothing else is named with a bare version number.
 
-Write these as "teacher v3" or "pipeline v3". They are not `gameVersion` values: the game rules stay `v2`. A new *game* version would mean new rules, a new `HI_KEY` and new goldens.
+| Thing | Name | Where it appears |
+|---|---|---|
+| Game rules | **rules v1**, **rules v2**; write "rules v2" in prose | `gameVersion: 'v1' \| 'v2'`, `?game=`, `HI_KEY`. The code field is unchanged |
+| Model file format | **`dino-mlp-v1`** | `model.js`, `best.json` |
+| BC teacher | **`teacher-jump`** (`test/solver.js` `createSolver`, jump only) and **`teacher-duck`** (planned: ducks under mid pterodactyls) | `best.json` `config`, demos manifest |
+| Project generation | named after its teacher: the **jump generation** (everything up to 2026-10-10: the shipped clone and the depth × width sweep) and the **duck generation** (`teacher-duck` and the clones trained on it) | docs, handoffs, register rows |
+| New BC run dirs | `runs/bc-<teacher>-d<depth>w<width>[-s<seed>]`, e.g. `runs/bc-duck-d2w32-s1`; experiments use `runs/exp-bc-<teacher>-...` | |
+
+- Existing run dirs keep their names, and their `v2` means rules v2. Examples: the shipped `runs/bc-v2-h32x32` (jump generation) and `runs/v2-h32x32-1m` (ES).
+- Avoid "T"-prefixed labels for teachers. "Type T/M" (ES stuck θs) and "T1/T2" (sweep agreement thresholds) already use them.
 
 **One source of game logic.** `core.js` is the DOM-free simulation, and the trainer, tests, browser and dashboard all run it.
 - `createGame({ rng, version, hooks })` creates independent games, many per thread.
