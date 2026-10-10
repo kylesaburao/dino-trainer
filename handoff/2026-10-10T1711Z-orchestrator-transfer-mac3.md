@@ -116,3 +116,25 @@ desktop-2 has been told to hold for your decision.
   - reading E covers "both arms clear";
   - the 400–800 row stays OPEN.
 - desktop-1 is now running the 12-run batch: controls s12 and s4 first, then s5, s7, s8 and s9, each hyg then B′, one trainer at a time. Apply its fixed readings when it reports.
+
+## 9. Addendum: the BC pipeline implementer FINISHED. `wt/bc` is ready for YOUR review and merge (not merged by mac-2)
+- **Branch:** `wt/bc` = `0787461` in `/Users/kyle/Desktop/dino-game-bc`, one commit on `322fcaf`, unpushed. **Expect an AGENTS.md conflict with main.**
+- **Files:**
+  - new: `trainer/bc.js`, `trainer/bc_train.py`, `test/bc.test.js`;
+  - edited: `trainer/cli.js` (parsing, dispatch, header), `test/solver.js` (header comment only), `AGENTS.md`, `.gitignore` (`runs/*/demos.bin`).
+- **Control (a):** all 521,753 weight-1 rows byte-identical to `d1.bin`, with boring rows within ±1 per episode. `demos.bin` is sha-identical at 1 and 18 workers.
+- **Control (b):** the Python backend reproduces `m_base_s1.json` exactly (all 2,595 params, max diff 0), and the epoch logs are identical. Validation 25/25.
+- **Control (c):** the Node backend reaches 25/25 validation; final loss 0.0056 against Python's 0.0044. Node takes about 10.5 s/epoch, Python about 1 s/epoch.
+- **Checks:**
+  - tests 72/72 with `PYTHON` set; without it the Python test is skipped;
+  - smoke 17/17;
+  - bit-identity IDENTICAL on all 7 scenarios. It ran against main `b6c170e`, which the implementer showed doesn't differ from `322fcaf` in trainer, core, policy or solver.
+- **Extras beyond the plan:**
+  - `--overwrite` guards on `demos.json` and `best.json` (these protect the shipped run dirs);
+  - `bc-train` takes `train.lock`;
+  - `--target`, `--workers` and `--wasm` for validation;
+  - `bc-gen --game`.
+- **Before merging:**
+  - resolve the AGENTS.md conflict;
+  - rerun `node --test test/` with `PYTHON=/Users/kyle/Desktop/dino-game/.venv/bin/python`;
+  - decide the teacher-owner conflict with desktop-2's natural-ramp proposal (§7).
