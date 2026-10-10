@@ -146,6 +146,24 @@ details.group .runs { margin: 8px 0 4px; }
 .kv dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .bad { color: var(--critical); font-weight: 600; }
 .cfg { font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--text-secondary); overflow-wrap: anywhere; }
+#scans-card { margin: 0 0 12px; }
+.dot.stall { background: var(--series-2); }
+table.scans td:nth-child(2), table.scans th:nth-child(2), table.scans td:nth-child(3), table.scans th:nth-child(3) { text-align: left; }
+table.scans tr.scan-row.running td { background: color-mix(in srgb, var(--good) 7%, transparent); }
+.scan-toggle { font: inherit; font-size: 12px; border: 0; background: none; color: var(--text-primary); cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 6px; text-align: left; }
+.scan-toggle::before { content: '▸'; color: var(--text-muted); }
+.scan-toggle[aria-expanded="true"]::before { content: '▾'; }
+.state { display: inline-flex; align-items: center; gap: 6px; }
+.state.running { color: var(--good); font-weight: 600; }
+.state.stalled { color: var(--series-2); font-weight: 600; }
+.bar { display: inline-block; width: 56px; height: 6px; border-radius: 3px; background: var(--neutral); vertical-align: middle; margin-left: 6px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--series-1); }
+tr.scan-detail td { text-align: left; white-space: normal; background: var(--surface-0); }
+.hist { display: grid; grid-template-columns: max-content 1fr max-content; gap: 2px 8px; align-items: center; font-size: 12px; max-width: 420px; margin-top: 4px; }
+.hist .hb { height: 8px; border-radius: 2px; background: var(--critical); min-width: 1px; }
+.fails { font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--text-secondary); overflow-wrap: anywhere; }
+a.goto { color: var(--series-1); text-decoration: none; }
+a.goto:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -156,6 +174,11 @@ details.group .runs { margin: 8px 0 4px; }
   </header>
   <div class="runs" id="runs" role="group" aria-label="Training runs"></div>
   <div id="run-groups"></div>
+  <section class="card" id="scans-card" hidden>
+    <h2>Scans</h2>
+    <div class="sub">Game scans and teacher surveys: every scan.js / survey.js JSONL under runs/ (any depth). Failure rate with a two-sided 95% Clopper–Pearson interval.</div>
+    <div id="scans"></div>
+  </section>
   <section class="card" id="playback" hidden>
     <div class="play-head">
       <div>
@@ -376,6 +399,8 @@ function renderDetail(d) {
         <div class="sub">Simulated frames per second, all workers</div>
         <div class="chart" id="c-fps"></div>
       </div>
+      ${evalsCard(info.evals || [])}
+      ${scansCard(d.scans)}
       <div class="card wide">
         <h2>Log</h2>
         <div class="sub">Tail of the newest *.log in the run directory</div>
@@ -401,6 +426,7 @@ function renderDetail(d) {
   lineChart($('#c-fps'), [{ name: 'Frames/s', color: s1, points: metrics.map(r => [r.generation, r.fps]) }]);
   const logEl = $('#log');
   logEl.scrollTop = logEl.scrollHeight;
+  if ($('#run-scans')) bindScans($('#run-scans'));
 }
 
 // ---------------------------------------------------------------------------
@@ -498,6 +524,7 @@ function renderBcDetail(d) {
       </div>
       ${demosCard(b.demos, b.demosRef, best && best.coreHash)}
       ${evalsCard(info.evals || [])}
+      ${scansCard(d.scans)}
       ${logCard}
       ${cfgCard}
     </div>`;
@@ -512,11 +539,93 @@ function renderBcDetail(d) {
   for (const btn of document.querySelectorAll('.snaps button')) btn.onclick = () => { $('#pb-which').value = btn.dataset.snap; $('#pb-which').onchange(); renderBcDetail(d); };
   const logEl = $('#log');
   logEl.scrollTop = logEl.scrollHeight;
+  if ($('#run-scans')) bindScans($('#run-scans'));
+}
+
+// ---------------------------------------------------------------------------
+// Scans: /api/scans rows (trainer/scans.js). Running and stalled scans are always listed;
+// finished ones fold into a <details>. A run's detail lists the scans of its best.json.
+// ---------------------------------------------------------------------------
+const openScans = new Set();
+let doneScansOpen = false;
+const STATE_LABEL = { running: 'Running', stalled: 'Stalled', done: 'Done' };
+
+function scanTable(scans, where) {
+  if (!scans.length) return '';
+  const row = (s) => {
+    const open = openScans.has(where + ':' + s.id);
+    const frac = s.n ? Math.min(1, s.games / s.n) : 0;
+    const model = s.kind === 'survey' ? `solver ${esc(s.solver || '?')}` : s.owner
+      ? `<a href="#" class="goto" data-goto-run="${esc(s.owner)}">${esc(s.owner)}</a>` : esc(s.modelRel || '–');
+    const ci = s.failCI95 ? `${pct(s.failRate, 2)} <span style="color:var(--text-muted)">(${pct(s.failCI95.lower, 2)}–${pct(s.failCI95.upper, 2)})</span>` : '–';
+    const main = `<tr class="scan-row ${s.state}" data-scan="${esc(s.id)}" data-state="${s.state}">
+      <td style="text-align:left"><span class="state ${s.state}" title="${esc(s.how)}"><span class="dot ${s.state === 'running' ? 'live' : s.state === 'stalled' ? 'stall' : ''}" aria-hidden="true"></span>${STATE_LABEL[s.state]}</span></td>
+      <td><button type="button" class="scan-toggle" data-key="${esc(where + ':' + s.id)}" aria-expanded="${open}">${esc(s.id)}</button>${s.kind === 'survey' ? ' <span class="badge">survey</span>' : ''}</td>
+      <td>${model}</td>
+      <td>${s.base !== null ? `${num(s.base)}+` : '–'}</td>
+      <td>${s.target ? compact(s.target) : '–'}</td>
+      <td>${num(s.games)}${s.n ? '/' + num(s.n) : ''}${s.n ? `<span class="bar" aria-hidden="true"><i style="width:${(frac * 100).toFixed(1)}%"></i></span>` : ''}</td>
+      <td>${num(s.passes)}</td>
+      <td class="${s.failures ? 'bad' : ''}">${num(s.failures)}</td>
+      <td>${s.failMin !== null ? num(s.failMin) : '–'}</td>
+      <td>${ci}</td>
+      <td>${ago(s.updated)}</td></tr>`;
+    if (!open) return main;
+    const maxBin = Math.max(1, ...s.failHist.map(b => b.count));
+    const hist = s.failures ? `<div class="hist">${s.failHist.map(b => `<span>${compact(b.lo)}–${compact(b.hi)}</span>
+      <span><span class="hb" style="display:block;width:${b.count ? Math.max(2, b.count / maxBin * 100) : 0}%"></span></span><span>${num(b.count)}</span>`).join('')}</div>` : '';
+    const warn = [s.dupes ? `${num(s.dupes)} duplicate seed lines ignored` : '', s.badLines ? `${num(s.badLines)} unparsable lines` : ''].filter(Boolean).join(' · ');
+    return main + `<tr class="scan-detail" data-scan="${esc(s.id)}"><td colspan="11"><dl class="kv">
+      <dt>Status</dt><dd>${esc(s.state)}: ${esc(s.how)}</dd>
+      <dt>${s.kind === 'survey' ? 'Teacher' : 'Model'}</dt><dd>${s.kind === 'survey' ? `test/solver.js ${esc(s.solver || '?')} (survey.js)` : esc(s.model || '–')}${s.layers ? ` · ${esc(layersText(s.layers))}` : ''}${s.gameVersion ? ` · ${esc(s.gameVersion)}` : ''}</dd>
+      <dt>Seeds</dt><dd>${s.seedRange ? `${num(s.seedRange[0])}–${num(s.seedRange[1])}` : '–'} (${num(s.games)} games${s.n ? ` of ${num(s.n)} from ${num(s.base)}` : ''}) · ${compact(s.frames)} frames</dd>
+      <dt>Process</dt><dd>${s.pid !== null ? `pid ${s.pid}${s.host ? ' on ' + esc(s.host) : ''}` : 'no pid recorded'}${s.workers ? ` · ${s.workers} workers` : ''}${s.wasm ? ' · wasm' : ''}${s.coreHash ? ` · core ${esc(short(s.coreHash))}` : ''}</dd>
+      <dt>Time</dt><dd>${s.startedAt ? 'started ' + esc(new Date(s.startedAt).toLocaleString()) : ''}${s.endedAt ? ' · ended ' + esc(new Date(s.endedAt).toLocaleString()) : ''}${s.seconds ? ` · ${dur(s.seconds * 1000)}` : ''} · last write ${ago(s.updated)}</dd>
+      ${s.logLine ? `<dt>Log</dt><dd class="fails">${esc(s.logLine)}</dd>` : ''}
+      ${warn ? `<dt>Warnings</dt><dd class="bad">${esc(warn)}</dd>` : ''}
+      <dt>Failure scores</dt><dd>${s.failures ? `<div class="fails">${s.failScores.map(x => num(x)).join(', ')}${s.failures > s.failScores.length ? ` … (${num(s.failures - s.failScores.length)} more)` : ''}</div>${hist}` : 'none'}</dd>
+    </dl></td></tr>`;
+  };
+  return `<div class="table-wrap"><table class="scans"><thead><tr><th style="text-align:left">Status</th><th>Scan</th><th>Model</th><th>Seeds</th><th>Target</th><th>Games</th><th>Passed</th><th>Failed</th><th>Min failure</th><th>Failure rate (95% CP)</th><th>Updated</th></tr></thead>
+    <tbody>${scans.map(row).join('')}</tbody></table></div>`;
+}
+
+function bindScans(host) {
+  for (const b of host.querySelectorAll('.scan-toggle')) b.onclick = () => {
+    openScans.has(b.dataset.key) ? openScans.delete(b.dataset.key) : openScans.add(b.dataset.key);
+    lastScans && renderScans(lastScans);
+    lastData && renderDetail(lastData);
+  };
+  for (const a of host.querySelectorAll('a.goto')) a.onclick = (ev) => {
+    ev.preventDefault();
+    selected = a.dataset.gotoRun;
+    try { localStorage.setItem('dino-dash-run', selected); } catch (e) {}
+    refresh();
+  };
+}
+
+let lastScans = null;
+function renderScans(scans) {
+  lastScans = scans;
+  $('#scans-card').hidden = !scans.length;
+  const active = scans.filter(s => s.state !== 'done'), done = scans.filter(s => s.state === 'done');
+  const counts = ['running', 'stalled', 'done'].map(k => [k, scans.filter(s => s.state === k).length]).filter(([, c]) => c).map(([k, c]) => `${c} ${k}`).join(' · ');
+  $('#scans').innerHTML = `<div class="sub" id="scan-counts">${counts}</div>${scanTable(active, 'all')}
+    ${done.length ? `<details id="scans-done"${doneScansOpen ? ' open' : ''}><summary>${done.length} finished scan${done.length > 1 ? 's' : ''}</summary>${scanTable(done, 'all')}</details>` : ''}`;
+  const d = $('#scans-done');
+  if (d) d.ontoggle = () => { doneScansOpen = d.open; };
+  bindScans($('#scans'));
+}
+
+function scansCard(scans) {
+  if (!scans || !scans.length) return '';
+  return `<div class="card wide" id="run-scans"><h2>Scans of this model</h2><div class="sub">scan.js files whose header model is this run's best.json</div>${scanTable(scans, 'run')}</div>`;
 }
 
 async function refresh() {
   try {
-    const runs = await (await fetch('/api/runs')).json();
+    const [runs, scans] = await Promise.all([fetch('/api/runs').then(r => r.json()), fetch('/api/scans').then(r => r.json())]);
+    renderScans(scans);
     if (!selected || !runs.some(r => r.name === selected)) {
       let saved = null;
       try { saved = localStorage.getItem('dino-dash-run'); } catch (e) {}

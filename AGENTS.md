@@ -153,6 +153,7 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 - **The dashboard sees every training run on this computer.** This is the user's requirement (2026-10-10). `node trainer/dashboard.js` must list and show every training run under `runs/`, while it is running and after it finishes:
   - ES runs (`train`) and behaviour-cloning runs (`bc-gen` / `bc-train`, any teacher), including runs nested one level down (`runs/<group>/<run>`);
   - their metrics and log, with live updates while running, and playback of their models.
+  - game scans and teacher surveys (`scan.js` / `survey.js` JSONL anywhere under `runs/`), running and finished, with pass/fail counts, failure scores and the failure-rate CP interval (`trainer/scans.js`).
 
   **Any new training mode, metrics file or run-dir layout must ship with dashboard support in the same change.** A change that leaves a kind of training run invisible on the dashboard is incomplete.
 

@@ -29,10 +29,17 @@
 // Only this local dev page sees the solver; game.js and index.html never load it.
 // Parsed best.json / checkpoint.json / demos.json are cached by mtime and size, without
 // their weights, so polling dozens of runs stays cheap.
+//
+// Scans (trainer/scans.js): every scan.js / survey.js JSONL under --runs, any depth up to 4,
+// with games done, passes, failure scores and a Clopper-Pearson interval on the failure
+// rate; done (footer) / running / stalled from the pid recorded in the file, a <name>.pid
+// file, or the mtime. Files are tailed incrementally. /api/scans lists them; a run's detail
+// carries the scans whose header model is that run's best.json.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { pidAlive, ROOT } = require('./store.js');
+const { listScans } = require('./scans.js');
 
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; };
@@ -131,7 +138,7 @@ function esInfo(name) {
   const best = bestSummary(dir);
   const metrics = readLines(path.join(dir, 'metrics.jsonl'));
   const last = metrics.length ? JSON.parse(metrics[metrics.length - 1]) : null;
-  const evals = readLines(path.join(dir, 'evals.jsonl')).map(l => JSON.parse(l));
+  const evals = readLines(path.join(dir, 'evals.jsonl')).map(l => { const e = JSON.parse(l); delete e.scores; return e; });
   const updated = Math.max(...['metrics.jsonl', 'checkpoint.json', 'train.lock'].map(f => mtime(path.join(dir, f))));
   return {
     name,
@@ -145,6 +152,7 @@ function esInfo(name) {
     best: best ? { generation: best.generation, validation: best.validation } : null,
     heldOut: (ck && ck.heldOut) || null,
     lastEval: evals.length ? evals[evals.length - 1] : null,
+    evals,
     last,
     updated,
   };
@@ -320,6 +328,7 @@ const server = http.createServer((req, res) => {
     if (SHARED[url.pathname]) return send(res, 200, 'text/javascript; charset=utf-8', fs.readFileSync(path.join(ROOT, SHARED[url.pathname])));
     if (url.pathname === '/teacher.js') return send(res, 200, 'text/javascript; charset=utf-8', teacherShim());
     if (url.pathname === '/api/runs') return send(res, 200, 'application/json', JSON.stringify(listRuns()));
+    if (url.pathname === '/api/scans') return send(res, 200, 'application/json', JSON.stringify(listScans(RUNS, new Set(listRunNames()))));
     if (m) {
       const name = decodeURIComponent(m[1]);   // "run" or "group/run" (sent as group%2Frun)
       if (!listRunNames().includes(name)) return send(res, 404, 'text/plain', 'no such run');
@@ -329,7 +338,8 @@ const server = http.createServer((req, res) => {
         return model ? send(res, 200, 'application/json', JSON.stringify(model)) : send(res, 404, 'text/plain', 'no weights yet');
       }
       const info = runInfo(name);
-      return send(res, 200, 'application/json', JSON.stringify({ info, metrics: runMetrics(name, info.kind), log: logTail(name) }));
+      const scans = listScans(RUNS, new Set(listRunNames())).filter(s => s.owner === name);
+      return send(res, 200, 'application/json', JSON.stringify({ info, metrics: runMetrics(name, info.kind), log: logTail(name), scans }));
     }
     send(res, 404, 'text/plain', 'not found');
   } catch (e) {

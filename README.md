@@ -62,6 +62,7 @@ node trainer/dashboard.js --runs /path/to/runs   # read runs from another direct
 - It lists the runs under `runs/`, with live training curves, evaluations and game playback of a run's model.
 - To view a remote machine's dashboard, forward the port, for example `ssh -L 8080:127.0.0.1:8080 <host>`.
 - It shows every run under `runs/`, including nested `runs/<group>/<run>` dirs: ES runs (`metrics.jsonl`, checkpoints, evals) and behaviour-cloning runs (`bc-metrics.jsonl` with recall per class, the teacher name, demo manifests, and snapshot epochs you can play). The playback menu also lists every solver in `test/solver.js` (`createSolver`, `createDuckSolver`), so you can watch either teacher play. Reload the page to pick up new solvers.
+- A Scans section lists every game scan (`research/scripts/prereg-bc-robustness/scan.js`) and teacher survey (`survey.js`) JSONL under `runs/`, at any depth, with games done, passes, failure scores and a 95% Clopper–Pearson interval on the failure rate. Each one shows as running, stalled or done, using the pid that scan.js records in the file (older files fall back to the file's mtime). A run's view also lists the scans of its `best.json`.
 
 ## Tests
 
