@@ -195,6 +195,11 @@ const SEED_SCRIPT = seedMathRandom(12345);
     const v2hi = await evaluate(`({ v1: localStorage.getItem('dino-hi'), v2: localStorage.getItem('dino-hi-v2'), score: game.score() })`);
     check('v2 keeps its own HI (v1 HI untouched)', v2hi.v1 === '7' && v2hi.v2 === String(v2hi.score), JSON.stringify(v2hi));
     check('no console errors, warnings or exceptions on the v2 page', problems.length === 0, problems.join('; '));
+    await load(path.join(ROOT, 'index.html') + '?game=v3');
+    check('?game=v3 selects the v3 rules with its own HI key', await evaluate(`game.version === 'v3' && HI_KEY === 'dino-hi-v3'`));
+    await tap('Space');
+    check('v3 starts and scores', await waitUntil(`game.state === 'running'`, 1000) && await waitUntil(`game.score() > 0`, 3000));
+    check('no console errors, warnings or exceptions on the v3 page', problems.length === 0, problems.join('; '));
 
     // ---- 5. CSS-network page (index-css.html + model.css) -----------------
     // The page has no JavaScript network; the test compares against model.js itself.
@@ -222,6 +227,10 @@ const SEED_SCRIPT = seedMathRandom(12345);
     }, 5); window.__cssGame = g0; })()`);
     check('CSS page: crash, then a new run starts by itself', await waitUntil(`game !== window.__cssGame && game.state === 'running'`, 5000));
     check('no console errors, warnings or exceptions on the CSS page', problems.length === 0, problems.join('; '));
+    await load(path.join(ROOT, 'index-css.html') + '?game=v3');
+    check('CSS page: ?game=v3 plays the v3 rules', await evaluate(`!failed && game.version === 'v3'`) &&
+      await waitUntil(`game.state === 'running' && game.score() > 0`, 5000));
+    check('no console errors, warnings or exceptions on the v3 CSS page', problems.length === 0, problems.join('; '));
   } finally {
     cdp.close();
     chrome.kill();

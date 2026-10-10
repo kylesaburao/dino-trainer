@@ -5,7 +5,9 @@
 //   node trainer/cli.js train  [--target 10000] [--resume [--force]] [--workers N]
 //                              [--time-budget MIN] [--generations N] [--dir runs/main] ...
 //   node trainer/cli.js eval   [--dir runs/main] [--which best|current] [--model model.js] [--target N]
-//                              [--seeds 25] [--seed-offset 0] [--wasm]
+//                              [--seeds 25] [--seed-offset 0] [--wasm] [--game v1|v2|v3]
+//             --game plays those rules instead of the model's own gameVersion (a cross-rules
+//             evaluation, e.g. a v2 model on rules v3: it warns, and the record notes both).
 //   node trainer/cli.js bench  [--seconds 3] [--workers N] [--hidden 16] [--wasm]
 //   node trainer/cli.js export [--dir runs/main] [--which best|current] [--out model.js]
 //                              (also writes model.css next to it: the same weights for index-css.html)
@@ -689,8 +691,15 @@ function loadModel(opts) {
 // certification eval of such a run should skip them: --seed-offset 25. Returns the
 // record, with the seeds that reached the target (passed) and the two-sided 95%
 // Clopper-Pearson interval for the pass rate.
-async function evalHeldOut(opts, targetOverride, wasm = false) {
-  const { model, source, target: savedTarget } = loadModel(opts);
+async function evalHeldOut(opts, targetOverride, wasm = false, gameOverride) {
+  const loaded = loadModel(opts);
+  const { source, target: savedTarget } = loaded;
+  const modelGame = loaded.model.gameVersion || 'v1';
+  if (gameOverride && !GAME_VERSIONS.includes(gameOverride)) throw new Error(`--game must be one of ${GAME_VERSIONS.join(', ')}`);
+  const model = gameOverride ? { ...loaded.model, gameVersion: gameOverride } : loaded.model;
+  if (gameOverride && gameOverride !== modelGame) {
+    console.warn(`WARNING: cross-rules evaluation: a ${modelGame} model on rules ${gameOverride}`);
+  }
   const target = targetOverride || savedTarget || DEFAULTS.target;
   const workers = Number(opts.workers) || defaultWorkers();
   const offset = opts.seedOffset !== undefined ? Number(opts.seedOffset) : 0;
@@ -703,15 +712,17 @@ async function evalHeldOut(opts, targetOverride, wasm = false) {
   const s = summary(scores);
   const passed = scores.filter(x => x >= target).length;
   const record = { time: ts(), source: path.relative(ROOT, source), generation: model.generation ?? null, target, seeds: seeds.length, seedOffset: offset, ...s, passed, passCI95: clopperPearson(passed, seeds.length), scores };
+  if (gameOverride) Object.assign(record, { gameVersion: gameOverride, modelGameVersion: modelGame });
   record.seconds = (Date.now() - t0) / 1000;
   if (!opts.model) fs.appendFileSync(path.join(path.dirname(source), 'evals.jsonl'), JSON.stringify(record) + '\n');
   return record;
 }
 
 async function evalCmd({ config: cli, opts }) {
-  const record = await evalHeldOut(opts, cli.target, !!cli.wasm);
+  const record = await evalHeldOut(opts, cli.target, !!cli.wasm, cli.gameVersion);
   const ci = record.passCI95;
-  console.log(`held-out eval (${record.seeds} seeds${record.seedOffset ? ` from index ${record.seedOffset}` : ''}, cap ${record.target}) of ${record.source}:`);
+  const rules = record.gameVersion && record.gameVersion !== record.modelGameVersion ? `, ${record.modelGameVersion} model on rules ${record.gameVersion}` : '';
+  console.log(`held-out eval (${record.seeds} seeds${record.seedOffset ? ` from index ${record.seedOffset}` : ''}, cap ${record.target}${rules}) of ${record.source}:`);
   console.log(`  median ${record.median}  min ${record.min}  max ${record.max}  (${record.seconds.toFixed(1)}s)`);
   console.log(`  passed ${record.passed}/${record.seeds}; pass rate 95% Clopper-Pearson [${ci.lower.toFixed(4)}, ${ci.upper.toFixed(4)}]`);
   console.log(`  scores ${record.scores.join(' ')}`);

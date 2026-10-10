@@ -3,6 +3,10 @@
 // Bit-identity harness: proves that a trainer change leaves existing behaviour unchanged.
 //
 //   node test/bit-identity.js <oldTree> <newTree> [--workers N] [--keep] [--only <scenario>[,<scenario>...]] [--allow-busy]
+//                             [--core-changed]
+// --core-changed: core.js/policy.js were edited on purpose (e.g. a new game version), so the
+// coreHash fields are expected to differ; they are reported as a note, not compared.
+// Everything else must still be identical.
 //
 // For each scenario, runs `node trainer/cli.js train ...` with identical arguments in
 // both checkouts (old = reference, new = candidate), each in its own scratch run dir
@@ -56,6 +60,7 @@ const SCENARIOS = [
   },
 ];
 
+let CORE_CHANGED = false;    // --core-changed
 const METRIC_SKIP = new Set(['time', 'genMs', 'fps', 'cumulativeMs']);
 const CKPT_FIELDS = ['theta', 'adam', 'rngState', 'best', 'heldOut', 'lastValidated', 'generation', 'reason', 'sigma',
   'stallMult', 'annealedAt', 'lastValMin', 'window', 'layers', 'coreHash'];
@@ -68,6 +73,7 @@ function parseArgs(argv) {
     if (a === '--workers') out.workers = Number(argv[++i]);
     else if (a === '--keep') out.keep = true;
     else if (a === '--allow-busy') out.allowBusy = true;
+    else if (a === '--core-changed') out.coreChanged = true;
     else if (a === '--only') out.only = String(argv[++i]).split(',');
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`);
     else out.trees.push(path.resolve(a));
@@ -167,6 +173,7 @@ function compareRun(oldDir, newDir, phaseLabel) {
   const cn = readJson(path.join(newDir, 'checkpoint.json'), 'checkpoint.json');
   const where = `checkpoint.json (generation ${co.generation})`;
   for (const k of CKPT_FIELDS) {
+    if (k === 'coreHash' && CORE_CHANGED) { if (co[k] !== cn[k]) notes.push(`coreHash differs (--core-changed): ${String(co[k]).slice(0, 12)} -> ${String(cn[k]).slice(0, 12)}`); continue; }
     if ((k in co) !== (k in cn)) throw new Diff(`${where} field ${k}: old=${k in co ? show(co[k]) : 'missing'} new=${k in cn ? show(cn[k]) : 'missing'}`);
     if (k in co) c.eq(`${where} field ${k}`, co[k], cn[k]);
   }
@@ -188,7 +195,7 @@ function compareRun(oldDir, newDir, phaseLabel) {
     if (!(k in bn)) throw new Diff(`best.json field ${k}: old=${show(bo[k])} new=missing`);
     c.eq(`best.json (generation ${bo.generation}) field ${k}`, bo[k], bn[k]);
   }
-  if ('coreHash' in bo || 'coreHash' in bn) c.eq('best.json coreHash', bo.coreHash, bn.coreHash);
+  if (!CORE_CHANGED && ('coreHash' in bo || 'coreHash' in bn)) c.eq('best.json coreHash', bo.coreHash, bn.coreHash);
 
   return { count: c.count, notes: notes.map(n => `${phaseLabel}: ${n}`), reason: [co.reason, cn.reason] };
 }
@@ -231,6 +238,7 @@ async function runScenario(sc, trees, workers) {
 async function main() {
   let opts;
   try { opts = parseArgs(process.argv.slice(2)); } catch (e) { console.error(e.message); process.exit(2); }
+  CORE_CHANGED = !!opts.coreChanged;
   const [oldTree, newTree] = opts.trees;
   // Only node processes running a trainer CLI (not shells whose command line merely mentions it).
   const busy = (spawnSync('pgrep', ['-fl', 'trainer/cli.js'], { encoding: 'utf8' }).stdout || '')

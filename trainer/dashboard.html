@@ -799,7 +799,7 @@ function playbackFrame(t) {
     : m.epoch ? `snapshot weights from epoch ${m.epoch}`
     : m.generation === null || m.generation === undefined ? `${m.which === 'best' ? 'best' : 'latest'} weights (behaviour clone)`
     : `${m.which === 'best' ? 'best' : 'latest'} weights from generation ${m.generation}`;
-  $('#pb-caption').textContent = `game ${g.version}${g.version === 'v2' ? ` (level ${g.level.toFixed(2)})` : ''} · ` +
+  $('#pb-caption').textContent = `game ${g.version}${g.version !== 'v1' ? ` (level ${g.level.toFixed(2)}${g.superLevel > 0 ? `, v3 level ${g.superLevel.toFixed(2)}` : ''})` : ''} · ` +
     `${src} · seed ${pb.seed} · ` +
     `score ${g.score()}${g.state === 'over' ? ' · crashed, next episode…' : ''} · speed ${g.speed.toFixed(2)}` +
     (pb.behind ? ' · playback can\'t keep up at this speed' : '');

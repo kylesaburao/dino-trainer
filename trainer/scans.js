@@ -116,6 +116,7 @@ function consume(st, line) {
     st.last = 'seed';
     if (st.seeds.has(r.seed)) { st.dupes++; return; }
     st.seeds.add(r.seed);
+    if (r.game && !st.game) st.game = r.game;          // survey.js --game (rules other than v2)
     st.frames += r.frames || 0;
     const pass = st.kind === 'survey' ? !r.crashed : r.pass === true;
     if (pass) st.passes++; else st.failScores.push(r.score);
@@ -229,7 +230,7 @@ function summary(file, st, root, runNames, now) {
     modelRel: model && model.lastIndexOf('/runs/') >= 0 ? model.slice(model.lastIndexOf('/runs/') + 1) : model,
     owner: ownerOf(model, root, runNames),
     solver: meta.solver || null,
-    layers: h.layers || null, gameVersion: h.gameVersion || null, wasm: h.wasm ?? null, workers: h.workers ?? null,
+    layers: h.layers || null, gameVersion: h.gameVersion || st.game || null, wasm: h.wasm ?? null, workers: h.workers ?? null,
     coreHash: h.coreHash || null,
     base: st.kind === 'scan' ? h.base : meta.base, n: n ?? null, target: target ?? null,
     games, passes: st.passes, failures, frames: st.frames, dupes: st.dupes, badLines: st.badLines,

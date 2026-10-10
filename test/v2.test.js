@@ -17,7 +17,7 @@ function play(version, seed, capScore, startScore) {
 test('v1 is the default; unknown versions are rejected', () => {
   assert.strictEqual(C.createGame({ rng: C.createRng(1) }).version, 'v1');
   assert.strictEqual(C.createGame({ rng: C.createRng(1), version: 'v2' }).version, 'v2');
-  assert.throws(() => C.createGame({ rng: C.createRng(1), version: 'v3' }), /unknown game version/);
+  assert.throws(() => C.createGame({ rng: C.createRng(1), version: 'v4' }), /unknown game version/);
 });
 
 test('v2 is exactly v1 below 1,000 points (golden traces replayed on v2)', () => {

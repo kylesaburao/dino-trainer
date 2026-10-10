@@ -6,6 +6,13 @@ A Chrome-dino clone in plain JavaScript with an "AI mode" driven by a small neur
 
 Open `index.html` in a browser, directly over `file://`. There is no build step. Toggle AI mode on the page to watch the shipped model play. `index-css.html` runs the same network in the browser's CSS engine.
 
+**Game rules.** Add `?game=v1`, `?game=v2` or `?game=v3` to the URL of either page to pick the rules; by default a page plays the rules its model was trained for. Each version keeps its own high score.
+- **rules v1**: the original game; difficulty stops rising at about 1,700 points.
+- **rules v2**: v1 up to 1,000 points, then harder on a log scale up to 1,000,000 points (speed cap 13 → 22, more pterodactyls, tighter gaps).
+- **rules v3**: v2 up to 100,000 points, then the speed cap climbs to 60 px/frame by 1,000,000. From about 200,000 points most obstacles leave less than 150 ms between appearing on screen and the last moment to jump or duck, beyond human reaction time; every sequence stays solvable by an exact solver. See `research/game-v3.md`.
+
+To score a model on other rules than it was trained for: `node trainer/cli.js eval --dir <run> --game v3 ...` (it warns that this is a cross-rules evaluation). Train for rules v3 with `--game v3` (`train`, `bc-gen`).
+
 ## Train a model
 
 The shipped model is a **behaviour clone**: a small MLP trained by supervised learning to copy an exact solver (`test/solver.js` `createDuckSolver`, which jumps and ducks). The model sees only the 44 allowed `observe()` features. Training takes two steps: generate demonstrations, then train on them.
