@@ -24,7 +24,7 @@ A curriculum that really starts episodes inside 400–800 needs a code change (n
 
 ## 2. Premise check (static probe, done; `research/scripts/prereg-es-curriculum/late-probe.js` (usage: `node <script> <checkpoint.json> <repo root>`), single-threaded, ~1 min)
 
-Setup: the stuck centre θs (pre-resume checkpoints of `runs/exp-surv-32x32-s{9,7,5}`, ee6995c; `core.js` and `policy.js` are unchanged since, so the core hash still matches). 40 episodes per condition. Late starts drawn as B′ draws them (uniform on [2000, 1M)).
+Setup: the stuck centre θs (pre-resume checkpoints, now frozen as `runs/exp-bp-start/ckpt-s{9,7,5}.json`, from ee6995c; `core.js` and `policy.js` are unchanged since, so the core hash still matches). 40 episodes per condition. Late starts drawn as B′ draws them (uniform on [2000, 1M)).
 
 | θ | Condition | Median progress | Killers (of 40) | Mean frames/ep | Pteros seen per 1000 frames (low/mid/high) |
 |---|---|---|---|---|---|
@@ -66,6 +66,9 @@ Which comparisons separate which:
 ### 4.1 Paired θs, not seeds (the plateau lottery is taken out of the measurement)
 
 Both arms resume from **the same pre-resume checkpoint** (θ, Adam state, RNG state, generation). The checkpoint is copied into a fresh run directory per arm.
+- Start checkpoints are frozen in `runs/exp-bp-start/ckpt-sN.json` (gitignored, desktop host), with `SHA256SUMS`. The `runs/exp-surv-*` directories now hold *post*-resume checkpoints, so don't use them.
+- Each run directory gets `cp runs/exp-bp-start/ckpt-sN.json runs/exp-bp-sN-<arm>/checkpoint.json` and a sha256 check before launch.
+- **Launch check:** the checkpoints come from ee6995c and carry its config keys (`tieTarget`, `tieGain`, `sigmaMax`). On main, resume spreads `ck.config` and backfills new keys, and `st.window` takes `--window` when it is given on the CLI (`trainer/cli.js` ~281–293). That reads as fine, but before the batch, run a zero-generation resume (`--generations G0`) of one scratch copy per arm to confirm it starts. Needs mac-2's OK, since it is a `train` invocation.
 - **Stuck θs (test set, n = 4):** s5 (gen 1435), s7 (1500), s8 (1500), s9 (1017). Each escaped, then stalled below about 1100 in ≥ 730 further hygiene generations.
 - **Positive controls (n = 2):** s4 (gen 1500) and s12 (gen 1500). In the hygiene resume they reached fitMean > 2000 at +505 and +65 generations.
 - Pairing is **of starting state only**. B′ draws 8 episodes per candidate against hygiene's 4, so the trainer RNG streams diverge from the first generation. This is not common-random-numbers pairing.
@@ -74,20 +77,20 @@ Both arms resume from **the same pre-resume checkpoint** (θ, Adam state, RNG st
 
 Validation doesn't affect the θ trajectory; it is only there to measure the event the same way in both arms.
 - **hyg:**
-  `train --resume --dir runs/exp-bp-sS-hyg --wasm --generations G0+2000 --time-budget 15 --eval-every 10 --val-seeds 12`
+  `train --resume --dir runs/exp-bp-sS-hyg --wasm --generations G0+2000 --time-budget 30 --eval-every 10 --val-seeds 12`
   The run's own config (mid + decoupled 0.01, pop 128, σ 0.1, lr 0.03, 4 episodes, no curriculum) is unchanged. For the first ~730–976 generations this replays the earlier `exp-surv` resumes, which doubles as a determinism check: diff with `tools/diff-metrics.js`.
 - **cur (B′):**
-  `train --resume --dir runs/exp-bp-sS-cur --wasm --generations G0+2000 --time-budget 15 --eval-every 10 --val-seeds 12 --window 25000 --episodes 8 --start-dist points --start-zero-frac 0.5 --start-zero-cap 50000 --window-adapt --fitness-agg geomean`
+  `train --resume --dir runs/exp-bp-sS-cur --wasm --generations G0+2000 --time-budget 30 --eval-every 10 --val-seeds 12 --window 25000 --episodes 8 --start-dist points --start-zero-frac 0.5 --start-zero-cap 50000 --window-adapt --fitness-agg geomean`
 - Left out of both arms: `--select count --stop-rule allpass:59 --fold-validation`. They don't move θ. `allpass` would spend held-out seeds 0..58, and per-generation validation after the event is expensive. No `session`, `finish` or `--auto-export`.
 
 ### 4.3 Primary metric (time-to-event, censored)
 
-- **Event:** the first validation, every 10 generations on the centre θ with 12 validation seeds from score 0 capped at 1M, where **valMedian ≥ 2000**.
+- **Event:** **two consecutive validations** (every 10 generations on the centre θ, 12 validation seeds from score 0, capped at 1M) with **valMedian ≥ 2000**. The event is timed at the first of the pair. A single reading isn't enough, because the 12-seed median is noisy at the wall and s8 had a one-generation blip.
   - fitMean can't be compared across arms: the curriculum's fitness is progress in [0, 1].
-  - A watcher (a small script to write in `tools/`) sends SIGINT to the run once the event is logged. SIGINT saves a checkpoint and releases the lock, so post-wall generations, which are expensive, aren't paid for.
+  - A watcher (a small script to write in `tools/`) sends SIGINT to the run once the second confirming reading is logged. SIGINT saves a checkpoint and releases the lock, so post-wall generations, which are expensive, aren't paid for.
 - **Primary outcome: training frames from the resume point to the event**, Σ `frames` over the logged generations.
   - It is deterministic, unaffected by host contention, and charges B′ for its extra episodes.
-  - Censored at G0 + 2000 generations, or at the 15-minute session budget.
+  - Censored at G0 + 2000 generations. The 30-minute session budget is a safety cap only and shouldn't bind (§6).
 - **Secondary outcomes:**
   - generations to the event;
   - wall time (cumulativeMs) to the event;
@@ -103,7 +106,8 @@ Validation doesn't affect the θ trajectory; it is only there to measure the eve
 ### 4.5 Sample size and what it can detect
 
 - Measured spread of 200→2000 under hygiene: 207, 524, >867, >1049, >1087, >1442 generations. sd(ln T) is well above 0.7 once censoring is accounted for.
-- For a 2× paired effect with sd ≈ 0.8 and between-arm correlation about 0.3 from the shared start, n ≈ 11 θs would be needed. That isn't feasible here.
+- For a 2× paired effect with sd ≈ 0.8 and between-arm correlation about 0.3 from the shared start, n ≈ 11 θs would be needed (one-sided α 0.05, power 0.8; about 15 two-sided). That isn't feasible here.
+- The positive controls are single runs. With this much chaos, one run is more than 2× slower than its pair by luck about 20% of the time. So the controls are judged only on reaching the event within H, and how much slower they were is reported as a secondary result.
 - **With n = 4 stuck θs this is a screen for large, qualitative effects**: clears vs doesn't clear within H, or about ≥ 4–5× in frames. A sign test on 4/4 gives p = 0.0625. A null means "no effect larger than ~4× detected in this scope", not "no effect".
 - **Confirmation step if the screen is positive:**
   1. Generate about 10 more escaped-and-stuck θs: hygiene survey seeds 13–30 under `--wasm`, about 1–2 min each to gen 1500.
@@ -116,17 +120,17 @@ Validation doesn't affect the θ trajectory; it is only there to measure the eve
 
 | Outcome | Reading | Register action / next step |
 |---|---|---|
-| **A** — B′ event on ≥ 3 of 4 stuck θs, each with fewer frames than its hyg pair (hyg censored counts as more), AND both B′ positive controls reach the event within 2× the frames of their hyg pairs, AND no B′ opening loss | Supports H2 (look at the type split: if s9 clears too, H3 alone is excluded) | "promising, confirmation pending" → run the §4.5 confirmation |
+| **A** — B′ event on ≥ 3 of 4 stuck θs, each with fewer frames than its hyg pair (hyg censored counts as more), AND both B′ positive controls reach the event within H, AND no B′ opening loss | Supports H2 (look at the type split: if s9 clears too, H3 alone is excluded) | "promising, confirmation pending" → run the §4.5 confirmation |
 | **B** — B′ ≤ 1 of 4 stuck θs and hyg ≤ 1 of 4; hyg positive controls reach the event; no B′ harm | H1 (or H3 with no transfer); no effect > ~4× detected | Prune **this design (B′ flags)**, scope = 32,32, these 6 θs, H 2000, ee6995c-equivalent code with `--wasm`. Row stays OPEN for a true 400–800-start curriculum (code change) |
-| **C** — any B′ opening loss (valMedian < 200 after +100 gens on any θ), OR B′ positive controls slower than 2× their hyg pairs, OR hyg beats B′ on ≥ 3 of 4 stuck θs | H4 | Prune B′ as **harmful in this scope**. Reopen if a curriculum keeps the opening (e.g. lexicographic ranks, archived HANDOFF §9 fix 4) |
+| **C** — any B′ opening loss (valMedian < 200 at two consecutive validations after +100 gens on any θ), OR a B′ positive control fails to reach the event within H, OR hyg beats B′ on ≥ 3 of 4 stuck θs | H4 | Prune B′ as **harmful in this scope**. Reopen if a curriculum keeps the opening (e.g. lexicographic ranks, archived HANDOFF §9 fix 4) |
 | **D** — anything else (e.g. 2 of 4 vs 1 of 4, or type-split results such as B′ clearing s9 but no type-M θ) | Inconclusive at n = 4 | Report the split by failure type. Decide with mac-2 whether the §4.5 confirmation is worth it |
 | **Invalid** — a hyg positive control (s4 or s12) doesn't reach the event within H | The event definition or horizon is wrong; the test can't show success | Fix the event (e.g. val cap or threshold) and rerun the controls before reading anything |
 
 ## 6. Compute (desktop host, Ryzen 7 9700X, 16 workers, `--wasm`)
 
-- **Per-generation cost while stuck:** the s9 hyg resume took about 0.37 s per generation without wasm; desktop-2 measured a 1.65–1.70× speed-up on x86, so about 0.22 s.
-- **B′ adds** 4 late episodes of 270–830 frames each to the 4 from-0 episodes of 3,100–5,100 frames: about +10–25% frames per generation.
-- **Worst case, all censored:** 6 θs × 2 arms × 2000 generations × ~0.22–0.28 s ≈ **90 min**. Expected is lower: the positive controls stop at their event, and so does any B′ success. Validation (12 seeds every 10 generations) costs under 1% before the wall.
+- **Per-generation cost while stuck**, from the hyg resumes without wasm: s9 about 0.37 s; type M (s5, s7, s8) about 0.36–0.49 s, which is 730–1013 generations in 6 min. desktop-2 measured a 1.65–1.70× speed-up on x86, so about 0.22–0.30 s with `--wasm`. Generations slow down as θ improves (longer episodes).
+- **B′ adds** 4 late episodes of 270–830 frames each to the 4 from-0 episodes of 3,100–5,100 frames: about +10–25% frames per generation. So 2000 generations take about 10–12.5 min per run, under the 30-min safety cap.
+- **Worst case, all censored:** 6 θs × 2 arms ≈ **100–110 min**. Expected is lower: the positive controls stop at their event, and so does any B′ success. Validation (12 seeds every 10 generations) costs under 1% before the wall.
 - One trainer at a time. desktop-2 gets "start" and "batch done" messages, as before.
 
 ## 7. Scope and caveats recorded with the result
