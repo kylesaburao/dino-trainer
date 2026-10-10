@@ -50,3 +50,57 @@ Don't build any of this before the precondition above holds.
 
 ### Depends on
 `research/prereg-bc-sweep.md` results: which shapes pass tier B on both seeds, and the per-configuration effort.
+
+---
+
+## Q2. A teacher that ducks: "v3"
+Raised by the user, 2026-10-10. Status: **open; not started.**
+
+**Naming (the user's convention, 2026-10-10).** Everything up to this point is **"v2"**: the jump-only solver teacher, its demonstrations, the shipped clone and the sweep. A ducking solver, and training on it, is **"v3"**.
+- This is a *project or teacher generation*, not a game-rules version. The game rules stay v2 (`createGame({ version: 'v2' })`, `?game=v2`).
+- In code, run dirs and docs, write it as "teacher v3" or "pipeline v3". Never write it as `gameVersion: 'v3'`. A game version v3 would mean different rules, a different `HI_KEY` and new parity goldens, none of which this needs.
+
+### Why the v2 teacher never ducks
+- The fairness model (`core.js` `requirement()`, comment lines 255–290) puts every obstacle in one of two classes:
+  - must be **grounded** during its overlap: high pterodactyls;
+  - must be **airborne**: cacti, low and mid pterodactyls.
+- The generator then spaces obstacles so that a jump-only plan always exists. It says so itself: "Fast-drop and ducking only add options, so the model is conservative."
+- `test/solver.js` executes that jump-only plan, so it never presses DOWN. The clone copies it, so its duck output is never trained (class weight 0).
+
+### What ducking would change
+| Pterodactyl (hitbox y) | Standing | Ducking | Options |
+|---|---|---|---|
+| low, y = 108 (box 121–129) | hit | hit | must jump |
+| mid, y = 82 (box 95–103) | hit | clear | **jump or duck** |
+| high, y = 58 (box 71–79) | clear | clear | stay grounded |
+
+(From the `tools/wall-diag.js` header; verify against `obstacleBox` and the duck box before use.)
+
+**Claim to verify (reasoned from the code, not tested):** ducking under a mid pterodactyl should never be less safe than the planned jump.
+- The overlap interval O_P sits inside the planned airborne interval A_P.
+- Every neighbouring requirement is already disjoint from A_P, or separated from it by at least minGround.
+- So staying grounded and ducking through O_P demands less of the timeline than the jump does.
+
+Open details: when DOWN can be pressed and released relative to landing from the previous jump, `applyKeys` semantics, and whether the jump key may still be held.
+
+Fast-drop (DOWN in mid-air) is a separate, later option. probe A found the ES model's late crashes were landings into fast, high pterodactyls that a fast-drop would have survived. Including it means changing the arc model, so keep it out of the first v3.
+
+### Cheapest discriminating sequence (pre-register before running)
+1. **Necessary condition, no training.** Write `createDuckSolver`: duck under every mid pterodactyl, otherwise behave like `createSolver`. It must reach 1M with **0 crashes** over thousands of seeds, the same bar the v2 solver meets.
+   - A crash means the claim above is wrong somewhere. Diagnose it before going further.
+   - Measure the share of frames with DOWN, so we know there is enough duck signal to learn.
+2. **Learnability.** Run `bc-gen` with the v3 teacher; three classes are now present. Then `bc-train` at the shipped shape and the smallest shape that passed the v2 sweep. Run tier A, then the 1,000-game scan.
+   - Check per-class recall for duck.
+   - The 44 features include pterodactyl height class, so the decision should be observable. Verify that per frame: does the solver's duck decision depend on anything outside `observe()`?
+3. **Comparison with v2, paired.** Same shapes and the same scan seeds. Compare scan failures, held-out agreement, effort-to-criterion, and the min top-2 margin. A third class may thin the margins, which matters for CSS faithfulness.
+4. **Ship (only with the user's approval):** certification on fresh held-out offsets, paired with the shipped v2 clone, plus the browser check with CSS agreement.
+
+### Decision it informs
+Whether the shipped AI should become a v3 clone, which ducks and looks more like a human player. Shipping v3 needs:
+- reliability on the same bars as v2 (0 failures in the scans and 150/150 certified);
+- the user's approval.
+
+A v3 clone that is equally reliable is a presentation and behaviour change, not a reliability gain.
+
+### Depends on
+Nothing blocking. It can start once the Mac is free of the v2 sweep, which is now in its last scans.
