@@ -1,0 +1,12 @@
+{
+  "name": "dino-game",
+  "private": true,
+  "description": "Chrome-dino clone with a headless simulation core and a neuroevolution-trained AI mode (no npm dependencies)",
+  "scripts": {
+    "test": "node --test test/",
+    "test:browser": "node test/browser-check.js",
+    "test:smoke": "node test/smoke-trainer.js",
+    "bench": "node trainer/cli.js bench",
+    "dashboard": "node trainer/dashboard.js"
+  }
+}

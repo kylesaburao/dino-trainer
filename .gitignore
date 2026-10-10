@@ -1,0 +1,9 @@
+# Training artifacts: bulky/intermediate checkpoints, logs, locks, temp files.
+# best.json and metrics.* in a run directory are small and are committed.
+runs/*/checkpoint*.json
+runs/*/*.log
+runs/*/*.lock
+runs/*/*.tmp
+# Smoke-test runs are throwaway.
+runs/smoke*/
+.DS_Store
