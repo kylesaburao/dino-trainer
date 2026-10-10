@@ -74,3 +74,18 @@ Is `teacher-duck` a valid teacher, one that never crashes and actually ducks, so
 - Rules v2, from score 0, full games.
 - Ducking under mid pterodactyls only. No fast-drop.
 - Code commit recorded with the result.
+
+## Results
+
+### Control arm (`createSolver`), positive control: **PASS (harness valid)**
+- Run: `research/scripts/prereg-teacher-duck/survey.js --solver jump --base 40000000 --n 5000 --workers 16` on the desktop host (Ryzen 7 9700X, WSL2).
+  - Harness commit `fd145d1`; core hash `0f329d4e3493…`; node v26.9.0.
+  - 2026-10-10 19:29:26Z → 19:45:45Z (979 s).
+  - Raw JSONL in `runs/exp-teacher-duck/` (gitignored).
+- **0 crashes in 5,000 full rules-v2 games to 1,000,000 points** (seeds 40,000,000–40,004,999). One-sided 95% Clopper–Pearson upper bound on the crash rate: 0.060%.
+- 9.72B frames. DOWN held on 0.000% of frames; 0 of 287,419,501 passed obstacles ducked, as expected for the jump-only solver.
+- Mid pterodactyls (game-side: the box clears the ducking box but hits the standing box, i.e. y = 82): 41,372,440 encountered, 41,371,831 passed, 0 ducked.
+- `createSolver`'s body is unchanged by the merge of `createDuckSolver` (9616c3b; the diff touches only the import and export lines).
+
+### Duck arm (`createDuckSolver`, solver commit `9616c3b`)
+Running on the same seeds since 19:45:52Z (branch head `e635de4`). Results follow.
