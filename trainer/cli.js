@@ -20,12 +20,13 @@
 //   node trainer/cli.js session [train options]          train, then finish (one detached command)
 //   node trainer/cli.js bc-gen   --dir runs/<name> [--seeds 1-40] [--levels 0,2000,50000,300000,900000]
 //                              [--span0 3000] [--span 5000] [--keep-boring 10] [--game v2] [--workers N] [--overwrite]
-//                              [--teacher jump|duck]
+//                              [--teacher jump|duck] [--score-window A-B] [--student <best.json>]
 //   node trainer/cli.js bc-train --dir runs/<name> --hidden 32,32 [--backend node|python] [--epochs 15]
 //                              [--batch 1024] [--lr 2e-3] [--seed 1] [--demos <dir or demos.json>]
 //                              [--target 1000000] [--workers N] [--wasm] [--force] [--overwrite] [--snapshots]
 //                              [--distill-from <best.json> [--distill-mode soft|hard] [--tau 1] [--alpha 0]]
 //                              [--quant-bits N [--quant-scheme row|layer|pow2]]
+//                              [--extra-demos <dir>[,<dir>...]] [--transition-weight W]
 //   node trainer/cli.js bc-quantize --from <best.json> --dir runs/<name> --quant-bits N [--quant-scheme row|layer|pow2]  (refuses another core hash unless --force)
 //                              [--target 1000000] [--workers N] [--wasm] [--overwrite]
 //
@@ -81,6 +82,24 @@
 //   bc-quantize post-training quantization of --from (a best.json) with the same rule,
 //             into a new run dir: best.json (config.quant mode 'ptq', quantFrom {path,
 //             paramsSha256}), after the same 25-seed validation. No training, no bc-metrics.
+//   Release-fix flags (research/prereg-teacher-duck-release-fix.md §4.1; each off by default,
+//   and absent they leave demos and params byte-identical):
+//   bc-gen --score-window A-B  keep only running frames with A <= score < B (before the
+//             boring rule: frames outside neither are kept nor advance its counter). Use with
+//             --levels 0: a non-zero level starts at max speed. The manifest records scoreWindow.
+//   bc-gen --student <best.json>  DAgger rollouts: the student model plays, and the --teacher
+//             solver labels each frame as a shadow queried from frame 0 on the student's
+//             trajectory (airborne frames after a takeoff the shadow did not choose are dropped,
+//             counted as undefinedAir). The manifest records source 'dagger', the student path
+//             and params sha256, studentCrashes (not solverCrashes) and undefinedAir.
+//   bc-train --extra-demos <dir>[,<dir>...]  (python backend only) append those demos' rows,
+//             in order, after --demos; each must match its rules and teacher and pass the
+//             core-hash and sha checks. config.extraDemos records them.
+//   bc-train --transition-weight W  (python backend only) multiply the weight of duck-transition
+//             rows (grounded; onset: not ducking, label duck; release: ducking, label not duck)
+//             by W, after the class weights. config.transitionWeight and config.transitions
+//             (row counts) record it; W = 1 skips the code path. Neither combines with
+//             --distill-from (its teacher logits cover the base demos only) for now.
 //
 // Training-only curriculum (off by default; validation, held-out assessment, the stop
 // check, assess and export always play full games from 0 to --target):
@@ -270,7 +289,8 @@ function parseArgs(argv) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = true;
     } else if (['--workers', '--time-budget', '--dir', '--which', '--model', '--out', '--seconds', '--log-every', '--seeds', '--seed-offset',
       '--levels', '--span0', '--span', '--keep-boring', '--backend', '--epochs', '--batch', '--demos', '--teacher',
-      '--distill-from', '--tau', '--distill-mode', '--alpha', '--quant-bits', '--quant-scheme', '--from'].includes(a)) {
+      '--distill-from', '--tau', '--distill-mode', '--alpha', '--quant-bits', '--quant-scheme', '--from',
+      '--extra-demos', '--transition-weight', '--score-window', '--student'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = takesValue();
     } else {
       throw new Error(`unknown argument ${a}`);
@@ -837,10 +857,24 @@ async function bcGenCmd({ config: cli, opts }) {
   if (!o.levels.every(l => Number.isInteger(l) && l >= 0)) throw new Error('--levels must be non-negative integers');
   if (!(Number.isInteger(o.keepBoring) && o.keepBoring >= 1)) throw new Error('--keep-boring must be a positive integer');
   if (!(o.span0 > 0 && o.span > 0)) throw new Error('--span0 and --span must be positive');
+  if (opts.scoreWindow !== undefined) {
+    const m = /^(\d+)-(\d+)$/.exec(opts.scoreWindow);
+    if (!m || !(Number(m[1]) < Number(m[2]))) throw new Error(`--score-window must be A-B with integers A < B, got ${opts.scoreWindow}`);
+    o.scoreWindow = [Number(m[1]), Number(m[2])];
+  }
+  if (opts.student !== undefined) {
+    const file = path.resolve(opts.student);
+    const model = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (model.format !== FORMAT || !Array.isArray(model.layers) || model.layers[0] !== OBS_DIM) throw new Error(`--student ${opts.student}: not a ${FORMAT} model with ${OBS_DIM} inputs`);
+    if ((model.gameVersion || 'v1') !== o.gameVersion) throw new Error(`--student ${opts.student}: trained for rules ${model.gameVersion}, demos are ${o.gameVersion}`);
+    o.studentModel = { format: model.format, layers: model.layers, params: model.params, actionRepeat: model.actionRepeat || 1, gameVersion: model.gameVersion };
+    o.student = { path: path.relative(ROOT, file), paramsSha256: require('crypto').createHash('sha256').update(JSON.stringify(model.params)).digest('hex') };
+  }
   const manifestFile = path.join(dir, 'demos.json');
   if (fs.existsSync(manifestFile) && !opts.overwrite) throw new Error(`${manifestFile} exists; pass --overwrite to regenerate`);
   log(`bc-gen: dir=${dir} seeds ${o.seeds[0]}-${o.seeds[o.seeds.length - 1]} levels ${o.levels.join(',')} span0 ${o.span0} span ${o.span} ` +
-    `keep-boring ${o.keepBoring} game ${o.gameVersion} teacher ${o.teacher} workers ${o.workers} core=${o.coreHash.slice(0, 12)}`);
+    `keep-boring ${o.keepBoring} game ${o.gameVersion} teacher ${o.teacher} workers ${o.workers} core=${o.coreHash.slice(0, 12)}` +
+    `${o.scoreWindow ? ` score-window ${o.scoreWindow.join('-')}` : ''}${o.student ? ` student ${o.student.path} (params ${o.student.paramsSha256.slice(0, 12)}; teacher labels as a shadow)` : ''}`);
   const t0 = Date.now();
   let lastLog = 0;
   o.onProgress = (done, total, rows) => {
@@ -850,7 +884,8 @@ async function bcGenCmd({ config: cli, opts }) {
   writeJsonAtomic(manifestFile, manifest);
   log(`bc-gen: ${manifest.rows} rows (none ${manifest.counts.rows.none}, jump ${manifest.counts.rows.jump}` +
     `${manifest.counts.rows.duck ? `, duck ${manifest.counts.rows.duck}` : ''}), ` +
-    `solver crashes ${manifest.solverCrashes}, ${((Date.now() - t0) / 1000).toFixed(1)}s -> ${path.relative(ROOT, manifestFile)}`);
+    `${manifest.source === 'dagger' ? `student crashes ${manifest.studentCrashes}, undefined airborne frames ${manifest.undefinedAir}` : `solver crashes ${manifest.solverCrashes}`}, ` +
+    `${((Date.now() - t0) / 1000).toFixed(1)}s -> ${path.relative(ROOT, manifestFile)}`);
   if (manifest.solverCrashes) throw new Error(`the solver crashed in ${manifest.solverCrashes} episode(s); the demonstrations are not trustworthy`);
 }
 
@@ -909,6 +944,17 @@ async function bcTrainCmd({ config: cli, opts }) {
   if (opts.snapshots && backend !== 'python') throw new Error('--snapshots is only supported with --backend python');
   const dz = parseDistill(opts);
   const quant = parseQuant(opts, bc);
+  for (const f of ['extraDemos', 'transitionWeight']) {
+    if (opts[f] !== undefined && backend !== 'python') throw new Error(`--${f.replace(/[A-Z]/g, c => '-' + c.toLowerCase())} is only supported with --backend python`);
+  }
+  let transitionWeight;
+  if (opts.transitionWeight !== undefined) {
+    transitionWeight = Number(opts.transitionWeight);
+    if (!(Number.isFinite(transitionWeight) && transitionWeight > 0)) throw new Error(`--transition-weight must be a positive number, got ${opts.transitionWeight}`);
+  }
+  // Teacher logits are computed on the base demos only, so the release-fix flags do not combine
+  // with distillation yet (quantization is fine).
+  if (dz && (opts.extraDemos !== undefined || transitionWeight !== undefined)) throw new Error('--extra-demos and --transition-weight do not combine with --distill-from');
   const d = bc.TRAIN_DEFAULTS;
   const o = {
     hidden: cli.hidden,
@@ -926,6 +972,16 @@ async function bcTrainCmd({ config: cli, opts }) {
   const hash = coreHash();
   const demos = bc.resolveDemos(path.resolve(opts.demos || dir));
   const sha = bc.checkDemos(demos, hash, !!opts.force, (m) => log(m));
+  // --extra-demos: each must match the base set (rules, features, teacher) and pass checkDemos.
+  const extras = (opts.extraDemos === undefined ? [] : String(opts.extraDemos).split(',').filter(Boolean)).map((p) => {
+    const e = bc.resolveDemos(path.resolve(p));
+    const eSha = bc.checkDemos(e, hash, !!opts.force, (m) => log(m));
+    const tn = (m) => m.teacherName || 'jump';
+    if (e.manifest.gameVersion !== demos.manifest.gameVersion) throw new Error(`--extra-demos ${p}: rules ${e.manifest.gameVersion}, base demos ${demos.manifest.gameVersion}`);
+    if (tn(e.manifest) !== tn(demos.manifest)) throw new Error(`--extra-demos ${p}: teacher ${tn(e.manifest)}, base demos ${tn(demos.manifest)}`);
+    return { ...e, sha: eSha };
+  });
+  if (opts.extraDemos !== undefined && !extras.length) throw new Error('--extra-demos needs at least one demos dir');
   const release = acquireLock(dir);
   process.on('exit', release);
   const snapshotDir = opts.snapshots ? path.join(dir, 'snapshots') : null;
@@ -934,6 +990,8 @@ async function bcTrainCmd({ config: cli, opts }) {
   if (dz && dz.model.gameVersion && dz.model.gameVersion !== gameVersion) throw new Error(`--distill-from: teacher plays ${dz.model.gameVersion}, demos are ${gameVersion}`);
   log(`bc-train: dir=${dir} backend=${backend} layers=${[OBS_DIM, ...o.hidden, 3].join('-')} epochs ${o.epochs} batch ${o.batch} lr ${o.lr} seed ${o.seed} ` +
     `demos ${path.relative(ROOT, demos.manifestFile)} (${demos.manifest.rows} rows, sha ${sha.slice(0, 12)}) core=${hash.slice(0, 12)}` +
+    extras.map(e => ` extra-demos ${path.relative(ROOT, e.manifestFile)} (${e.manifest.rows} rows, sha ${e.sha.slice(0, 12)})`).join('') +
+    `${transitionWeight !== undefined ? ` transition-weight ${transitionWeight}` : ''}` +
     `${dz ? distillText(dz) : ''}${quant ? quantText(quant) : ''}`);
   // Teacher logits on every demo row, straight from the Float32 rows (no Float64 copy).
   let logits = null;
@@ -965,6 +1023,8 @@ async function bcTrainCmd({ config: cli, opts }) {
     const logitsFile = path.join(dir, `teacher-logits.${process.pid}.tmp`);
     try {
       if (dz) { bc.writeLogits(logitsFile, logits); extra.distill = { logitsFile, mode: dz.mode, tau: dz.tau, alpha: dz.alpha }; }
+      if (extras.length) extra.extraDemos = extras.map(e => e.binFile);
+      if (transitionWeight !== undefined) extra.transitionWeight = transitionWeight;
       result = await bc.trainPython(demos.binFile, outFile, { ...o, ...(snapshotDir ? { snapshotDir } : {}), ...extra }, ROOT, (line) => {
         if (line.startsWith('{')) onEpoch(JSON.parse(line)); else if (line) log(line);
       });
@@ -998,6 +1058,8 @@ async function bcTrainCmd({ config: cli, opts }) {
     ...(snapshotDir ? { snapshots: path.relative(ROOT, snapshotDir) } : {}),
     ...(dz ? distillConfig(dz, bc) : {}),
     ...(quantConfig ? { quant: quantConfig } : {}),
+    ...(extras.length ? { extraDemos: extras.map(e => ({ demos: path.relative(ROOT, e.manifestFile), demosSha256: e.sha, demosRows: e.manifest.rows })) } : {}),
+    ...(transitionWeight !== undefined ? { transitionWeight, ...(result.transitions ? { transitions: result.transitions } : {}) } : {}),
   };
   writeJsonAtomic(bestFile, bc.assembleBest({ layers: result.layers, params: result.params, validation, coreHash: hash, config }));
   release();

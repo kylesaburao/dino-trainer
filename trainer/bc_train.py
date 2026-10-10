@@ -22,6 +22,10 @@ weights; the output params are the float64 q * scale, and the output gains `scal
 pow2 also fake-quantizes the biases, one 2^-k per layer recomputed every step, and the
 output gains `k` instead of `scales`).
 Neither draws RNG. Distilled rows add `distillLoss`; `loss` stays the CE vs the solver.
+--extra-demos FILE (repeatable, optional) appends FILE's rows after --demos, in order.
+--transition-weight W (optional; absent or 1 = skipped) multiplies the weight of duck-transition
+rows (onset and release, on the solver labels; trainer/bc.js transitionMask) by W after the
+class weights.
 Needs numpy (the repo's .venv; the PYTHON env var overrides the interpreter)."""
 import argparse, json, math, os, time
 import numpy as np
@@ -42,12 +46,17 @@ ap.add_argument('--tau', type=float, default=1.0)
 ap.add_argument('--alpha', type=float, default=0.0)
 ap.add_argument('--quant-bits', type=int, default=0)
 ap.add_argument('--quant-scheme', default='row', choices=['row', 'layer', 'pow2'])
+ap.add_argument('--extra-demos', action='append', default=[])
+ap.add_argument('--transition-weight', type=float, default=None)
 a = ap.parse_args()
 
 ROW = a.obs_dim
 hidden = [int(h) for h in a.hidden.split(',')]
 epochs = a.epochs
 D = np.fromfile(a.demos, dtype=np.float32).reshape(-1, ROW + 2)
+if a.extra_demos:
+    # --extra-demos (research/prereg-teacher-duck-release-fix.md §4.1): rows appended in order.
+    D = np.concatenate([D] + [np.fromfile(f, dtype=np.float32).reshape(-1, ROW + 2) for f in a.extra_demos])
 cols = list(range(ROW))
 X = D[:, cols].astype(np.float32); y = D[:, ROW].astype(np.int64); sw = D[:, ROW + 1].astype(np.float32)
 del D
@@ -55,6 +64,17 @@ N = len(y); counts = np.array([(sw * (y == c)).sum() for c in range(3)])
 cw = np.where(counts > 0, np.sqrt(counts.sum() / (2 * np.maximum(counts, 1))), 0.0)
 w_all = (sw * cw[y]).astype(np.float32)
 has_duck = bool(counts[2] > 0)
+transitions = None
+if a.transition_weight is not None and a.transition_weight != 1:
+    # --transition-weight W: duck-transition rows (trainer/bc.js transitionMask: grounded, and
+    # onset = not ducking with label 2, or release = ducking with label != 2) weigh W times
+    # more. Applied after the class weights, which stay those of the unmodified weights.
+    grounded = X[:, 2] == 0
+    onset = grounded & (X[:, 3] == 0) & (y == 2)
+    release = grounded & (X[:, 3] == 1) & (y != 2)
+    w_all[onset | release] *= np.float32(a.transition_weight)
+    transitions = dict(onset=int(onset.sum()), release=int(release.sum()), releaseToJump=int((release & (y == 1)).sum()))
+    print('transitions: ' + json.dumps(transitions), flush=True)
 y_solver = y                      # recall and the reported loss always use the solver labels
 distill = a.teacher_logits is not None
 Q = None
@@ -217,4 +237,5 @@ for ep in range(epochs):
 result = dict(layers=layers, params=flat_params(), log=log)
 if POW2: result['k'] = [quantize_pow2(Ws[i], bs[i])[2] for i in range(L)]
 elif QB: result['scales'] = [quantize(W)[1].tolist() for W in Ws]
+if transitions is not None: result['transitions'] = transitions
 json.dump(result, open(a.out, 'w'))

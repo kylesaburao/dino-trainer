@@ -22,6 +22,11 @@
 //     path, sha256, tau, mode, alpha; bits, scheme, levels, source; k per layer for
 //     scheme pow2), live from the log line.
 //   Demos runs (bc-gen; demos.json only): the manifest summary and teacher playback.
+//     DAgger rollouts (bc-gen --student; manifest source 'dagger'): the student is named,
+//     its crashes are shown as student crashes (not solver crashes), and playback offers the
+//     student model first ('student', from the manifest's student.path). A --score-window is
+//     shown. BC runs trained with --extra-demos list each extra manifest, and
+//     --transition-weight with its row counts.
 // Running = train.lock with a live pid (train, bc-train), or a bc-gen temp file
 // demos.bin.<pid>.tmp with a live pid (bc-gen takes no lock). A nested run with no *.log
 // of its own shows <group>/<run>.log (where detached runs often log).
@@ -197,7 +202,15 @@ function demosSummary(file) {
     solverCrashes: m.solverCrashes, coreHash: m.coreHash, gameVersion: m.gameVersion, createdAt: m.createdAt,
     seeds: Array.isArray(m.seeds) && m.seeds.length ? `${m.seeds[0]}-${m.seeds[m.seeds.length - 1]}` : null,
     levels: m.levels, span0: m.span0, span: m.span, keepBoring: m.keepBoring, sha256: m.sha256,
+    // Release-fix keys (bc-gen --score-window / --student; absent in older manifests).
+    scoreWindow: m.scoreWindow || null, source: m.source || 'teacher', student: m.student || null,
+    studentCrashes: m.studentCrashes, undefinedAir: m.undefinedAir,
   };
+}
+
+// The student model file of a DAgger demos manifest (path relative to the repo that made it).
+function studentFile(dm) {
+  return dm && dm.source === 'dagger' && dm.student && dm.student.path ? resolveDemos(dm.student.path) : null;
 }
 
 function snapshotList(dir) {
@@ -263,6 +276,12 @@ function bcInfo(name, kind) {
       epochsDone: rows.length,
       demos,
       demosRef: (cfg && cfg.demos) || (live && live.demos) || null,
+      // bc-train --extra-demos / --transition-weight (absent for runs that did not use them).
+      extraDemos: ((cfg && cfg.extraDemos) || []).map(e => ({ ref: e.demos, summary: demosSummary(resolveDemos(e.demos)) })),
+      transitionWeight: (cfg && cfg.transitionWeight) || null,
+      transitions: (cfg && cfg.transitions) || null,
+      // DAgger demos: the student that played the rollouts, if its best.json is on this computer.
+      student: demos && demos.source === 'dagger' ? { ...(demos.student || {}), available: !!studentFile(demos) } : null,
       snapshots: snapshotList(dir),
       distill: distillSummary(cfg, live),
       quant: quantSummary(cfg, live),
@@ -308,6 +327,11 @@ function runModel(name, which) {
     const demos = best ? null : demosSummary(resolveDemos((trainLine(name) || {}).demos));
     return s && { format: 'dino-mlp-v1', layers: s.layers, actionRepeat: 1, gameVersion: (best && best.gameVersion) || (demos && demos.gameVersion) || 'v2',
       params: s.params, generation: null, epoch: s.epoch, which };
+  }
+  if (which === 'student') {
+    const f = studentFile(demosSummary(path.join(dir, 'demos.json')));
+    const b = f && readJson(f);
+    return b && { format: b.format, layers: b.layers, actionRepeat: b.actionRepeat, gameVersion: b.gameVersion || 'v1', params: b.params, generation: null, which, student: true };
   }
   if (which === 'best') {
     const b = readJson(path.join(dir, 'best.json'));
@@ -362,7 +386,7 @@ const server = http.createServer((req, res) => {
       if (!listRunNames().includes(name)) return send(res, 404, 'text/plain', 'no such run');
       if (m[2]) {
         const w = url.searchParams.get('which') || '';
-        const model = runModel(name, w === 'best' || /^epoch-\d+$/.test(w) ? w : 'current');
+        const model = runModel(name, w === 'best' || w === 'student' || /^epoch-\d+$/.test(w) ? w : 'current');
         return model ? send(res, 200, 'application/json', JSON.stringify(model)) : send(res, 404, 'text/plain', 'no weights yet');
       }
       const info = runInfo(name);
