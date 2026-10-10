@@ -70,6 +70,12 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 - `bc-gen` reproduces the prototype's rows (`cloneB.js gen`), except that the boring-frame counter now resets every episode, so a few down-weighted rows differ.
 - To ship a new BC model: `bc-train` into a `runs/bc-*` directory, certify it with `eval`, then `export --dir runs/bc-... --which best`.
 
+**Project generations ("v2", "v3"): not game versions.** The user's convention, 2026-10-10:
+- **"v2"** is everything up to that date: the jump-only solver teacher, the shipped clone and the sweeps.
+- **"v3"** is a teacher that ducks, and training on it (`research/follow-up-questions.md` Q2).
+
+Write these as "teacher v3" or "pipeline v3". They are not `gameVersion` values: the game rules stay `v2`. A new *game* version would mean new rules, a new `HI_KEY` and new goldens.
+
 **One source of game logic.** `core.js` is the DOM-free simulation, and the trainer, tests, browser and dashboard all run it.
 - `createGame({ rng, version, hooks })` creates independent games, many per thread.
 - `step(keys)` = `applyKeys` + `update` with dt = 1, on a simulated clock `now = frame * FRAME_MS`.
