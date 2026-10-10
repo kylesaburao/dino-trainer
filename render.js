@@ -112,7 +112,10 @@ function createRenderer(canvas) {
     }
   }
   const textWidth = (str, gap = 2) => str.length * (GLYPH_W + gap) - gap;
-  const pad = (n) => String(Math.min(n, 99999)).padStart(5, '0');
+  const SCORE_DIGITS = 6;                               // display caps at 999999
+  const SCORE_MAX = 10 ** SCORE_DIGITS - 1;
+  const ZEROS = '0'.repeat(SCORE_DIGITS);
+  const pad = (n) => String(Math.min(n, SCORE_MAX)).padStart(SCORE_DIGITS, '0');
 
   function drawNightSky() {
     const nightAlpha = game.nightAlpha;
@@ -145,11 +148,11 @@ function createRenderer(canvas) {
         shown = Math.floor(t / CFG.flashMs) % 2 === 0 ? '' : pad(game.flashScore);
       }
     }
-    const scoreX = right - textWidth('00000');
+    const scoreX = right - textWidth(ZEROS);
     drawText(shown, scoreX, 6);
     if (hi > 0) {
       ctx.globalAlpha = 0.8;
-      drawText('HI ' + pad(hi), scoreX - 20 - textWidth('HI 00000'), 6);
+      drawText('HI ' + pad(hi), scoreX - 20 - textWidth('HI ' + ZEROS), 6);
       ctx.globalAlpha = 1;
     }
   }
