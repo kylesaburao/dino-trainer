@@ -91,8 +91,10 @@ test('wasm agent plays whole episodes identically: the shipped model', () => {
   assert.ok(frames > 20000, `only ${frames} frames played`);
 });
 
-test('wasm agent plays whole episodes identically: perturbed shipped model, action repeat 1 and 3', () => {
-  const shipped = require('../model.js');
+test('wasm agent plays whole episodes identically: perturbed trained model, action repeat 1 and 3', () => {
+  // A fixed 44-32-32-3 trained model, not the root model.js: the frame-count floor
+  // below needs a model that survives sigma-0.1 noise, which a small shipped net may not.
+  const shipped = require('../runs/bc-v2-h32x32/best.json');
   let frames = 0;
   for (const [noiseSeed, repeat] of [[1, 1], [2, 3], [3, 1]]) {
     const model = { ...shipped, params: perturb(Float64Array.from(shipped.params), noiseSeed, 1, 0.1), actionRepeat: repeat };

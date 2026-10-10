@@ -8,7 +8,7 @@ Open `index.html` in a browser, directly over `file://`. There is no build step.
 
 ## Train a model
 
-The shipped model is a **behaviour clone**: a small MLP trained by supervised learning to copy an exact solver (`test/solver.js`). The model sees only the 44 allowed `observe()` features. Training takes two steps: generate demonstrations, then train on them.
+The shipped model is a **behaviour clone**: a small MLP trained by supervised learning to copy an exact solver (`test/solver.js` `createDuckSolver`, which jumps and ducks). The model sees only the 44 allowed `observe()` features. Training takes two steps: generate demonstrations, then train on them.
 
 **Requirements**
 - Node (v22+; v26 is used here).
@@ -41,7 +41,7 @@ This prints the pass rate with a 95% confidence interval.
 node trainer/cli.js export --dir runs/exp-bc-mine --which best   # writes model.js and model.css
 node test/browser-check.js                                      # headless Chrome check, including CSS/JS agreement
 ```
-`export`, `finish`, `session` and `--auto-export` all overwrite the shipped `model.js`/`model.css`. To go back to the shipped clone, run `node trainer/cli.js export --dir runs/bc-v2-h32x32 --which best`.
+`export`, `finish`, `session` and `--auto-export` all overwrite the shipped `model.js`/`model.css`. The shipped model is `runs/exp-bc-duck/d2w8-s1`; the previous jump-only clone is `runs/bc-v2-h32x32`. `node test/css-agreement.js --dir <run>` checks CSS/JS agreement through the duck phase for a candidate without touching the root files.
 
 **Neuroevolution (research pipeline).** The OpenAI-ES trainer learns from the game score alone. It runs for hours, so start it detached:
 ```sh

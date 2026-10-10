@@ -51,7 +51,8 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend pytho
 
 The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale. `runs/main` no longer exists. Pass both explicitly.
 
-- **Shipped model:** `runs/bc-v2-h32x32` (44-32-32-3).
+- **Shipped model:** `runs/exp-bc-duck/d2w8-s1` (44-8-8-3, duck generation: jumps and ducks; since 2026-10-10, see the decision log).
+- **Previous shipped clone:** `runs/bc-v2-h32x32` (44-32-32-3, jump generation), kept for comparison.
 - **Previous ES model:** `runs/v2-h32x32-1m` (generation 970), kept for comparison.
 
 **`--auto-export`, `session` and `finish` overwrite the shipped `model.js` and `model.css`**, and from an ES run that would replace the shipped clone with a weaker model. Don't use them unless an ES model has beaten the shipped one on fresh held-out seeds and the user has approved replacing it. `browser-check.js` checks that `model.css` matches `model.js`; after you replace `model.js`, run `export-css`.
@@ -181,6 +182,20 @@ Work as a methodical researcher. Don't try things to see what sticks.
 - **The full method is in `handoff/2026-10-10T1635Z-retrospective.md`, §4 and §6.** Keep the pruned-branch register (§6.4) current in each new handoff.
 
 ## Decision log
+
+### 2026-10-10 (later): ship the duck-generation clone `runs/exp-bc-duck/d2w8-s1`
+
+**Decision.** `model.js` and `model.css` now hold `runs/exp-bc-duck/d2w8-s1/best.json`: a 44-8-8-3 clone of `teacher-duck` (`createDuckSolver`). It jumps cacti and low pterodactyls, ducks under mid ones, and stays grounded under high ones. The user approved it ("Ship d2w8-s1").
+
+**Evidence.**
+- Step 1, `research/prereg-teacher-duck.md`: the duck solver crashed 0 times in 5,000 full games, with 0 fallbacks.
+- Step 2, `research/prereg-teacher-duck-step2.md`: tier A 25/25, tier B 0/1,000, duck share 1.000 vs the teacher.
+- Certification, `research/prereg-teacher-duck-cert.md`: 150/150 on offsets 325–474, paired with the jump clone, which also scored 150/150. McNemar b = c = 0, so this is a tie on reliability and a behaviour change only.
+- CSS: `test/css-agreement.js` found 0 disagreements over 25,446 frames, 421 of them duck frames, on the root after export. `browser-check.js` passed 38/38.
+
+**Caveat.** At d2w32, one of two seeds got stuck ducking (204/1,000). How often that happens is being measured in `research/prereg-teacher-duck-stuck.md`. The shipped 2×8 model is certified, but retraining it should be screened.
+
+**Reversibility.** Run `node trainer/cli.js export --dir runs/bc-v2-h32x32 --which best`, then the browser check.
 
 ### 2026-10-10: ship a behaviour clone of the solver instead of the ES model
 
