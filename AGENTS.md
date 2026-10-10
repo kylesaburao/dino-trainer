@@ -69,9 +69,33 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
   - training seeds;
   - validation seeds, used to select the best model;
   - held-out seeds (`EVAL_SEEDS`), used only by `eval` and the stop check.
-- The metric is the median score over the 25 held-out seeds, with episodes capped at `--target`.
+- The stop check, by default (`--stop-rule median`), is the median score over the 25 held-out seeds, with episodes capped at `--target`. The alternative is `--stop-rule allpass:N`: all N held-out seeds must reach the target.
+- `rules.js`: the per-generation policies as pure functions (selection, stop check, window adaptation, fitness aggregation), tested in `test/trainer-rules.test.js`.
 - `store.js`: atomic writes (temp file, fsync, rename), the `train.lock` PID lockfile, and `coreHash`.
 - `ops.js`: report, finish and session.
+
+**Trainer flags.** Every flag is off or at its old value by default; with defaults, training is bit-identical to the original trainer. The header comment of `trainer/cli.js` documents each flag precisely; this list is only a map.
+- Curriculum (training-only; validation and eval always play full games):
+  - `--window`, `--start-zero-frac`, `--start-min`, `--start-dist log|points`, `--start-zero-cap`;
+  - `--window-adapt`: gated, so the window shrinks while start-0 episodes mostly fail and only grows once the opening is learned. Decided every `--window-adapt-every` generations (default 5) on pooled pass counts. Needs `--start-dist points`;
+  - `--fitness-agg mean|geomean`: geomean lets a failing stage (for example the opening) dominate. Needs `--window`.
+- Selection and stopping: `--select median|count`, `--stop-rule median|allpass[:N]`, `--val-seeds N`, `--fold-validation` (validates every generation inside the training batch), `--eval-when-fit-max`.
+- ES:
+  - `--rank-ties index|mid`;
+  - `--decay coupled|decoupled`: with decoupled, use `--weight-decay` about 0.01;
+  - `--sigma-scale none|fanin`, `--sigma-anneal` with `--sigma-min`, `--pair-episodes`;
+  - `--stall-rule`: not recommended, kept only to reproduce an old run.
+- `eval --seeds N --seed-offset K` scores held-out seeds K..K+N-1 and reports a 95% Clopper–Pearson interval for the pass rate. The stop check uses the first N held-out seeds, so certify a run from an offset past them.
+
+**Verification tools.**
+- `node test/bit-identity.js <oldTree> <newTree>` runs 6 small training scenarios in two checkouts (for example a `git worktree` at the pre-change commit, and yours) and diffs metrics, checkpoints and `best.json` (about 9 s). It refuses to start while another trainer is running unless `--allow-busy`.
+- A new trainer flag must leave defaults IDENTICAL against the pre-change commit.
+
+**Findings that constrain defaults.**
+- Plateau escape is seed-dependent: on 32,32 with `--rank-ties mid --decay decoupled --weight-decay 0.01`, about 25% of seeds escape by generation 900 and 80–90% by generation 1500.
+- Decoupled weight decay 0.1 slows the climb; use about 0.01.
+- A tie-rate σ controller was tried and removed: σ ran away, because ties rise again at large σ.
+- Research notes live in `research/`; multi-session handoffs live in `handoff/`.
 
 ## Invariants to preserve
 
