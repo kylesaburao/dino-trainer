@@ -81,6 +81,7 @@ The largest difference is **7e-4** (epoch 3), below the "about 1e-3" note thresh
 - Each header records layers 44-32-32-3, v2, target 1,000,000, wasm, and core `0f329d4e3493`.
 - Every game ran the full 1,943,237 frames, the same count as the robustness scan's passing games.
 - `diag.js` was not run, because nothing failed.
+- Positive control: C1 scored 0/2,000 in the robustness scan under the same runner. It was not re-run here, as §3 specifies.
 
 ### Readings (applied verbatim from §4)
 - Both validate 25/25 and scan 0/1,000, so the first row applies: **"H0: the pipeline is validated as the base for clone research (scope: 44-32-32-3, v2, the default gen settings, seed 1)"**.
@@ -91,7 +92,7 @@ The largest difference is **7e-4** (epoch 3), below the "about 1e-3" note thresh
 - None in steps, order, seeds, models or readings.
 - The "±1 boring row per episode" expectation was checked only in aggregate (+87 over 200 episodes), because the converted prototype demos have no episode boundaries.
 - The loss comparison is at the prototype log's 4-decimal precision.
-- Wall times came in well under the §3 estimate: gen 0.55 s, against about 20 s. The whole run took about 9 min.
+- Wall times came in well under the §3 estimate: gen 0.55 s, against about 20 s. Job time totalled about 8.8 min (0.55 + 19 + 161 + 176 + 170 s). Wall-clock time from the start of gen to the end of the last scan was about 11.5 min (17:59:10 to 18:10:41 UTC), including the checks between steps.
 - `analyze.js` here is a new script. Its CP functions are copied from `prereg-bc-robustness/analyze.js`, which is hard-wired to the arm names P, C1, N1 and C2.
 - No McNemar test was computed, because none was pre-registered.
 - **This is not a certification:** the seeds are non-held-out.
