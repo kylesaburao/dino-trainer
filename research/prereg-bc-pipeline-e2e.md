@@ -1,6 +1,6 @@
 # Pre-registration: does the first-class BC pipeline, end to end, reproduce a passing clone?
 
-Status: **registered.** Author: mac-3, 2026-10-10, on main `f040434`.
+Status: **run; H0 — pipeline validated (Results below).** Author: mac-3, 2026-10-10, on main `f040434`.
 
 ## 1. Decision
 Is `bc-gen` → `bc-train` (both backends), as merged, a valid base for all further clone research (shapes, data size, and anything else)?

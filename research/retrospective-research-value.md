@@ -105,5 +105,5 @@ Of 13 research notes, **only 2 caused commits** (wasm-simd and feature-sufficien
 - **ES as research:** Run B′ (dense late exposure) against hygiene is running on desktop-1. Natural-ramp starts are being built on desktop-2. Neither affects the shipped model.
 - **Clone research:**
   - robustness is pruned at its scope (0/2,000 per clone);
-  - the end-to-end pipeline check (`research/prereg-bc-pipeline-e2e.md`) is running;
+  - the end-to-end pipeline check (`research/prereg-bc-pipeline-e2e.md`) passed: both backends trained on `bc-gen` output reach 25/25 and 0/1,000 each;
   - next are smaller shapes, but only if a decision needs them (for example, CSS evaluator speed).
