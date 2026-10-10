@@ -107,3 +107,12 @@ Read in order:
 - or keep the solver in `test/` for both.
 
 desktop-2 has been told to hold for your decision.
+
+## 8. Addendum: desktop-1's reproduction gate PASSED, and its pre-registration is merged
+- Frozen s12 was resumed on main with `--wasm`. It matches the ee6995c run on all 100 generations (to 1e-9), with fitMean crossing 2000 at generation 1565 as before.
+- Premise check: select/fold/stop flags leave θ, Adam and RNG state bit-identical over 5 generations.
+- The amended pre-registration `research/prereg-es-curriculum.md` is merged into main:
+  - primary reading R = B′ frames / hyg frames, promising at R ≤ 1/4 on ≥ 3/4 θs;
+  - reading E covers "both arms clear";
+  - the 400–800 row stays OPEN.
+- desktop-1 is now running the 12-run batch: controls s12 and s4 first, then s5, s7, s8 and s9, each hyg then B′, one trainer at a time. Apply its fixed readings when it reports.
