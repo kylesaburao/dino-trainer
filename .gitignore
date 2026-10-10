@@ -10,3 +10,4 @@ runs/smoke*/
 # Superseded / experimental runs from the first training session (kept locally, not committed).
 runs/h16/
 runs/exp-*/
+runs/v2-h16/

@@ -50,6 +50,29 @@ The game has two versions, and **all training from now on uses v2** (commit `571
 
   At the end, `eval` both, then `finish --dir <winner>` exports `model.js` and commits.
 
+### v2 results (2026-10-09)
+
+- **`runs/v2-h16` (44-16-3).** Stalled at a validation median of about 1210 (best 1232), the same wall as the v1 single-16 run; below 1k, v2 plays exactly like v1. Stopped at the user's request at generation 2227. Gitignored; kept locally.
+- **`runs/v2-h32x32` (44-32-32-3), target 500000.**
+  - Moved to 18 workers once the h16 run stopped.
+  - Reached validation 500000 and **held-out 500000 on all 25 seeds** at generation 970, after 15.0 min of cumulative training.
+  - Exported and committed in `a657d1a`; browser check 32/32.
+- **Faster network code (`48697bb`, merged at the user's request).** `createNet` now computes rows four at a time. Decisions are bit-identical:
+  - independently checked on the v2 checkpoint: 4.0M frames, identical per-episode action hashes;
+  - 1.34× faster in that check.
+
+  Because `policy.js` changed, the core hash changed. Older checkpoints therefore resume only with `--force`, which is safe here because decisions are identical. The 500k run had already met its target before the restart.
+- **Browser check fix (`fc3f429`).** Sections 2–3 now use the page's own `HI_KEY`: a page with a v2 `model.js` stores HI under `dino-hi-v2`.
+- **`runs/v2-h32x32-1m` (44-32-32-3), target 1000000, fresh run, 18 workers.**
+  - It uses the same default trainer seed as the 500k run, so the two follow the same path until episodes exceed 500k. They diverge after that.
+  - Reached **held-out median 1000000 (24 of 25 seeds at 1M; one crashes at 499)** at generation 970, after 7.9 min of cumulative training.
+  - Exported to `model.js` and committed in `3177445`; browser check 32/32.
+  - **This is the shipped model.** The page plays v2 by default because the model records `gameVersion: v2`.
+- **Next step:** the 499 seed. The 500k model passes all 25 seeds, and this one crashes early, which suggests the run drifted while optimising long episodes. Options:
+  - more episodes per candidate;
+  - a different `--seed`;
+  - selecting the best model on minimum rather than median validation score.
+
 The sections below record the **v1** sessions (historical; their run directories are in the archive).
 
 
