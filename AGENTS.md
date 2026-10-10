@@ -45,6 +45,7 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend pytho
 - `--backend python` needs `.venv` with numpy (`.venv/bin/python`); the `PYTHON` env var overrides the interpreter. A worktree has no `.venv` of its own, so set `PYTHON` there.
 - `bc-gen` writes `demos.bin` (gitignored) and `demos.json`; `bc-train` writes `best.json` and `bc-metrics.jsonl` (per-epoch loss and recall, not `metrics.jsonl`). `eval` and `export` then work as for an ES run.
 - `bc-train` refuses demos from another core hash unless `--force`. The flags are in the `trainer/cli.js` header.
+- `bc-train --backend python --snapshots` also writes each epoch's params to `<dir>/snapshots/epoch-NN.json` (gitignored research output); it leaves training unchanged. The node backend rejects it.
 
 The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale. `runs/main` no longer exists. Pass both explicitly.
 

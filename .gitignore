@@ -6,6 +6,8 @@ runs/*/*.lock
 runs/*/*.tmp
 # Behaviour-cloning demonstrations (regenerate with bc-gen; demos.json is committed).
 runs/*/demos.bin
+# Per-epoch BC params (bc-train --snapshots): research output.
+runs/*/snapshots/
 # Smoke-test runs are throwaway.
 runs/smoke*/
 .DS_Store
