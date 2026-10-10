@@ -7,7 +7,14 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <canvas id="game" width="600" height="150"></canvas>
+  <div class="stage">
+    <canvas id="game" width="600" height="150"></canvas>
+    <button id="ai-toggle" type="button" aria-pressed="false">AI: OFF</button>
+  </div>
+  <script src="core.js"></script>
+  <script src="render.js"></script>
+  <script src="policy.js"></script>
+  <script src="model.js"></script>
   <script src="game.js"></script>
 </body>
 </html>
