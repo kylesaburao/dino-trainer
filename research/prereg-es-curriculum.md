@@ -291,3 +291,29 @@ s12 and s4 (frozen `runs/exp-bp-start`) run in abl and cur only. They are read *
 - **Optional arms:** plain hyg adds ≲ 2.8 h; a ramp arm adds ≲ 2.8 h.
 - **Extension:** 4 θs × 2 arms ≲ 3.7 h.
 - One trainer at a time on the desktop host. desktop-2 is told at the start and end.
+
+### 10.8 Amendment (mac-3, before any round-2 arm run): attribution test on known θs
+
+**Survey finding** (hygiene, `--wasm`, seeds 13–30, gen cap 1500; `tools/classify-stuck.js`):
+- Only **s15** qualifies as stuck (type M; escaped at 1488, median diag death 396).
+- 4 seeds never escaped (s16, s18, s19, s20).
+- 13 seeds passed fitMean 2000 at gens 188–1345. Their runs were stopped there, since that disqualifies them under §10.1. Their centre θs are genuinely past the wall: wall-diag medians up to about 20k, mostly dying to high pteros at speed 15–17.
+- A fresh seed-9 run on main `b1fbab8` with `--wasm` matches the ee6995c survey run to 1e-9 for 600 generations, so this isn't a code change.
+- **Pooled over hygiene seeds 4–30:** about 15 of 27 passed the wall by 1500, 7 were stuck after escaping (s4, 5, 7, 8, 9, 12, 15; about 7/22 of escapers), and 5 never escaped. **The second wall is a minority outcome under hygiene.** That lowers the value of a fresh-θ confirmation; mac-3 decides on it after this round.
+
+**Reframed: this round is an ATTRIBUTION test on known θs, not a confirmation.**
+- **θs (n = 5):** s5, s7, s8, s9 (frozen in `runs/exp-bp-start`) and s15 (`runs/exp-bp2-start`). Type T: s9 only, so **type T is "not reached"** (n = 1). The two-stage sign test of §10.4 is suspended for this round.
+- **abl** (hyg + ep8): new on all 5 θs, plus the controls s12 and s4 (abl only, read as "clears within 10B").
+- **cur** (B′):
+  - Reused from round 1 on s5, s8 and s9. Runs are deterministic from the frozen checkpoints with the same flags, and all three cleared under 10B frames (max 8.2B), so they are valid under the 10B budget.
+  - **Rerun on s7 as a replication gate.** It must match round 1's `runs/exp-bp-s7-cur` metrics exactly (fitMean, fitMax, thetaNorm and tiedPairs to 1e-9 through the event), or STOP and report.
+  - New run on s15.
+  - Round-1 directories are linked as `runs/exp-bp2-sS-cur` for the table.
+- **ramp:** desktop-2's arm (`research/prereg-es-ramp.md`), new on all 5, only if its gate (a) shows bit-identity. Paired with abl.
+- **Order:** the cur-s7 replication gate first (about 3 min; it validates reusing the round-1 cur results, so it runs before anything that depends on it). Then abl on s5, s7, s8, s9, s15, s12, s4. Then cur on s15. Then ramp.
+
+**Readings (cur vs abl, frames to event with 10B censoring, R = cur/abl):**
+- cur beats abl in frames (R < 1, including "cur clears, abl censored") on **≥ 4/5** → late windows and/or fitness reshaping contribute beyond the episode count.
+- abl ≤ cur (R ≥ 1, including "abl clears, cur censored") on **≥ 4/5** → the round-1 gain is attributed to the episode count, and B′'s late windows are pruned at this scope.
+- Otherwise → unresolved.
+- **The register row stays "B′ as specified: promising, confirmation pending" whatever the result.** Promotion needs fresh θs, which is out of scope this round.
