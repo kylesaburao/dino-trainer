@@ -122,5 +122,27 @@ The batch's frames budget, matched across arms. The ramp's ~1.0–1.15× frames 
 - The θs were selected as stuck under hygiene, which affects both arms equally (paired). They are the B′ confirmation θs, not θs selected in-band, so the in-band n is whatever the set holds.
 - The ramp arm plays 4 from-0 episodes against hyg8's 8. The comparison is "half the from-0 episodes replaced by ramp starts", not "added".
 
-## 8. Gate results
-(pending: run in a slot desktop-1 offers)
+## 8. Gate results (desktop host, slot from desktop-1; main code at `7b9f207` = `ed41892` + doc edits; scripts in desktop-2's scratchpad: `gate-ramp.sh`, `gate-a-compare.js`, `gate-bc.js`)
+
+**(a) Fitness plumbing is neutral: PASS (exact).** Frozen `ckpt-s9.json` (sha256 checked), resumed 1017 → 1022, `--wasm --workers 16 --eval-every 10 --val-seeds 12 --episodes 8`, with and without `--window 1000000 --start-zero-cap 1000000 --start-zero-frac 1`.
+- θ, Adam state, RNG state and σ are bit-identical, and so are per-generation tiedPairs (55, 55, 56, 53, 52 of 64), thetaNorm and frames: 7,808 values, 0 differences.
+- The logged fitMean differs by up to 2.3e-15 relative from hyg's fitMean/1e6, because the curriculum divides each episode by 1e6 before summing. This is a scaled log value; the ranks, and so θ, are unchanged.
+
+**(b) Handover robustness: PASS.** 10,000 training-range seeds, level 800: no throw. The worst handover delay is 31 frames (slack 600) and the mean prefix is 4,008 frames.
+
+**(c) Probe on the start θs** (40 from-0 episodes on seeds 910000+, capped at 50k; 40 ramp episodes on seeds 940000+, L uniform on [400, 800], window 1M):
+
+| θ | Role | from-0 deaths < 800 | median from-0 death | Stratum | F0 | T | Fr (median points after handover) | teacher share of ramp-arm frames | ramp / hyg8 frames per gen | post-handover student share |
+|---|---|---|---|---|---|---|---|---|---|---|
+| s9 | stuck (T) | 93% | 551 | in-band | 3097 | 3113 | 496 (75) | 46% | 1.08 | 7% |
+| s7 | stuck (M) | 50% | 831 | in-band | 3847 | 3113 | 756 (116) | 40% | 1.00 | 10% |
+| s5 | stuck (M) | 18% | 1208 | between | 5122 | 3113 | 1197 (332) | 33% | 0.92 | 13% |
+| s8 | stuck (M) | 100% | 188 | in-band | 1115 | 3113 | 113 (20) | 72% | 1.95 | 3% |
+| s15 | stuck (M) | 100% | 464 | in-band | 2305 | 3113 | 150 (26) | 56% | 1.21 | 3% |
+| s4 | control | 85% | 585 | in-band | 2932 | 3113 | 827 (168) | 45% | 1.17 | 12% |
+| s12 | control | 48% | 942 | in-band | 4323 | 3113 | 1669 (303) | 34% | 1.05 | 18% |
+
+What this changes, for mac-3 to rule on before the arm runs (the readings in §5 are not edited):
+1. **No above-band θ in the set** (s5 is "between"). So the H-artefact control (reading F) can't be applied, and a reading-A result would not separate H-zone from H-artefact. Proposed: if A is met, record it as "promising, mechanism unattributed", and draw the confirmation batch's above-band θs from later-generation survey θs.
+2. **The teacher share is higher than estimated:** 33–56%, and 72% on s8, against the 30–48% estimate. Ramp frames per generation are 0.92–1.95× hyg8's. On θs that die early (s8, s15), the ramp arm gets only 28–44% student frames on the matched budget, so a null there is weak.
+3. s8's pre-resume θ dies early from 0 (median 188 on these seeds), unlike its post-resume hygiene validation medians (1,297–1,622). The stratum uses the frozen start θ, as registered.
