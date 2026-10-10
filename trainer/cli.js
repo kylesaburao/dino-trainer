@@ -7,6 +7,8 @@
 //   node trainer/cli.js eval   [--dir runs/main] [--which best|current] [--model model.js] [--target N]
 //   node trainer/cli.js bench  [--seconds 3] [--workers N]
 //   node trainer/cli.js export [--dir runs/main] [--which best|current] [--out model.js]
+//                              (also writes model.css next to it: the same weights for index-css.html)
+//   node trainer/cli.js export-css [--model model.js]   regenerate model.css from an existing model.js
 //   node trainer/cli.js report [--dir runs/main]        regenerate PROGRESS.md's status block
 //   node trainer/cli.js finish [--dir runs/main] [--no-commit] [--skip-browser]
 //   node trainer/cli.js session [train options]          train, then finish (one detached command)
@@ -20,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const { CFG, createRng, GAME_VERSIONS } = require('../core.js');
 const { FORMAT, OBS_DIM, numParams, initParams } = require('../policy.js');
+const { modelToCss } = require('./css-model.js');
 const { runEpisode, median, trainSeed, VALIDATION_SEEDS, EVAL_SEEDS } = require('./env.js');
 const { gaussian, esGradient, adamStep } = require('./es.js');
 const { createPool, defaultWorkers } = require('./pool.js');
@@ -360,7 +363,22 @@ if (typeof module !== 'undefined' && module.exports) module.exports = DINO_MODEL
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 `;
   writeAtomic(out, text);
+  writeCss(out, data);
   return { file: path.relative(ROOT, out), data };
+}
+
+// model.css (the CSS-evaluated network for index-css.html) lives next to its model.js.
+function writeCss(modelFile, data) {
+  const out = path.join(path.dirname(modelFile), 'model.css');
+  writeAtomic(out, modelToCss(data));
+  return path.relative(ROOT, out);
+}
+
+function exportCssCmd({ opts }) {
+  const file = path.resolve(opts.model || path.join(ROOT, 'model.js'));
+  const data = require(file);
+  const out = writeCss(file, data);
+  console.log(`exported ${path.relative(ROOT, file)} (generation ${data.generation}, ${data.params.length} params) -> ${out}`);
 }
 
 function exportCmd({ opts }) {
@@ -395,7 +413,7 @@ async function benchCmd({ opts }) {
 // ---------------------------------------------------------------------------
 const ops = () => require('./ops.js');
 const COMMANDS = {
-  train, eval: evalCmd, bench: benchCmd, export: exportCmd,
+  train, eval: evalCmd, bench: benchCmd, export: exportCmd, 'export-css': exportCssCmd,
   report: (a) => ops().reportCmd(a),
   finish: (a) => ops().finishCmd(a),
   session: (a) => ops().sessionCmd(a),
@@ -411,7 +429,7 @@ async function main() {
   }
   const cmd = COMMANDS[args.cmd];
   if (!cmd) {
-    console.error('usage: node trainer/cli.js <train|eval|bench|export|report|finish|session> [options]  (see the header of trainer/cli.js)');
+    console.error('usage: node trainer/cli.js <train|eval|bench|export|export-css|report|finish|session> [options]  (see the header of trainer/cli.js)');
     process.exit(2);
   }
   await cmd(args);

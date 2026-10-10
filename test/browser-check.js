@@ -11,6 +11,8 @@
 //    AI runs never write HI; turning AI off mid-run releases its keys and hands
 //    control back.
 // 4. No console errors or exceptions on the page.
+// 5. index-css.html: the model.css network (CSS-evaluated weights) plays, every
+//    decision equals policy.js on model.js, speeds 1x-2048x, auto-restart.
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -272,6 +274,25 @@ function cdpClient(url) {
     const v2hi = await evaluate(`({ v1: localStorage.getItem('dino-hi'), v2: localStorage.getItem('dino-hi-v2'), score: game.score() })`);
     check('v2 keeps its own HI (v1 HI untouched)', v2hi.v1 === '7' && v2hi.v2 === String(v2hi.score), JSON.stringify(v2hi));
     check('no console errors, warnings or exceptions on the v2 page', problems.length === 0, problems.join('; '));
+
+    // ---- 5. CSS-network page (index-css.html + model.css) -----------------
+    await load(path.join(ROOT, 'index-css.html'));
+    const css = await evaluate(`({ failed: failed && failed.message, stale: check.stale, version: game && game.version,
+      want: DINO_MODEL.gameVersion || 'v1', speeds: [...document.querySelectorAll('#speed option')].map(o => Number(o.value)) })`);
+    check('CSS page: self-test passes and model.css matches model.js', !css.failed && css.stale === null && css.version === css.want, JSON.stringify(css));
+    check('CSS page: speed options 1x to 2048x', css.speeds.join() === '1,2,4,8,16,32,64,128,256,512,1024,2048', css.speeds.join());
+    await evaluate(`document.getElementById('speed').value = '2048'`);
+    const cssPlays = await waitUntil(`game.state === 'running' && game.score() >= 100 && check.frames >= 1000`, 30000);
+    const agree = await evaluate(`({ frames: check.frames, disagree: check.disagree, score: game.score(), fps: Math.round(rate.fps) })`);
+    check('CSS page: the CSS network plays and scores', cssPlays, JSON.stringify(agree));
+    check('CSS page: every CSS decision equals the JavaScript network on model.js', agree.frames >= 1000 && agree.disagree === 0, JSON.stringify(agree));
+    // Force a crash (test-only, as in section 3) and expect a fresh run to start.
+    await evaluate(`(() => { const g0 = game; const id = setInterval(() => {
+      if (game !== g0 || game.state !== 'running') { clearInterval(id); return; }
+      const o = game.obstacles[0]; if (o) game.obstacles.push({ ...o, x: game.dino.x, y: game.dino.y });
+    }, 5); window.__cssGame = g0; })()`);
+    check('CSS page: crash, then a new run starts by itself', await waitUntil(`game !== window.__cssGame && game.state === 'running'`, 5000));
+    check('no console errors, warnings or exceptions on the CSS page', problems.length === 0, problems.join('; '));
   } finally {
     if (cdp) cdp.close();
     chrome.kill();

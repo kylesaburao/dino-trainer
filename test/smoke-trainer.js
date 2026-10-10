@@ -157,6 +157,13 @@ const waitFor = async (pred, ms = 180000) => {
     assert.ok(createAgent(model));
     assert.strictEqual(model.params.length, 771);
   });
+  check('export also writes model.css for the same weights', () => {
+    const { modelId } = require('../trainer/css-model.js');
+    const model = require(path.join(DIR, 'model.js'));
+    const css = fs.readFileSync(path.join(DIR, 'model.css'), 'utf8');
+    assert.ok(css.includes(`--nn-model-id: "${modelId(model)}";`));
+    assert.ok(css.includes('--act:'));
+  });
   const e2 = run(['eval', '--model', path.join(DIR, 'model.js'), '--workers', '1']);
   check('eval of exported model.js matches eval of best.json', () => {
     const med = (s) => s.match(/median (\S+)\s+min (\S+)\s+max (\S+)/).slice(1).join(' ');

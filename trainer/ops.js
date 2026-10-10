@@ -145,7 +145,7 @@ async function finishCmd({ config, opts }) {
 
   if (opts.noCommit) { say('not committing (--no-commit)'); return; }
   if (!browserOk) { say('NOT committing: the browser check failed (see above)'); process.exitCode = 1; return; }
-  const paths = ['model.js', 'PROGRESS.md', ...['best.json', 'metrics.jsonl', 'metrics.csv', 'evals.jsonl']
+  const paths = ['model.js', 'model.css', 'PROGRESS.md', ...['best.json', 'metrics.jsonl', 'metrics.csv', 'evals.jsonl']
     .map(f => rel(path.join(dir, f))).filter(f => fs.existsSync(path.join(ROOT, f)))];
   const git = (...a) => spawnSync('git', a, { cwd: ROOT, encoding: 'utf8' });
   const ignored = new Set(git('check-ignore', ...paths).stdout.split('\n').filter(Boolean));
