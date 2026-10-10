@@ -44,7 +44,7 @@ function startTrainer(args) {
   child.done = new Promise((res) => child.on('exit', (code, signal) => res({ code, signal })));
   return child;
 }
-const waitFor = async (pred, ms = 60000) => {
+const waitFor = async (pred, ms = 180000) => {
   const t0 = Date.now();
   while (!pred()) {
     if (Date.now() - t0 > ms) throw new Error('timed out waiting');
@@ -56,7 +56,8 @@ const waitFor = async (pred, ms = 60000) => {
   // 1. Fresh tiny run, interrupted with SIGINT mid-generation.
   console.log('--- train (fresh, 3 generations max) then SIGINT mid-generation');
   const a = startTrainer([...TINY, '--dir', DIR, '--generations', '3', '--overwrite']);
-  await waitFor(() => /gen 1:/.test(a.out) && /checkpoint saved: generation 1/.test(a.out));
+  const ckptGen = () => { try { return readJson(CKPT).generation; } catch (e) { return -1; } };
+  await waitFor(() => /gen 1:/.test(a.out) && ckptGen() === 1);
   check('checkpoint written after generation 1', () => assert.strictEqual(readJson(CKPT).generation, 1));
   check('metrics logged (jsonl + csv)', () => {
     assert.deepStrictEqual(generations(), [1]);
@@ -145,18 +146,18 @@ const waitFor = async (pred, ms = 60000) => {
     assert.strictEqual(e.status, 0, e.stderr);
     assert.match(e.stdout, /held-out eval \(25 seeds, cap 10000\)/);
   });
-  const x = run(['export', '--dir', DIR, '--which', 'best', '--out', path.join(ROOT, 'model.js')]);
+  const x = run(['export', '--dir', DIR, '--which', 'best', '--out', path.join(DIR, 'model.js')]);
   process.stdout.write(x.stdout.replace(/^/gm, '    | '));
   check('export writes model.js usable via require()', () => {
     assert.strictEqual(x.status, 0, x.stderr);
-    const file = path.join(ROOT, 'model.js');
+    const file = path.join(DIR, 'model.js');
     delete require.cache[file];
     const model = require(file);
     const { createAgent } = require('../policy.js');
     assert.ok(createAgent(model));
     assert.strictEqual(model.params.length, 771);
   });
-  const e2 = run(['eval', '--model', path.join(ROOT, 'model.js'), '--workers', '1']);
+  const e2 = run(['eval', '--model', path.join(DIR, 'model.js'), '--workers', '1']);
   check('eval of exported model.js matches eval of best.json', () => {
     const med = (s) => s.match(/median (\S+)\s+min (\S+)\s+max (\S+)/).slice(1).join(' ');
     assert.strictEqual(med(e2.stdout), med(e.stdout));

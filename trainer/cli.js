@@ -7,6 +7,12 @@
 //   node trainer/cli.js eval   [--dir runs/main] [--which best|current] [--model model.js] [--target N]
 //   node trainer/cli.js bench  [--seconds 3] [--workers N]
 //   node trainer/cli.js export [--dir runs/main] [--which best|current] [--out model.js]
+//   node trainer/cli.js report [--dir runs/main]        regenerate PROGRESS.md's status block
+//   node trainer/cli.js finish [--dir runs/main] [--no-commit] [--skip-browser]
+//   node trainer/cli.js session [train options]          train, then finish (one detached command)
+//
+// train --auto-export re-exports model.js (and refreshes the report) on every
+// new best validation score; --log-every SEC throttles per-generation log lines.
 //
 // Training is OpenAI-ES (antithetic sampling, centred ranks, Adam) over the
 // shared policy MLP, with candidates evaluated in parallel on worker_threads.
@@ -59,9 +65,9 @@ function parseArgs(argv) {
     if (FLAG_TO_KEY[a]) {
       const [key, parse] = FLAG_TO_KEY[a];
       out.config[key] = parse(takesValue());
-    } else if (['--resume', '--force', '--overwrite'].includes(a)) {
-      out.opts[a.slice(2)] = true;
-    } else if (['--workers', '--time-budget', '--dir', '--which', '--model', '--out', '--seconds'].includes(a)) {
+    } else if (['--resume', '--force', '--overwrite', '--auto-export', '--no-commit', '--skip-browser'].includes(a)) {
+      out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = true;
+    } else if (['--workers', '--time-budget', '--dir', '--which', '--model', '--out', '--seconds', '--log-every'].includes(a)) {
       out.opts[a.slice(2).replace(/-(\w)/g, (m, c) => c.toUpperCase())] = takesValue();
     } else {
       throw new Error(`unknown argument ${a}`);
@@ -162,9 +168,9 @@ async function train({ config: cli, opts }) {
       layers, theta: Array.from(st.theta),
       adam: { t: st.adam.t, m: Array.from(st.adam.m), v: Array.from(st.adam.v) },
       rngState: st.rngState, best: st.best, lastValidated: st.lastValidated, heldOut: st.heldOut,
-      cumulativeMs: committedMs(),
+      cumulativeMs: committedMs(), workers,
     });
-    log(`checkpoint saved: generation ${st.generation} (${reason}) -> ${ckptFile}`);
+    if (reason !== 'periodic') log(`checkpoint saved: generation ${st.generation} (${reason}) -> ${ckptFile}`);
   }
 
   let stopping = false;
@@ -196,10 +202,17 @@ async function train({ config: cli, opts }) {
         format: FORMAT, layers, actionRepeat: config.actionRepeat, params: st.best.params,
         generation: st.generation, validation: s, coreHash: hash, config,
       });
+      if (opts.autoExport) {
+        const out = exportModel({ dir, which: 'best' });
+        log(`new best (validation median ${s.median}, gen ${st.generation}): exported ${out.file}`);
+        require('./ops.js').writeReport(dir);
+      }
     }
     return s;
   }
 
+  const logEveryMs = (opts.logEvery !== undefined ? Number(opts.logEvery) : 15) * 1000;
+  let lastGenLog = 0;
   let stopReason = null;
   while (!stopReason) {
     if (st.generation >= config.generations) { stopReason = `reached ${config.generations} generations`; break; }
@@ -253,9 +266,12 @@ async function train({ config: cli, opts }) {
     };
     fs.appendFileSync(metricsJsonl, JSON.stringify(row) + '\n');
     fs.appendFileSync(metricsCsv, CSV_COLS.map(k => row[k] ?? '').join(',') + '\n');
-    log(`gen ${row.generation}: fit mean ${fmt(row.fitMean)} max ${fmt(row.fitMax)}` +
+    if (val || Date.now() - lastGenLog >= logEveryMs || stopReason) {
+      lastGenLog = Date.now();
+      log(`gen ${row.generation}: fit mean ${fmt(row.fitMean)} max ${fmt(row.fitMax)}` +
       (val ? ` | val median ${val.median} (best ${st.best.valMedian} @ gen ${st.best.generation})` : '') +
       ` | ${frames} frames in ${(genMs / 1000).toFixed(1)}s (${row.fps} fps)`);
+    }
 
     if (st.generation % config.checkpointEvery === 0) saveCheckpoint('periodic');
   }
@@ -299,9 +315,10 @@ function loadModel(opts) {
   throw new Error(`--which must be best or current`);
 }
 
-async function evalCmd({ config: cli, opts }) {
+// Held-out eval (25 EVAL_SEEDS); appends to the run's evals.jsonl. Returns the record.
+async function evalHeldOut(opts, targetOverride) {
   const { model, source, target: savedTarget } = loadModel(opts);
-  const target = cli.target || savedTarget || DEFAULTS.target;
+  const target = targetOverride || savedTarget || DEFAULTS.target;
   const workers = Number(opts.workers) || defaultWorkers();
   const pool = workers > 1 ? createPool(Math.min(workers, EVAL_SEEDS.length)) : null;
   const t0 = Date.now();
@@ -309,13 +326,20 @@ async function evalCmd({ config: cli, opts }) {
   if (pool) await pool.terminate();
   const s = summary(scores);
   const record = { time: ts(), source: path.relative(ROOT, source), generation: model.generation ?? null, target, seeds: EVAL_SEEDS.length, ...s, scores };
-  console.log(`held-out eval (${EVAL_SEEDS.length} seeds, cap ${target}) of ${record.source}:`);
-  console.log(`  median ${s.median}  min ${s.min}  max ${s.max}  (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
-  console.log(`  scores ${scores.join(' ')}`);
+  record.seconds = (Date.now() - t0) / 1000;
   if (!opts.model) fs.appendFileSync(path.join(path.dirname(source), 'evals.jsonl'), JSON.stringify(record) + '\n');
+  return record;
 }
 
-function exportCmd({ opts }) {
+async function evalCmd({ config: cli, opts }) {
+  const record = await evalHeldOut(opts, cli.target);
+  console.log(`held-out eval (${EVAL_SEEDS.length} seeds, cap ${record.target}) of ${record.source}:`);
+  console.log(`  median ${record.median}  min ${record.min}  max ${record.max}  (${record.seconds.toFixed(1)}s)`);
+  console.log(`  scores ${record.scores.join(' ')}`);
+}
+
+// Write model.js (atomically) from a run's best.json or checkpoint. Returns { file, data }.
+function exportModel(opts) {
   const { model, source, meta } = loadModel(opts);
   const out = path.resolve(opts.out || path.join(ROOT, 'model.js'));
   const data = {
@@ -333,7 +357,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = DINO_MODEL
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 `;
   writeAtomic(out, text);
-  console.log(`exported ${data.source} (generation ${data.generation}, ${data.params.length} params) -> ${path.relative(process.cwd(), out) || out}`);
+  return { file: path.relative(ROOT, out), data };
+}
+
+function exportCmd({ opts }) {
+  const { file, data } = exportModel(opts);
+  console.log(`exported ${data.source} (generation ${data.generation}, ${data.params.length} params) -> ${file}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +390,13 @@ async function benchCmd({ opts }) {
 }
 
 // ---------------------------------------------------------------------------
-const COMMANDS = { train, eval: evalCmd, bench: benchCmd, export: exportCmd };
+const ops = () => require('./ops.js');
+const COMMANDS = {
+  train, eval: evalCmd, bench: benchCmd, export: exportCmd,
+  report: (a) => ops().reportCmd(a),
+  finish: (a) => ops().finishCmd(a),
+  session: (a) => ops().sessionCmd(a),
+};
 
 async function main() {
   let args;
@@ -373,13 +408,15 @@ async function main() {
   }
   const cmd = COMMANDS[args.cmd];
   if (!cmd) {
-    console.error('usage: node trainer/cli.js <train|eval|bench|export> [options]  (see the header of trainer/cli.js)');
+    console.error('usage: node trainer/cli.js <train|eval|bench|export|report|finish|session> [options]  (see the header of trainer/cli.js)');
     process.exit(2);
   }
   await cmd(args);
 }
 
-main().catch((e) => {
+module.exports = { exportModel, evalHeldOut, loadModel, DEFAULTS };
+
+if (require.main === module) main().catch((e) => {
   console.error(`error: ${e.message}`);
   process.exit(1);
 });
