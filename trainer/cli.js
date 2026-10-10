@@ -20,8 +20,8 @@
 //                              [--batch 1024] [--lr 2e-3] [--seed 1] [--demos <dir or demos.json>]
 //                              [--target 1000000] [--workers N] [--wasm] [--force] [--overwrite] [--snapshots]
 //                              [--distill-from <best.json> [--distill-mode soft|hard] [--tau 1] [--alpha 0]]
-//                              [--quant-bits N [--quant-scheme row|layer]]
-//   node trainer/cli.js bc-quantize --from <best.json> --dir runs/<name> --quant-bits N [--quant-scheme row|layer]  (refuses another core hash unless --force)
+//                              [--quant-bits N [--quant-scheme row|layer|pow2]]
+//   node trainer/cli.js bc-quantize --from <best.json> --dir runs/<name> --quant-bits N [--quant-scheme row|layer|pow2]  (refuses another core hash unless --force)
 //                              [--target 1000000] [--workers N] [--wasm] [--overwrite]
 //
 // Behaviour cloning of test/solver.js (trainer/bc.js; supervised, no ES):
@@ -65,6 +65,14 @@
 //             stay float. The saved params are the float64 q * scale (still dino-mlp-v1), and
 //             config.quant records bits, scheme, mode 'qat', the scales and the levels used;
 //             the write fails unless every weight is exactly an integer times its scale.
+//             --quant-scheme pow2: ALL params N-bit fixed point. Weights and biases are
+//             integers in [-qmax, qmax] times one power-of-two scale 2^-k per layer, k the
+//             largest integer with max(|W|, |b|) * 2^k <= qmax (so nothing clips), q =
+//             round-half-up(v * 2^k); QAT fake-quantizes biases too, k recomputed every
+//             step. config.quant = {bits, scheme 'pow2', mode, biases 'int', k (per layer),
+//             levels, checked: true}; the write fails unless every weight and bias is
+//             exactly such an integer times 2^-k. research/scripts/prereg-distill/pack.js
+//             verifies a best.json and writes the packed N-bit form.
 //   bc-quantize post-training quantization of --from (a best.json) with the same rule,
 //             into a new run dir: best.json (config.quant mode 'ptq', quantFrom {path,
 //             paramsSha256}), after the same 25-seed validation. No training, no bc-metrics.
@@ -859,7 +867,7 @@ function parseDistill(opts) {
   return { mode, tau, alpha, abs, model };
 }
 
-// --quant-bits N [--quant-scheme row|layer]; null when off.
+// --quant-bits N [--quant-scheme row|layer|pow2]; null when off.
 function parseQuant(opts, bc) {
   if (opts.quantBits === undefined) {
     if (opts.quantScheme !== undefined) throw new Error('--quant-scheme needs --quant-bits');
@@ -954,10 +962,7 @@ async function bcTrainCmd({ config: cli, opts }) {
   logits = null;
   const trainSeconds = (Date.now() - t0) / 1000;
   let quantConfig = null;
-  if (quant) {
-    quantConfig = { bits: quant.bits, scheme: quant.scheme, mode: 'qat', biases: 'float', scales: result.scales };
-    quantConfig.levels = bc.checkQuantized(result.layers, result.params, quantConfig);   // throws unless exactly k * scale
-  }
+  if (quant) quantConfig = bc.quantRecord(result.layers, result.params, quant, 'qat', result);   // throws unless exactly on the grid
   const model = { format: FORMAT, layers: result.layers, params: result.params, actionRepeat: 1, gameVersion };
 
   const valSeedList = validationSeeds(25);
@@ -1008,8 +1013,7 @@ async function bcQuantizeCmd({ config: cli, opts }) {
   const gameVersion = src.gameVersion || (src.config && src.config.gameVersion) || 'v2';
   log(`bc-quantize: dir=${dir} from=${path.relative(ROOT, abs)} layers=${src.layers.join('-')}${quantText(quant)}`);
   const q = bc.quantizeParams(src.layers, src.params, quant);
-  const quantConfig = { bits: quant.bits, scheme: quant.scheme, mode: 'ptq', biases: 'float', scales: q.scales };
-  quantConfig.levels = bc.checkQuantized(src.layers, q.params, quantConfig);
+  const quantConfig = bc.quantRecord(src.layers, q.params, quant, 'ptq', q);
   let changed = 0, maxErr = 0;
   q.params.forEach((v, i) => { if (v !== src.params[i]) changed++; maxErr = Math.max(maxErr, Math.abs(v - src.params[i])); });
   log(`bc-quantize: ${changed}/${q.params.length} params changed, max |change| ${maxErr.toExponential(3)}, ${quantConfig.levels} integer levels`);

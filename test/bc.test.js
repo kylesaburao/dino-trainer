@@ -596,3 +596,120 @@ test('bc-quantize: post-training quantization into a new run dir, validated, wit
   assert.notStrictEqual(refused.status, 0);
   assert.match(refused.stderr, /core hash mismatch/);
 });
+
+// ---------------------------------------------------------------------------
+// --quant-scheme pow2: ALL params N-bit fixed point, one 2^-k per layer
+// ---------------------------------------------------------------------------
+const pack = require('../research/scripts/prereg-distill/pack.js');
+// Independent oracle: every weight AND bias of layer l is an integer in [-qmax, qmax] times
+// 2^-k[l], and k[l] is the largest such exponent for the layer's float max |value|.
+function assertPow2Grid(layers, params, k, bits, floatParams) {
+  const qmax = 2 ** (bits - 1) - 1;
+  bc.layerOffsets(layers).forEach(({ nin, nout, w }, l) => {
+    const n = nin * nout + nout;
+    for (let i = w; i < w + n; i++) {
+      const s = params[i] * 2 ** k[l];
+      assert.ok(Number.isInteger(s) && Math.abs(s) <= qmax, `layer ${l} param ${i - w}: ${params[i]} * 2^${k[l]} = ${s}`);
+    }
+    if (floatParams) {
+      let m = 0;
+      for (let i = w; i < w + n; i++) m = Math.max(m, Math.abs(floatParams[i]));
+      assert.ok(m * 2 ** k[l] <= qmax && m * 2 ** (k[l] + 1) > qmax, `layer ${l}: k ${k[l]} is the largest exponent for max ${m}`);
+    }
+  });
+}
+
+test('pow2 PTQ: every weight and bias is an N-bit integer times 2^-k (N = 8, 4); k largest; idempotent; off-grid params refused', async () => {
+  const data = await loadSmall('duck');
+  const fl = bc.trainNode(data, { hidden: [8, 8], epochs: 2, batch: 64, lr: 1e-2, seed: 2 });
+  for (const bits of [8, 4]) {
+    const quant = { bits, scheme: 'pow2' };
+    const q = bc.quantizeParams(fl.layers, fl.params, quant);
+    assert.ok(!('scales' in q) && q.k.length === 3 && q.k.every(Number.isInteger));
+    assertPow2Grid(fl.layers, q.params, q.k, bits, fl.params);
+    const rec = bc.quantRecord(fl.layers, q.params, quant, 'ptq', q);
+    assert.deepStrictEqual(Object.keys(rec), ['bits', 'scheme', 'mode', 'biases', 'k', 'levels', 'checked']);
+    assert.deepStrictEqual([rec.biases, rec.checked], ['int', true]);
+    assert.ok(rec.levels <= 2 * bc.quantMax(bits) + 1);
+    const biasChanged = bc.layerOffsets(fl.layers).some(({ nout, b }) => { for (let o = 0; o < nout; o++) if (q.params[b + o] !== fl.params[b + o]) return true; return false; });
+    assert.ok(biasChanged, 'biases are quantized too');
+    assert.deepStrictEqual(bc.quantizeParams(fl.layers, q.params, quant), q, 'quantizing a pow2 grid is the identity (same k)');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(q.params)), q.params, 'JSON round-trips the values');
+    P.createNet(fl.layers, q.params);
+    const bad = q.params.slice(); bad[bad.length - 1] += 2 ** -(q.k[2] + 1);   // half a step on a bias
+    assert.throws(() => bc.checkQuantized(fl.layers, bad, rec), /not an integer in/);
+    assert.throws(() => bc.checkQuantized(fl.layers, q.params, { ...rec, k: q.k.map(e => e + 1).slice(0, 2) }), /k must be 3 integers/);
+  }
+  assert.strictEqual(bc.pow2Exponent(0, 127), 0);
+  assert.strictEqual(bc.pow2Exponent(1, 127), 6);       // 64 <= 127 < 128
+  assert.strictEqual(bc.pow2Exponent(7, 7), 0);
+  assert.strictEqual(bc.pow2Exponent(20, 7), -2);       // 20 / 4 = 5 <= 7 < 10
+});
+
+test('pow2 QAT trains on the stub duck demos on both backends; each output is an exact pow2 grid that the other backend\'s rule leaves unchanged', async (t) => {
+  const data = await loadSmall('duck');
+  const o = { hidden: [8], epochs: 2, batch: 64, lr: 1e-2, seed: 1 };
+  for (const bits of [8, 4]) {
+    const quant = { bits, scheme: 'pow2' };
+    const qn = bc.trainNode(data, { ...o, quant });
+    assert.ok(!('scales' in qn));
+    assertPow2Grid(qn.layers, qn.params, qn.k, bits);
+    assert.ok(qn.log.every(r => Number.isFinite(r.loss)));
+    P.createNet(qn.layers, qn.params);
+    if (!hasNumpy()) { t.skip('python pow2 QAT not checked: no numpy'); continue; }
+    const snapshotDir = path.join(tmp, `pow2-snaps-${bits}`);
+    const qp = await bc.trainPython(path.join(await smallDir('duck'), 'demos.bin'), path.join(tmp, `pow2-qat-${bits}.json`), { ...o, quant, snapshotDir }, ROOT);
+    assert.ok(!('scales' in qp) && qp.k.length === 2);
+    assertPow2Grid(qp.layers, qp.params, qp.k, bits);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(snapshotDir, 'epoch-02.json'), 'utf8')).params, qp.params, 'snapshots hold the pow2 params');
+    // The backends do not match each other bit for bit (different RNGs and float32 vs
+    // float64 training); what they share is the grid rule: node's quantizer maps the
+    // python output to itself with python's k.
+    assert.deepStrictEqual(bc.quantizeParams(qp.layers, qp.params, quant), { params: qp.params, k: qp.k });
+    assert.ok(qp.log.every(r => Number.isFinite(r.loss)));
+  }
+});
+
+test('pow2 through the CLI (bc-quantize and bc-train): config.quant records k, biases int, checked; pack.js round trip and storage bits', async () => {
+  const src = await kdTeacherFile();
+  const srcBest = JSON.parse(fs.readFileSync(src, 'utf8'));
+  const out = path.join(tmp, 'ptq-pow2-int4');
+  let run = cli('bc-quantize', '--from', src, '--dir', out, '--quant-bits', '4', '--quant-scheme', 'pow2', '--target', '50', '--workers', '1');
+  assert.strictEqual(run.status, 0, run.stderr);
+  const best = JSON.parse(fs.readFileSync(path.join(out, 'best.json'), 'utf8'));
+  const q = best.config.quant;
+  assert.deepStrictEqual([q.bits, q.scheme, q.mode, q.biases, q.checked], [4, 'pow2', 'ptq', 'int', true]);
+  assert.deepStrictEqual(best.params, bc.quantizeParams(srcBest.layers, srcBest.params, { bits: 4, scheme: 'pow2' }).params);
+  assertPow2Grid(best.layers, best.params, q.k, 4, srcBest.params);
+  // pack.js: module round trip, then the CLI (writes the .bin, re-reads it, reports bits).
+  const p = pack.pack(best);
+  const back = pack.unpack(p.buf);
+  assert.deepStrictEqual([back.bits, back.layers, back.k], [4, best.layers, q.k]);
+  assert.deepStrictEqual(back.params, best.params, 'unpacked params are identical');
+  const n = P.numParams(best.layers);
+  assert.strictEqual(p.buf.length, p.headerBytes + Math.ceil(n * 4 / 8));
+  const binFile = path.join(tmp, 'packed.bin');
+  const pk = spawnSync(process.execPath, [path.join(ROOT, 'research', 'scripts', 'prereg-distill', 'pack.js'), '--model', path.join(out, 'best.json'), '--out', binFile], { encoding: 'utf8' });
+  assert.strictEqual(pk.status, 0, pk.stderr);
+  const rep = JSON.parse(pk.stdout);
+  assert.deepStrictEqual([rep.params, rep.paramBits, rep.kBits, rep.totalBits, rep.roundTrip], [n, 4 * n, 24, 4 * n + 24, 'identical']);
+  assert.deepStrictEqual(fs.readFileSync(binFile), p.buf);
+  assert.deepStrictEqual(pack.storage([44, 8, 8, 3], 8), { params: 459, paramBits: 3672, kBits: 24, totalBits: 3696 });
+  assert.deepStrictEqual(pack.storage([44, 8, 8, 3], 4), { params: 459, paramBits: 1836, kBits: 24, totalBits: 1860 });
+  // pack.js refuses a model that is not on its claimed grid, and a non-pow2 model.
+  const off = path.join(tmp, 'pow2-off.json');
+  fs.writeFileSync(off, JSON.stringify({ ...best, params: best.params.map((v, i) => (i === 0 ? v + 1e-3 : v)) }));
+  const refused = spawnSync(process.execPath, [path.join(ROOT, 'research', 'scripts', 'prereg-distill', 'pack.js'), '--model', off, '--out', path.join(tmp, 'x.bin')], { encoding: 'utf8' });
+  assert.notStrictEqual(refused.status, 0);
+  assert.match(refused.stderr, /not an integer in/);
+  assert.throws(() => pack.pack(srcBest), /not a pow2-quantized model/);
+  // bc-train QAT pow2 (node backend): the same record, mode qat.
+  const qat = path.join(tmp, 'qat-pow2');
+  run = cli('bc-train', '--dir', qat, '--demos', await smallDir('duck'), '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1',
+    '--quant-bits', '8', '--quant-scheme', 'pow2');
+  assert.strictEqual(run.status, 0, run.stderr);
+  const qb = JSON.parse(fs.readFileSync(path.join(qat, 'best.json'), 'utf8'));
+  assert.deepStrictEqual([qb.config.quant.scheme, qb.config.quant.mode, qb.config.quant.biases, qb.config.quant.checked], ['pow2', 'qat', 'int', true]);
+  assertPow2Grid(qb.layers, qb.params, qb.config.quant.k, 8);
+  assert.deepStrictEqual(pack.unpack(pack.pack(qb).buf).params, qb.params);
+});

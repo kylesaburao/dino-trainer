@@ -5,7 +5,8 @@
 // levels and count, per running frame, whether each quantized copy would choose a
 // different action (decision disagreement on the float model's own states), plus the
 // float model's min top-2 margin on the frames where a copy disagrees.
-// Usage: node ptq-probe.js --model <best.json> [--frames 20000] [--seed 30003000] [--scheme row]
+// Usage: node ptq-probe.js --model <best.json> [--frames 20000] [--seed 30003000] [--scheme row|layer|pow2]
+// (pow2 quantizes the biases too, so its copies differ from the float model in every param.)
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.join(__dirname, '..', '..', '..');
@@ -29,8 +30,10 @@ const argmax = (z) => { let b = 0; for (let i = 1; i < z.length; i++) if (z[i] >
 const floatZ = logitsFn(m.layers, m.params);
 const copies = BITS.map(bits => {
   const q = bc.quantizeParams(m.layers, m.params, { bits, scheme });
-  const levels = bc.checkQuantized(m.layers, q.params, { bits, scheme, scales: q.scales });
-  return { bits, levels, z: logitsFn(m.layers, q.params), disagree: 0, byClass: [0, 0, 0], minMarginAtFlip: Infinity };
+  const levels = bc.checkQuantized(m.layers, q.params, { bits, scheme, scales: q.scales, k: q.k });
+  let zeros = 0;
+  for (const v of q.params) if (v === 0) zeros++;
+  return { bits, levels, k: q.k, zeros, z: logitsFn(m.layers, q.params), disagree: 0, byClass: [0, 0, 0], minMarginAtFlip: Infinity };
 });
 const agent = P.createAgent(m);
 const x = new Float64Array(P.OBS_DIM);
@@ -54,5 +57,5 @@ for (const level of LEVELS) {
   }
 }
 console.log(JSON.stringify({ model: opt('--model'), layers: m.layers, scheme, frames, floatActions: { none: cls[0], jump: cls[1], duck: cls[2] }, floatMinMargin: minMargin,
-  copies: copies.map(c => ({ bits: c.bits, levels: c.levels, disagree: c.disagree, rate: c.disagree / frames, onFloatAction: { none: c.byClass[0], jump: c.byClass[1], duck: c.byClass[2] },
+  copies: copies.map(c => ({ bits: c.bits, levels: c.levels, ...(c.k ? { k: c.k } : {}), zeroParams: c.zeros, disagree: c.disagree, rate: c.disagree / frames, onFloatAction: { none: c.byClass[0], jump: c.byClass[1], duck: c.byClass[2] },
     floatMinMarginAtFlip: Number.isFinite(c.minMarginAtFlip) ? c.minMarginAtFlip : null })) }, null, 1));

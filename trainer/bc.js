@@ -53,6 +53,14 @@
 // float. QAT: each step's forward and backward use the quantized weights and the
 // gradient updates the float weights (straight-through estimator); the final params are
 // the quantized ones. The model stays dino-mlp-v1, so policy.js and CSS run it unchanged.
+// Scheme 'pow2' (all params N-bit fixed point): weights AND biases are integers q in
+// [-qmax, qmax] with ONE power-of-two scale per layer, value = q * 2^-k. k is the
+// largest integer with m * 2^k <= qmax, where m = max(|W|, |b|) over the layer (k = 0
+// for an all-zero layer; k may be negative), so no value is clipped; q = round-half-up(
+// v * 2^k) (the clamp to +-qmax never binds). QAT fake-quantizes biases too and
+// recomputes k every step; the result carries k (one integer per layer) instead of
+// scales. q * 2^-k is exact in float64 (and float32), so the saved params are the
+// fixed-point values exactly; research/scripts/prereg-distill/pack.js packs them.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -474,8 +482,30 @@ function softTargets(Z, tau, nOut = 3) {
   return Q;
 }
 
-const QUANT_SCHEMES = ['row', 'layer'];
+const QUANT_SCHEMES = ['row', 'layer', 'pow2'];
 const quantMax = (bits) => 2 ** (bits - 1) - 1;
+
+// Largest integer k with m * 2^k <= qmax (m >= 0; 0 for m = 0). Powers of two are exact,
+// so the fix-up comparisons are exact; bc_train.py pow2_exponent is the same rule.
+function pow2Exponent(m, qmax) {
+  if (!(m > 0)) return 0;
+  let k = Math.floor(Math.log2(qmax / m));
+  while (m * 2 ** (k + 1) <= qmax) k++;
+  while (m * 2 ** k > qmax) k--;
+  return k;
+}
+
+// pow2 scheme: quantize weights and biases of every layer into out; returns k per layer.
+function quantizePow2Into(layers, params, bits, out) {
+  const qmax = quantMax(bits);
+  return layerOffsets(layers).map(({ nin, nout, w, b }) => {
+    let m = 0;
+    for (let i = w; i < b + nout; i++) m = Math.max(m, Math.abs(params[i]));
+    const k = pow2Exponent(m, qmax), up = 2 ** k, down = 2 ** -k;
+    for (let i = w; i < b + nout; i++) out[i] = Math.min(qmax, Math.max(-qmax, Math.floor(params[i] * up + 0.5))) * down;
+    return k;
+  });
+}
 function checkQuantOptions(q) {
   if (!(Number.isInteger(q.bits) && q.bits >= 2 && q.bits <= 8)) throw new Error(`--quant-bits must be an integer in 2..8, got ${q.bits}`);
   if (!QUANT_SCHEMES.includes(q.scheme)) throw new Error(`--quant-scheme must be one of ${QUANT_SCHEMES.join(', ')}, got ${q.scheme}`);
@@ -483,8 +513,10 @@ function checkQuantOptions(q) {
 
 // Quantize the weights of params (policy.createNet layout) into out (may be params);
 // biases are copied unchanged. Returns scales: one array per layer (one entry per
-// output row for 'row', one for 'layer'). See the header for the rule.
+// output row for 'row', one for 'layer'). See the header for the rule. Scheme 'pow2'
+// also quantizes the biases and returns k (one integer per layer) instead.
 function quantizeInto(layers, params, q, out) {
+  if (q.scheme === 'pow2') return quantizePow2Into(layers, params, q.bits, out);
   const qmax = quantMax(q.bits);
   const scales = [];
   for (const { nin, nout, w, b } of layerOffsets(layers)) {
@@ -510,17 +542,46 @@ function quantizeInto(layers, params, q, out) {
   return scales;
 }
 
+// { params, scales } for 'row'/'layer'; { params, k } for 'pow2'.
 function quantizeParams(layers, params, q) {
   const out = new Float64Array(params.length);
-  const scales = quantizeInto(layers, params, q, out);
-  return { params: Array.from(out), scales };
+  const r = quantizeInto(layers, params, q, out);
+  return q.scheme === 'pow2' ? { params: Array.from(out), k: r } : { params: Array.from(out), scales: r };
+}
+
+// The config.quant record for a quantized result r ({ scales } or { k }). checkQuantized
+// throws unless the params are exactly on the recorded grid, so no record is written
+// for params off it. pow2 records biases 'int', k per layer and checked: true.
+function quantRecord(layers, params, q, mode, r) {
+  const rec = q.scheme === 'pow2'
+    ? { bits: q.bits, scheme: q.scheme, mode, biases: 'int', k: r.k }
+    : { bits: q.bits, scheme: q.scheme, mode, biases: 'float', scales: r.scales };
+  rec.levels = checkQuantized(layers, params, rec);
+  if (q.scheme === 'pow2') rec.checked = true;
+  return rec;
 }
 
 // Throws unless every weight is exactly k * scale with an integer |k| <= qmax, for the
 // recorded scales. Returns the number of distinct integer levels used.
+// pow2: every weight AND bias v of layer l must be an integer in [-qmax, qmax] times
+// 2^-k[l] (k[l] an integer), exactly.
 function checkQuantized(layers, params, quant) {
   const qmax = quantMax(quant.bits);
   const levels = new Set();
+  if (quant.scheme === 'pow2') {
+    const offs = layerOffsets(layers);
+    if (!Array.isArray(quant.k) || quant.k.length !== offs.length || !quant.k.every(Number.isInteger)) throw new Error(`pow2: k must be ${offs.length} integers, got ${JSON.stringify(quant.k)}`);
+    if (params.length !== P.numParams(layers)) throw new Error(`pow2: expected ${P.numParams(layers)} params, got ${params.length}`);
+    offs.forEach(({ nout, w, b }, l) => {
+      const up = 2 ** quant.k[l];
+      for (let i = w; i < b + nout; i++) {
+        const s = params[i] * up;
+        if (!(Number.isInteger(s) && Math.abs(s) <= qmax && s / up === params[i])) throw new Error(`layer ${l} param ${i - w}: ${params[i]} is not an integer in [-${qmax}, ${qmax}] times 2^-${quant.k[l]}`);
+        levels.add(s);
+      }
+    });
+    return levels.size;
+  }
   layerOffsets(layers).forEach(({ nin, nout, w }, l) => {
     const s = quant.scales[l];
     if (!s || s.length !== (quant.scheme === 'row' ? nout : 1)) throw new Error(`layer ${l}: scales do not match scheme ${quant.scheme}`);
@@ -538,7 +599,7 @@ function checkQuantized(layers, params, quant) {
 
 // Train on data { X, y, sw, n, dim }. o: { hidden, epochs, batch, lr, seed, onEpoch,
 // distill (optional: { logits: Float64Array n x 3, mode: 'soft'|'hard', tau, alpha }),
-// quant (optional: { bits, scheme }) }. Returns { layers, params (Array), log[, scales] }.
+// quant (optional: { bits, scheme }) }. Returns { layers, params (Array), log[, scales | k] }.
 function trainNode(data, o) {
   const { X, y, sw, n, dim } = data;
   const layers = [dim, ...o.hidden, 3];
@@ -596,7 +657,7 @@ function trainNode(data, o) {
   }
   if (qparams) {
     const q = quantizeParams(layers, params, o.quant);
-    return { layers, params: q.params, log, scales: q.scales };
+    return { layers, params: q.params, log, ...(q.k ? { k: q.k } : { scales: q.scales }) };
   }
   return { layers, params: Array.from(params), log };
 }
@@ -683,6 +744,6 @@ function assembleBest({ layers, params, validation, coreHash, config }) {
 module.exports = {
   DEMOS_FORMAT, ROW, GEN_DEFAULTS, TRAIN_DEFAULTS, TEACHERS, resolveTeacher, actionLabel, isBoring, genEpisode, genSeed, generateDemos, resolveDemos, checkDemos,
   loadDemos, sha256File, layerOffsets, createTrainer, classWeights, trainNode, pythonPath, trainPython, assembleBest,
-  teacherLogits, argmaxLabels, softTargets, QUANT_SCHEMES, quantMax, checkQuantOptions, quantizeInto, quantizeParams, checkQuantized,
+  teacherLogits, argmaxLabels, softTargets, QUANT_SCHEMES, quantMax, checkQuantOptions, pow2Exponent, quantizeInto, quantizeParams, checkQuantized, quantRecord,
   writeLogits, paramsSha256,
 };

@@ -12,6 +12,7 @@
 //   grp/v2-distill-duck-d2w32-s1-tau2   finished distilled + QAT int4 run (config.distillFrom, quant;
 //                       bc-metrics with distillLoss)
 //   grp/v2-quant-duck-d2w8-s1-int8      bc-quantize output: best.json only (quant ptq, quantFrom)
+//   grp/v2-quant-duck-d2w32-s1-int8-pow2  pow2 PTQ (real pow2 params; quant.k, biases int)
 //   grp/demos-set       nested bc-gen output, generating: demos.json (teacherName) and
 //                       demos.bin.<this pid>.tmp
 //   plain               an empty directory (listed as before)
@@ -44,7 +45,8 @@ function check(name, ok, detail = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` (${detail})` : ''}`);
 }
 
-const KD = 'grp/v2-distill-duck-d2w32-s1-tau2', PTQ = 'grp/v2-quant-duck-d2w8-s1-int8';
+const KD = 'grp/v2-distill-duck-d2w32-s1-tau2', PTQ = 'grp/v2-quant-duck-d2w8-s1-int8', POW2 = 'grp/v2-quant-duck-d2w32-s1-int8-pow2';
+const bc = require(path.join(ROOT, 'trainer', 'bc.js'));
 
 function buildFixture(dir) {
   const w = (f, s) => { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), s); };
@@ -87,6 +89,12 @@ function buildFixture(dir) {
     trainer: 'trainer/cli.js bc-quantize', teacherName: 'duck', quantFrom: { path: 'runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json', paramsSha256: 'cd'.repeat(32) },
     quant: { bits: 8, scheme: 'row', mode: 'ptq', biases: 'float', scales: [], levels: 200 } };
   w('grp/v2-quant-duck-d2w8-s1-int8/best.json', JSON.stringify(ptq));
+  // pow2 PTQ run (all params N-bit, one 2^-k per layer): real pow2 params, so it plays.
+  const p2 = JSON.parse(src('runs/v2-bc-jump-d2w32-s1/best.json'));
+  const p2q = bc.quantizeParams(p2.layers, p2.params, { bits: 8, scheme: 'pow2' });
+  p2.params = p2q.params;
+  p2.config = { ...ptq.config, quant: bc.quantRecord(p2.layers, p2q.params, { bits: 8, scheme: 'pow2' }, 'ptq', p2q) };
+  w(`${POW2}/best.json`, JSON.stringify(p2));
 
   const hdr = (model, n, extra = {}) => JSON.stringify({ header: true, model, layers: [44, 32, 32, 3], gameVersion: 'v2', actionRepeat: 1, generation: null,
     coreHash: '0f329d4e'.padEnd(64, '0'), base: 30000000, n, target: 1000000, wasm: true, workers: 18, start: '2026-10-10T12:00:00.000Z', ...extra });
@@ -158,13 +166,17 @@ function cdpClient(url) {
     for (let i = 0; i < 50 && !list; i++) { try { list = await (await fetch(base + '/api/runs')).json(); } catch (e) { await sleep(100); } }
     const by = Object.fromEntries((list || []).map(r => [r.name, r]));
     check('run list: top-level, nested and plain dirs; a group is not a run',
-      ['es-run', 'grp/bc-run', 'grp/bc-old', 'grp/demos-set', 'plain', KD, PTQ].every(n => by[n]) && !by.grp && list.length === 7, (list || []).map(r => r.name).join(', '));
+      ['es-run', 'grp/bc-run', 'grp/bc-old', 'grp/demos-set', 'plain', KD, PTQ, POW2].every(n => by[n]) && !by.grp && list.length === 8, (list || []).map(r => r.name).join(', '));
     const kd = by[KD] || {}, ptq = by[PTQ] || {};
     check('distilled QAT run: kind bc, teacher model path/sha/tau/mode, quant bits/scheme/mode',
       kd.kind === 'bc' && kd.bc.distill && kd.bc.distill.from === 'runs/exp-bc-duck/v2-bc-duck-d2w32-s1/best.json' && kd.bc.distill.tau === 2 &&
       kd.bc.distill.mode === 'soft' && kd.bc.distill.paramsSha256 === 'ab'.repeat(32) && kd.bc.quant.bits === 4 && kd.bc.quant.mode === 'qat', JSON.stringify(kd.bc && kd.bc.distill));
     check('post-training-quantized run (best.json only): kind bc, quant ptq with its source',
       ptq.kind === 'bc' && ptq.bc.quant && ptq.bc.quant.mode === 'ptq' && ptq.bc.quant.from === 'runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json' && !ptq.bc.distill);
+    const p2 = by[POW2] || {};
+    check('pow2 PTQ run: quant scheme pow2, k per layer, biases int',
+      p2.kind === 'bc' && p2.bc.quant && p2.bc.quant.scheme === 'pow2' && Array.isArray(p2.bc.quant.k) && p2.bc.quant.k.length === 3 && p2.bc.quant.biases === 'int',
+      JSON.stringify(p2.bc && p2.bc.quant));
     const bc = by['grp/bc-run'] || {}, dm = by['grp/demos-set'] || {};
     check('ES run is kind es, generation from metrics', by['es-run'] && by['es-run'].kind === 'es' && by['es-run'].generation === 970);
     const old = by['grp/bc-old'] || {};
@@ -325,6 +337,11 @@ function cdpClient(url) {
     check('post-training-quantized run view: int8 PTQ tile with its source; no-training note; plays',
       await waitUntil(`__dash.pb.run === ${JSON.stringify(PTQ)} && __dash.pb.model && __dash.pb.game && __dash.pb.game.score() >= 50 &&
         /post-training · row scales/.test(document.getElementById('detail').textContent) && /post-training quantization of runs\\/exp-bc-duck\\/v2-bc-duck-d2w8-s1/.test(document.getElementById('detail').textContent)`, 15000));
+    await pick(POW2);
+    const p2k = ((by[POW2] || {}).bc || {}).quant ? by[POW2].bc.quant.k.join(', ') : 'none';
+    check('pow2 PTQ run view: int8 tile with pow2 scales, the per-layer k and int biases; plays',
+      await waitUntil(`__dash.pb.run === ${JSON.stringify(POW2)} && __dash.pb.model && __dash.pb.game && __dash.pb.game.score() >= 50 &&
+        document.getElementById('detail').textContent.includes(${JSON.stringify(`post-training · pow2 scales 2^-k, k ${p2k}`)}) && /biases int/.test(document.getElementById('detail').textContent)`, 15000));
 
     // ES run: unchanged view and playback.
     await setSpeed(16);
