@@ -1,6 +1,6 @@
 # Rules v3: superhuman past 100k
 
-Status (2026-10-10): rules v3 are implemented on `wt/game-v3`. The budget probe, the solver unit tests and a 40 + 40 game solver pilot are done. The full solver survey and the assessment of the two shipped clones on rules v3 (`assess --game v3`) are pre-registered below. They are being run on branch `wt/exp-v3-survey` (from `fb1793c`); results go in §9.
+Status (2026-10-10): rules v3 are implemented on `wt/game-v3`. The budget probe, the solver unit tests and a 40 + 40 game solver pilot are done. The full solver survey and the assessment of the two shipped clones on rules v3 (`assess --game v3`) are pre-registered below (§6, §7) and **done** (results in §9). Both solvers: 0/3,000 crashes, so rules v3 is solvable to the CP bound. Both shipped clones (v2 models on rules v3): 0/150, all dying within 1.6k points of the step. Held-out offsets 475–624 are spent; the next fresh offset is 625.
 
 Core hash after the change: `65f3546c…` with the step at 100k (`63fa2ab5…` for the superseded first proposal; before rules v3: `0f329d4e…`).
 
@@ -151,6 +151,7 @@ Results so far, all 0 crashes:
   ```
   `assess --game v3` (formerly `eval`) warns "cross-rules assessment: a v2 model on rules v3", and appends to the run's `assess.jsonl` with `gameVersion: 'v3'` and `modelGameVersion: 'v2'`.
 - **Reading.** Report the score distribution (median, min, max) and the pass count, which is expected to be 0/150. Label it "v2 model on rules v3".
+- **Done** (§9.2). Held-out offsets 475–624 are now **spent**; the next fresh offset is **625**.
 
 ## 8. Open choices
 
@@ -158,3 +159,45 @@ Results so far, all 0 crashes:
 2. **Tunnelling.** Above 42 px/frame a single small cactus can pass between two frames: 1–9 per 500 must-act obstacles from 150k to 500k, none seen at 1M. It is legal (it only makes the game easier) and is excluded from must-act. Swept collision would be a physics change, so it was not made.
 3. **Training for rules v3.** The default `bc-gen` levels (0, 2k, 50k, 300k, 900k) have no rows between 100k and 300k, where the speed changes fastest. A rules-v3 clone (`runs/v3-bc-…`) needs a level grid such as 100k, 120k, 150k, 200k, 300k, 500k, 1M. The `observe()` speed features are normalised by v1's cap (13) and not clipped, so at speed 60 feature 4 reaches 7.7, against at most 2.3 on rules v2. That is legal input, but a v3 student will see a much wider input range; `policy.js` stays unchanged.
 4. **Above 1M** the rules stay at the 1M values (speed 60), as v2 stays at its own 1M values.
+
+## 9. Results (2026-10-10, branch `wt/exp-v3-survey` from `fb1793c`, core hash `65f3546c…`)
+
+**Deviation from the registered commands:** `--workers 18` instead of 2 (the scan job had finished and the Mac was free), and the two survey arms ran one after the other, not in parallel. Every seed is played independently of the worker count, so the rows are the same; only the wall time changes (92 s and 119 s per arm; the assessments took 2–3 s each).
+
+### 9.1 Solver survey (§6)
+
+Commands as in §6, with `--workers 18`. 3,000 games per solver on rules v3, seeds 51,000,000–51,002,999, from 100k (v2 speed, so every game takes the step) to 1M. Summaries: `runs/exp-game-v3/survey-{jump,duck}-51000000-3000.summary.json` (`analyze.js --json`, committed); raw JSONL and logs stay local.
+
+| Solver | Crashes | Crash rate, 95% CP upper (two-sided) | one-sided 95% upper | Reached 1M | Obstacles passed | Mid pterodactyls ducked | Duck fallbacks | Duck conflicts |
+|---|---|---|---|---|---|---|---|---|
+| jump (`createSolver`) | **0/3,000** | 0.123% | 0.100% | 3,000 | 65,623,636 | 0 (never ducks) | n/a | n/a |
+| duck (`createDuckSolver`) | **0/3,000** | 0.123% | 0.100% | 3,000 | 65,623,636 | 9,591,107 of 9,591,107 passed (solver count: 9,605,552 of 9,605,552 encountered) | **0** (0 takeoff, 0 obstacle, 0 newcomer) | **0** |
+
+- Every row has `game: 'v3'`, `start: 100000` and a final score of 1,000,001. The obstacle counts are identical for both solvers because the sequence does not depend on the player while no crash occurs.
+- **Reading (§6, verbatim rule): accept H0 for both solvers.** Rules v3 is solvable to a crash rate below 0.12% per game (two-sided 95% CP; 0.10% one-sided) for each teacher, from 100k with the step to 1M. No crash, so `crash-classify.js` was not needed and was not adapted for `--game` (it still hard-codes rules v2). Duck fallbacks are 0%, far below the 1% recording threshold: the newcomer bound did not bite at v3 speeds.
+- **Scope.** Start 100k at natural speed only. Starts above 1M remain covered only by the unit tests (§6 Scope).
+- Rules v3 may now serve as a training target with either teacher.
+
+### 9.2 Shipped clones on rules v3: "v2 model on rules v3" (§7)
+
+`node trainer/cli.js assess --dir <run> --which best --game v3 --target 1000000 --seeds 150 --seed-offset 475 --workers 18 --wasm`, both models on the same held-out seeds (offsets 475–624, now **spent**; next fresh offset **625**). Records: the last line of each run's `assess.jsonl` (`gameVersion: 'v3'`, `modelGameVersion: 'v2'`).
+
+| Model (v2 model on rules v3) | Passed | Pass rate, 95% CP (two-sided) | Min | Q1 | Median | Q3 | Max |
+|---|---|---|---|---|---|---|---|
+| duck clone `runs/exp-bc-duck/v2-bc-duck-d2w8-s1` (shipped) | **0/150** | 0.000–0.024 | 100,016 | 100,092 | 100,155.5 | 100,323 | 101,162 |
+| jump clone `runs/v2-bc-jump-d2w32-s1` | **0/150** | 0.000–0.024 | 100,024 | 100,104 | 100,214 | 100,486 | 101,555 |
+
+Crash scores:
+
+| Crash score | duck clone | jump clone |
+|---|---|---|
+| below 100,000 | 0 | 0 |
+| 100,000–100,099 | 48 | 35 |
+| 100,100–100,499 | 86 | 78 |
+| 100,500–100,999 | 13 | 28 |
+| 101,000–101,999 | 3 | 9 |
+| 102,000 and above | 0 | 0 |
+
+- **Every game of both clones dies at the 100k step:** 150/150 each crash between 100,016 and 101,555, so within the first 1.6k points at speed ≥ 41. None crashed below 100k, consistent with rules v3 being rules v2 there and both clones being certified to 1M on rules v2.
+- Paired on the same seeds: 89/150 seeds give the identical crash score for both clones (the same obstacle kills both), the jump clone gets further on 50, the duck clone on 11. That is a small difference in how far past the step they survive, not in reliability; both are 0/150.
+- **Reading (§7):** as expected (0/150). The baseline for training "even stronger" models on rules v3 is that neither v2 clone survives the step; a rules-v3 model needs demonstrations above 100k (§8 item 3).
