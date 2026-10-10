@@ -104,3 +104,19 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 - **Locked on resume.** `hidden`, `actionRepeat` and `gameVersion` can't change on resume; other options can be overridden.
 - **Evaluation uses the unmodified game.** No changes to CFG, physics, collision or fairness for evaluation. Any curriculum is training-only.
 - **Committed vs ignored.** In `runs/<name>/`, `best.json`, `evals.jsonl` and `metrics.*` are committed. Checkpoints, logs and locks are gitignored.
+
+## Research method
+
+Work as a methodical researcher. Don't try things to see what sticks.
+- **Every run serves a decision.** Before it starts, write down:
+  - the decision it informs;
+  - the competing hypotheses and what each predicts;
+  - the premises, each checked against existing data or a seconds-scale static probe;
+  - a positive-control arm that must succeed within the horizon;
+  - the horizon and seed count, sized from known variance and the effect worth detecting;
+  - how each possible result will be read.
+
+  If no outcome would change a decision, don't run it.
+- **Prune the search space with the cheapest discriminating test first:** bounds, then static probes on saved θ, then oracle and necessary-condition tests, then short replays, then full runs, then certification.
+- **A null is conditional.** Record its validity (could the test have detected success?), its power, its scope (shape, seeds, horizon, settings, commit) and what would reopen it. Don't declare a direction dead from a proxy or from one run.
+- **The full method is in `handoff/2026-10-10T1635Z-retrospective.md`, §4 and §6.** Keep the pruned-branch register (§6.4) current in each new handoff.
