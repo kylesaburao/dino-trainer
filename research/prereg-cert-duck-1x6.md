@@ -98,7 +98,7 @@ Both use rules v2, the models' own rules, so no `--game`. Each appends one recor
 Executor: a mac subagent for orchestrator mac-7, branch `worktree-agent-a345749c61b40961b` from main `3c98eac`. Run as registered, with rulings O1 (s1) and O2 (no 1×4). The user approved running it now.
 
 ### Preconditions (§2, §3), checked before any run
-- **Offsets.** Read-only sweep of every `assess.jsonl`/`evals.jsonl` under the main checkout, all 27 other worktrees (`git worktree list`) and `dino-game-base/-bc/-d2/-d2m/-mac/-wasm`: 128 files. Ranges found: 0–3, 0–24, 25–99, 100–174, 175–324, 325–474, 475–624. Largest end 624. **Nothing at ≥ 625.**
+- **Offsets.** Read-only sweep of every `assess.jsonl`/`evals.jsonl` under the main checkout, and every other worktree in `git worktree list` (all of `.claude/worktrees/*` including this one, `dino-game-base/-bc/-d2/-d2m/-mac/-wasm` and one scratchpad worktree): 128 files. Ranges found: 0–3, 0–24, 25–99, 100–174, 175–324, 325–474, 475–624. Largest end 624. **Nothing at ≥ 625.**
 - **Candidate** `runs/exp-distill/v2-bc-duck-d1w6-s1/best.json` (on main): params sha256 `eb89e31f5c5d02e5e11519f1f9966179c3bf073074673877030127052c73070e` (**matches**), whole-file sha256 `b9bf41817171aa03…` (matches §2), `gameVersion` v2, `layers` [44, 6, 3], `config.teacherName` duck, `coreHash` `0f329d4e…`.
 - **Control** `runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json`: params sha256 `34e8a3af6ea336ad…`, v2, [44, 8, 8, 3], duck, `coreHash` `0f329d4e…`.
 - **Core hash** of the executing tree: `65f3546cea0b28ebab020a55e9772ddd37933e6d52c2a2ad08d2431df39998e9` (the same as at registration; recorded, not a STOP, per §2).
