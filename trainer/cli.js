@@ -97,7 +97,9 @@
 //             and best.json after its tier A; config gains batchRun {id, index (0-based), size,
 //             backend, then jobs, blasThreads (python) or group, groupSize, groupIndex (mlx)}
 //             (config.batch stays the minibatch size), and trainer names bc-train-batch.
-//             --backend python (default): --jobs K (default 6, the performance cores)
+//             Default backend: mlx when an mlx interpreter is configured (.venv-mlx or PYTHON_MLX)
+//             and --jobs is not given, else python (user's choice, 2026-10-11).
+//             --backend python: --jobs K (default 6, the performance cores)
 //             bc_train.py processes at once, each with 1 BLAS thread, which gives the same params
 //             bytes as bc-train --backend python. --backend mlx: one GPU process per shape (in
 //             groups of at most 40 seeds), shapes one after another; each model equals bc-train
@@ -1193,7 +1195,11 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
   if (!opts.dirPattern) throw new Error("bc-train-batch needs --dir-pattern (e.g. 'runs/exp-x/v2-bc-jump-d{depth}w{width}-s{seed}')");
   if (!opts.shapes || opts.seeds === undefined) throw new Error('bc-train-batch needs --shapes (e.g. 32,32/8x2) and --seeds (e.g. 1-10)');
   if (!opts.demos) throw new Error('bc-train-batch needs --demos <dir or demos.json>');
-  const backend = opts.backend || 'python';
+  // Default (user's choice, 2026-10-11): mlx when an mlx interpreter is configured (PYTHON_MLX or
+  // <root>/.venv-mlx), else python; --jobs alone also means python.
+  const mlxReady = (() => { try { require('./bc.js').mlxPythonPath(ROOT); return true; } catch (e) { return false; } })();
+  const backend = opts.backend || (opts.jobs === undefined && mlxReady ? 'mlx' : 'python');
+  if (!opts.backend) log(`bc-train-batch: --backend ${backend} (default: ${mlxReady ? 'mlx interpreter found' : 'no .venv-mlx or PYTHON_MLX'}${mlxReady && backend === 'python' ? ', but --jobs given' : ''})`);
   if (!['python', 'mlx'].includes(backend)) throw new Error(`bc-train-batch --backend must be python or mlx, got ${backend}`);
   if (backend === 'mlx' && opts.jobs !== undefined) throw new Error('--jobs is for --backend python (mlx trains each shape group in one GPU process)');
   const jobs = backend === 'mlx' ? null : opts.jobs !== undefined ? Number(opts.jobs) : 6;

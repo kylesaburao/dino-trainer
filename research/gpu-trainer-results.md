@@ -122,8 +122,8 @@ Training is no longer the bottleneck in a `bc-train` stage. For 10 seeds, A2 spe
 
 As the plan said, the whole-arm speedup stays bounded by the CPU screens (opening, tier B, duck share). The GPU's added value is that training no longer competes for the CPU: H-overlap holds.
 
-## 6. Open for the user or orchestrator
+## 6. Decisions and open items
 
-1. **Default backend for `bc-train-batch`.** The pre-registered reading says `mlx`, and the code default is `python`. The options are to switch it, or to switch only when `.venv-mlx` exists.
-2. **Tier A packing** (§5): whether to implement it as a follow-up.
-3. **A4 and an 18-worker overlap test,** if mixed-shape sweeps or GPU training next to tier B scans are planned.
+1. **Default backend for `bc-train-batch`** (user, 2026-10-11, AskUserQuestion): **`mlx` when an mlx interpreter is configured** (`.venv-mlx` or `PYTHON_MLX`) and `--jobs` isn't given, **else `python`**. This applies the pre-registered reading wherever MLX exists and stays portable elsewhere.
+2. **Tier A packing** (§5): the user chose a follow-up branch, after this one is reviewed and merged.
+3. **Still open:** A4 and an 18-worker overlap test, if mixed-shape sweeps or GPU training next to tier B scans are planned.

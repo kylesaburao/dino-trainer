@@ -949,4 +949,14 @@ test('mlx backend: bc-train and bc-train-batch match the numpy backend to float3
   assert.strictEqual(g.batch, 64);
   assert.ok(fs.existsSync(path.join(tmp, 'mxb', 'd1w6-s2', 'snapshots', 'epoch-02.json')));
   assert.match(fs.readFileSync(path.join(tmp, 'mxb', 'd1w6-s2', 'train.log'), 'utf8').split('\n')[0], /backend=mlx layers=44-6-3 .* batch=3\/4$/);
+  // Default backend: mlx when an mlx interpreter is configured, python with --jobs or without one
+  // (each run below stops at the existing best.json, after logging its choice).
+  const pat = ['--dir-pattern', path.join(tmp, 'mxb', 'd{depth}w{width}-s{seed}'), '--shapes', '6', '--seeds', '2', ...common];
+  assert.match(cli('bc-train-batch', ...pat).stdout, /--backend mlx \(default: mlx interpreter found\)/);
+  assert.match(cli('bc-train-batch', ...pat, '--jobs', '2').stdout, /--backend python \(default: mlx interpreter found, but --jobs given\)/);
+  if (!fs.existsSync(path.join(ROOT, '.venv-mlx'))) {
+    const env = { ...process.env }; delete env.PYTHON_MLX;
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'trainer', 'cli.js'), 'bc-train-batch', ...pat], { encoding: 'utf8', env });
+    assert.match(r.stdout, /--backend python \(default: no \.venv-mlx or PYTHON_MLX\)/);
+  }
 });
