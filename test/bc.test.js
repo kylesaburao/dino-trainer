@@ -911,6 +911,29 @@ test('bc-train-batch: each member equals bc-train --backend python byte for byte
   assert.ok(!fs.existsSync(path.join(tmp, 'batch', 'd1w6-s4')));
 });
 
+test('packed tier A: scoreSeedsMany gives each model exactly its own scoreSeeds scores (models of different shapes in one pool run)', async () => {
+  const { scoreSeedsMany, scoreSeeds } = require('../trainer/cli.js');
+  const { createPool } = require('../trainer/pool.js');
+  const { validationSeeds } = require('../trainer/env.js');
+  const load = (f) => { const m = JSON.parse(fs.readFileSync(path.join(ROOT, f), 'utf8')); return { layers: m.layers, params: m.params, actionRepeat: 1, gameVersion: 'v2' }; };
+  const jump = load('runs/v2-bc-jump-d2w32-s1/best.json');
+  // Damaged copies crash at seed-dependent scores, so a model/seed mix-up would show.
+  const damage = (m, f) => ({ ...m, params: m.params.map((v, i) => v * (1 + f * Math.sin(i * 12.9898))) });
+  const models = [damage(jump, 0.6), load('runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json'), damage(jump, 0.9), load('runs/v2-es-d2w32-s1-t1m/best.json')];
+  const seeds = validationSeeds(25), target = 3000;
+  const pool = createPool(3);
+  try {
+    const packed = await scoreSeedsMany(pool, models, seeds, target);
+    for (const [k, m] of models.entries()) assert.deepStrictEqual(packed[k], await scoreSeeds(pool, m, seeds, target), `model ${k}`);
+    const distinct = new Set(packed.flat());
+    assert.ok(distinct.size >= 5, `the test needs varied scores to detect a mix-up, got ${[...distinct].join(',')}`);
+    assert.notDeepStrictEqual(packed[0], packed[2]);
+  } finally {
+    await pool.terminate();
+  }
+  await assert.rejects(scoreSeedsMany(null, [models[0], { ...models[1], gameVersion: 'v3' }], seeds, target), /differ in actionRepeat or gameVersion/);
+});
+
 // The MLX engine (Apple GPU) needs an interpreter with mlx: PYTHON_MLX or <root>/.venv-mlx.
 const hasMlx = () => {
   let py;

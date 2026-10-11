@@ -55,7 +55,7 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend pytho
   - The default backend is `mlx` when an mlx interpreter is configured (`.venv-mlx` or `PYTHON_MLX`) and `--jobs` isn't given; otherwise `python`. This was the user's choice on 2026-10-11. The command logs which one it picked.
   - `--backend python` runs `--jobs` `bc_train.py` processes at once, each with 1 BLAS thread. Each member's params are byte-identical to `bc-train --backend python` with the same shape and seed (checked on the full demos, 10/10).
   - `--backend mlx` trains each shape's seeds in one GPU process (groups of at most 40).
-  - Tier A runs on one shared worker pool, one model at a time; with mlx, that overlaps the next group's training.
+  - Tier A runs on one shared worker pool, packed: every model waiting when the pool frees up plays its 25 games in one pool run (`scoreSeedsMany`; `worker.js` takes `setup.models` with a per-job `model` index). Validation results are unchanged. Training continues meanwhile.
   - The dashboard lists every member while it waits, trains and validates (`config.batchRun`; `config.batch` stays the minibatch size).
   - Measured for 10 seeds of 2×32 on the M5 Pro (`research/gpu-trainer-results.md`):
     - sequential `bc-train`: 201 s;

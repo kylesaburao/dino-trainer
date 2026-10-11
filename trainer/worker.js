@@ -1,6 +1,8 @@
 'use strict';
 // Worker thread: evaluates jobs { id, noiseSeed, sign, seeds[, starts, caps] } for the current
 // setup { theta, layers, actionRepeat, gameVersion, sigma, target[, wasm] } and replies with scores.
+// Packed setups carry models [{ theta, layers }, ...] instead of theta/layers, and each job a
+// model index (bc-train-batch tier A: many models' games in one pool run).
 // With setup.wasm the network runs on wasm-net.js (bit-identical decisions, built once per job).
 // sigma is a number or a per-parameter vector (es.js sigmaVector).
 // With starts (training curriculum), episode j starts at starts[j] and ends at caps[j].
@@ -24,8 +26,11 @@ parentPort.on('message', (msg) => {
   if (msg.type === 'job') {
     const { id, noiseSeed, sign, seeds, starts, caps, ramp, window } = msg.job;
     if (ramp && !ramps) ramps = require('./ramp.js');
-    const params = perturb(setup.theta, noiseSeed, sign, setup.sigma);
-    const model = { layers: setup.layers, params, actionRepeat: setup.actionRepeat, gameVersion: setup.gameVersion };
+    // setup.models (packed tier A, bc-train-batch): job.model picks this job's network; without it
+    // the network is the setup's own (every other caller).
+    const net = setup.models ? setup.models[msg.job.model] : setup;
+    const params = perturb(net.theta, noiseSeed, sign, setup.sigma);
+    const model = { layers: net.layers, params, actionRepeat: setup.actionRepeat, gameVersion: setup.gameVersion };
     const makeAgent = setup.wasm ? wasmAgents(model) : undefined;
     const scores = [], distances = [];
     let frames = 0, teacherFrames = 0;

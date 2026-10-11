@@ -109,7 +109,10 @@
 //             bytes as bc-train --backend python. --backend mlx: one GPU process per shape (in
 //             groups of at most 40 seeds), shapes one after another; each model equals bc-train
 //             --backend mlx for its seed to float32 noise. Tier A runs on one shared --workers
-//             pool, one model at a time, as models finish (with mlx, while the next group trains). A failed model gets no best.json and a 'failed' line in its train.log; the
+//             pool as models finish, packed: every model waiting when the pool frees up plays its
+//             games in one pool run, so no worker idles through a model's last wave. Training
+//             continues meanwhile (the next python job, or the next mlx group). Validation is
+//             per game, so it is the same as unpacked. A failed model gets no best.json and a 'failed' line in its train.log; the
 //             others continue and the command exits non-zero. SIGINT/SIGTERM stop the children
 //             and release every lock.
 //   bc-quantize post-training quantization of --from (a best.json) with the same rule,
@@ -395,6 +398,20 @@ async function scoreSeeds(pool, model, seeds, target, wasm = false) {
   const setup = { theta: model.params, layers: model.layers, actionRepeat: model.actionRepeat, gameVersion: model.gameVersion || 'v1', sigma: 0, target, wasm };
   const res = await pool.run(setup, seeds.map(s => ({ noiseSeed: 0, sign: 0, seeds: [s] })));
   return res.map(r => r.scores[0]);
+}
+
+// The same for several models in ONE pool run (bc-train-batch tier A): every model x seed game is
+// a job, so the workers stay full instead of idling through each model's last wave (25 games on
+// 18 workers). Scores are per game, so they equal scoreSeeds' for each model. The models must
+// share actionRepeat and gameVersion. Resolves to one score array per model.
+async function scoreSeedsMany(pool, models, seeds, target, wasm = false) {
+  const { actionRepeat, gameVersion } = models[0];
+  if (models.some(m => m.actionRepeat !== actionRepeat || m.gameVersion !== gameVersion)) throw new Error('scoreSeedsMany: models differ in actionRepeat or gameVersion');
+  const setup = { models: models.map(m => ({ theta: m.params, layers: m.layers })), actionRepeat, gameVersion: gameVersion || 'v1', sigma: 0, target, wasm };
+  const jobs = [];
+  models.forEach((m, k) => seeds.forEach(s => jobs.push({ noiseSeed: 0, sign: 0, seeds: [s], model: k })));
+  const res = await pool.run(setup, jobs);
+  return models.map((m, k) => res.slice(k * seeds.length, (k + 1) * seeds.length).map(r => r.scores[0]));
 }
 
 const summary = (scores) => ({ median: median(scores), min: Math.min(...scores), max: Math.max(...scores) });
@@ -1143,14 +1160,16 @@ async function trainBcModel(ctx, backend, run, dir, { snapshotDir, logits, logit
 
 // Tier A (the 25 validation seeds, full games to the target, on pool) and best.json for one
 // trained model. extraConfig is appended to best.json's config. Resolves to the validation summary.
-async function finishBcRun(ctx, backend, run, dir, result, { trainSeconds, snapshotDir, pool, say, trainer, extraConfig = {} }) {
+// score (optional): (model, seeds) -> scores, in place of scoreSeeds on pool (bc-train-batch packs
+// several models' tier A into one pool run).
+async function finishBcRun(ctx, backend, run, dir, result, { trainSeconds, snapshotDir, pool, score, say, trainer, extraConfig = {} }) {
   const { bc, dz, quant, transitionWeight, o, target, hash, demos, sha, extras, gameVersion, wasm } = ctx;
   let quantConfig = null;
   if (quant) quantConfig = bc.quantRecord(result.layers, result.params, quant, 'qat', result);   // throws unless exactly on the grid
   const model = { format: FORMAT, layers: result.layers, params: result.params, actionRepeat: 1, gameVersion };
   const valSeedList = validationSeeds(25);
   say(`validation: ${valSeedList.length} seeds to ${target} (${gameVersion})`);
-  const scores = await scoreSeeds(pool, model, valSeedList, target, wasm);
+  const scores = score ? await score(model, valSeedList) : await scoreSeeds(pool, model, valSeedList, target, wasm);
   const validation = valSummary(scores, target);
   const last = result.log[result.log.length - 1];
   const config = {
@@ -1246,7 +1265,7 @@ function batchDir(pattern, hidden, seed) {
 // run dir (train.lock, train.log, bc-metrics.jsonl, snapshots/, best.json), so the dashboard shows
 // them as BC runs, live. --backend python: --jobs K bc_train.py processes at once with 1 BLAS
 // thread each (byte-identical to bc-train --backend python with the same --hidden and --seed);
-// each model's tier A runs on one shared worker pool, one model at a time.
+// tier A runs on one shared worker pool, packed across the models that are waiting for it.
 async function bcTrainBatchCmd({ config: cli, opts }) {
   for (const [k, flag] of [['hidden', '--hidden'], ['seed', '--seed']]) if (cli[k] !== undefined) throw new Error(`bc-train-batch takes --shapes and --seeds, not ${flag}`);
   if (opts.dir) throw new Error('bc-train-batch takes --dir-pattern, not --dir');
@@ -1312,7 +1331,24 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
   logits = null;
   const workers = Number(opts.workers) || defaultWorkers();
   const pool = createPool(Math.min(workers, 25));
-  let poolChain = Promise.resolve();   // pool.run is not reentrant: tier A runs one model at a time
+  // Tier A packing: pool.run is not reentrant, so models wait in a queue, and every model waiting
+  // when the pool frees up plays its 25 games in ONE pool run (scoreSeedsMany), keeping all
+  // workers busy. Scores are per game, so each model's validation is what scoreSeeds would give.
+  const tierAQueue = [];
+  let tierABusy = false;
+  const pumpTierA = async () => {
+    if (tierABusy || !tierAQueue.length) return;
+    tierABusy = true;
+    const take = tierAQueue.splice(0);
+    try {
+      const all = await scoreSeedsMany(pool, take.map(t => t.model), take[0].seeds, ctx.target, ctx.wasm);
+      take.forEach((t, i) => t.resolve(all[i]));
+    } catch (e) { take.forEach(t => t.reject(e)); }
+    tierABusy = false;
+    pumpTierA();
+  };
+  const packedScore = (model, seeds) => new Promise((resolve, reject) => { tierAQueue.push({ model, seeds, resolve, reject }); pumpTierA(); });
+  const finishing = [];
   const failed = [];
   const onSpawn = (c) => { children.add(c); c.on('exit', () => children.delete(c)); };
   const fail = (r, e) => {
@@ -1330,23 +1366,24 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
     r.say('bc-train-batch: training started');
     r.onEpoch = bcEpochWriter(r.dir, backend, r.say);
   };
-  // After training: tier A on the shared pool (queued: pool.run is not reentrant), then best.json.
+  // After training: tier A (packed, above), then best.json. Not awaited by the trainer, so the next
+  // model trains meanwhile; the command waits for every one at the end (finishing).
   // config.batch is the minibatch size, so the batch membership is config.batchRun.
-  const finish = (r, result, trainSeconds, batchRun) => (poolChain = poolChain.catch(() => {}).then(async () => {
+  const finish = (r, result, trainSeconds, batchRun) => finishing.push((async () => {
     try {
-      const fin = await finishBcRun(ctx, backend, r, r.dir, result, { trainSeconds, snapshotDir: r.snapshotDir, pool, say: r.say, trainer, extraConfig: { batchRun } });
+      const fin = await finishBcRun(ctx, backend, r, r.dir, result, { trainSeconds, snapshotDir: r.snapshotDir, score: packedScore, say: r.say, trainer, extraConfig: { batchRun } });
       r.say(bcDoneLine(fin.validation, fin.seeds, trainSeconds, fin.bestFile));
       log(`bc-train-batch: ${path.relative(ROOT, r.dir)}: tier A ${fin.validation.count}/${fin.seeds}, min ${fin.validation.min}, trained in ${trainSeconds.toFixed(1)}s`);
       r.release();
     } catch (e) { fail(r, e); }
-  }));
+  })());
   // python: --jobs slots, one bc_train.py process per model.
   const runOne = async (r) => {
     try {
       start(r);
       const t0 = Date.now();
       const result = await trainBcModel(ctx, backend, r, r.dir, { snapshotDir: r.snapshotDir, logitsFile, onEpoch: r.onEpoch, say: r.say, eo: { blasThreads: 1, onSpawn } });
-      await finish(r, result, (Date.now() - t0) / 1000, { id, index: r.index, size: runs.length, backend, jobs, blasThreads: 1 });
+      finish(r, result, (Date.now() - t0) / 1000, { id, index: r.index, size: runs.length, backend, jobs, blasThreads: 1 });
     } catch (e) { fail(r, e); }
   };
   // mlx: one GPU process per shape group (at most MLX_GROUP models, same hidden list), groups one
@@ -1387,7 +1424,7 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
         for (let i = 0; i < members.length; i += MLX_GROUP) await runGroup(members.slice(i, i + MLX_GROUP));
       }
     }
-    await poolChain.catch(() => {});
+    await Promise.all(finishing);
   } finally {
     fs.rmSync(logitsFile, { force: true });
     await pool.terminate();
@@ -1476,7 +1513,7 @@ async function main() {
   await cmd(args);
 }
 
-module.exports = { exportModel, evalHeldOut, loadModel, DEFAULTS, checkConfig, BUNDLED_MODELS };
+module.exports = { exportModel, evalHeldOut, loadModel, DEFAULTS, checkConfig, BUNDLED_MODELS, scoreSeeds, scoreSeedsMany };
 
 if (require.main === module) main().catch((e) => {
   console.error(`error: ${e.message}`);
