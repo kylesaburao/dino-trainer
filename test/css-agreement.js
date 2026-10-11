@@ -31,7 +31,9 @@ const path = require('path');
 const { seedMathRandom, launch } = require('./cdp.js');
 
 const ROOT = path.join(__dirname, '..');
-const PAGE_FILES = ['index-css.html', 'style.css', 'core.js', 'render.js', 'policy.js', 'css-nn.js'];
+// models-css/index.js only lists the bundled models for the selector; with no
+// ?model= and nothing remembered (a fresh profile), the page plays model.css.
+const PAGE_FILES = ['index-css.html', 'style.css', 'core.js', 'render.js', 'policy.js', 'css-nn.js', 'models-css/index.js'];
 
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; };
@@ -59,7 +61,10 @@ function preparePage() {
     execFileSync(process.execPath, [cli, 'export-css', '--model', out], { cwd: ROOT, stdio: 'inherit' });
   }
   if (!fs.existsSync(path.join(pageDir, 'model.css'))) throw new Error('export did not write model.css into the scratch dir');
-  for (const f of PAGE_FILES) fs.copyFileSync(path.join(ROOT, f), path.join(pageDir, f));
+  for (const f of PAGE_FILES) {
+    fs.mkdirSync(path.dirname(path.join(pageDir, f)), { recursive: true });
+    fs.copyFileSync(path.join(ROOT, f), path.join(pageDir, f));
+  }
   return { scratch, pageDir, model: require(out) };
 }
 
