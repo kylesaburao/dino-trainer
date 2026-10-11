@@ -353,6 +353,8 @@ Each phase ends with its verification passing and a commit on the implementation
    - `--quant-bits 4` with `row`, `layer` and `pow2` (`--epochs 1`);
    - `--teacher-logits` from the shipped clone (written by `bc.writeLogits` via a 5-line node snippet), soft τ=2 α=0.5 and hard (`--epochs 1`);
    - `--transition-weight 3` on duck demos `runs/exp-bc-duck/v2-demos-duck-s41-60` (`--epochs 1`).
+
+   That directory's `demos.bin` is gitignored and was absent on 2026-10-10. Regenerate it with `node trainer/cli.js bc-gen --dir runs/exp-bc-duck/v2-demos-duck-s41-60 --teacher duck --seeds 41-60 --overwrite` and check that its sha256 equals the committed `demos.json`'s `814c0686…`. The same applies to E4's held-out rows. `runs/exp-bc-e2e/demos.bin` was present (385,713,312 bytes).
 2. Move the host-side helpers (§4.1) into `trainer/bc_common.py`. `bc_train.py` keeps its CLI and step and calls `main()`.
 3. V1.2: every reference sha is identical after the refactor. `node --test test/` passes.
 4. V1.3: `VECLIB_MAXIMUM_THREADS=1` gives the same sha for V1.1. This decides the byte-identity claim for `--jobs`.
