@@ -1,6 +1,6 @@
 # Pre-registration: certification of a rules-v2 1×6 duck clone, paired with the shipped `v2-bc-duck-d2w8-s1`
 
-Status: **registered (pending orchestrator review), 2026-10-10; not run.** Author: a mac subagent, branch `wt/prereg-v3-clones` from main `63dcfa1` (core hash `65f3546c…`). The user chose "Certify 1×6 later". The template is `research/prereg-teacher-duck-cert.md`. The evidence is distillation Stage 0 (`research/prereg-distill.md` Results, on branch `wt/exp-distill2`, not yet on main).
+Status: **run 2026-10-10; Results at the end (both 150/150 on 625–774, CSS gate passed: a tie).** Registered 2026-10-10. Author: a mac subagent, branch `wt/prereg-v3-clones` from main `63dcfa1` (core hash `65f3546c…`). The user chose "Certify 1×6 later". The template is `research/prereg-teacher-duck-cert.md`. The evidence is distillation Stage 0 (`research/prereg-distill.md` Results, on branch `wt/exp-distill2`, not yet on main).
 
 ## 1. Decision
 Is a rules-v2 1×6 duck clone (44-6-3, `teacher-duck`) **at least as reliable as the shipped `v2-bc-duck-d2w8-s1`** (44-8-8-3) on fresh held-out seeds to 1M? Does its `model.css` agree with its `model.js` through the duck phase?
@@ -104,3 +104,35 @@ Executor: a mac subagent for orchestrator mac-7, branch `worktree-agent-a345749c
 - **Core hash** of the executing tree: `65f3546cea0b28ebab020a55e9772ddd37933e6d52c2a2ad08d2431df39998e9` (the same as at registration; recorded, not a STOP, per §2).
 - **Seeds.** Held-out indices 625–774 of `evalSeeds`: first seed **2161572974**, last seed **2468104075**.
 - **Deviation from §7 ("no change to `trainer/` between registration and results"), noted.** `git diff --stat 63dcfa1..3c98eac -- core.js policy.js test/solver.js trainer/` shows `trainer/cli.js` (+`export-models`, and `exportModel` split into `modelExportData` + write, same exported data; the core-hash warning now names the source), `trainer/dashboard.html` and `trainer/scans.js`. `core.js`, `policy.js`, `test/solver.js`, `trainer/env.js` and the `assess` path are unchanged. O3 scheduled this run after that work, so it is recorded and not a STOP.
+
+### Assessment (§3): held-out offsets 625–774, rules v2, target 1M, `--wasm`
+Exact §3 commands, run from the worktree one at a time (candidate, then shipped). Each appended one record to its `assess.jsonl` (committed). Console output is in `<run>/cert-625-774.txt` (gitignored).
+
+| Arm | Run dir | Passed | 95 % CP (`passCI95`) | min / median | Failures | Time |
+|---|---|---|---|---|---|---|
+| candidate 1×6 | `runs/exp-distill/v2-bc-duck-d1w6-s1` | **150/150** | 0.9757–1.000 | 1,000,000 / 1,000,000 | none | 13.0 s |
+| shipped 2×8 (control) | `runs/exp-bc-duck/v2-bc-duck-d2w8-s1` | **150/150** | 0.9757–1.000 | 1,000,000 / 1,000,000 | none | 17.2 s |
+
+The positive control passed (150/150, as on 325–474). One-sided 95 % upper bound on each arm's failure rate: 1 − 0.05^(1/150) = **1.98 %**.
+
+### Paired comparison (§5)
+Per-seed pairs from the two records' `scores` (pass = 1,000,000): 150 both pass, 0 both fail.
+- **b** (only the candidate fails) = **0**, **c** (only the shipped model fails) = **0**.
+- Exact McNemar, one-sided, H1 "candidate fails more": p = P(X ≥ 0), X ~ Bin(0, ½) = **1**. Other direction (candidate fails less): p = **1**.
+
+### CSS gate (§4)
+`node test/css-agreement.js --dir runs/exp-distill/v2-bc-duck-d1w6-s1`, defaults (`--min-ducks 50 --min-score 3000 --seed 12345 --speed 2048`, timeout 900 s). Exported into a temp scratch directory (the export printed the expected core-hash warning, §2); the root `model.js`/`model.css` were not read or written. **Exit 0, PASS.** Summary: `runs/exp-distill/v2-bc-duck-d1w6-s1/css-agreement.json` (committed).
+- Frames compared **26,594**; disagreements **0** (confusion matrix diagonal: 23,812 none, 2,320 jump, 462 duck; argmax mismatches 0).
+- Duck frames (JS action duck) **462** (bar ≥ 50); ducked mid pterodactyls **59** (jumped 0, mixed 0, crashed 0).
+- Score **9,033** in one game (target 3,000 reached); 4.6 s.
+- Smallest top-2 margin among compared frames **3.49e-3** (by JS class: none 3.49e-3, jump 1.17e-2, duck 7.58e-2).
+- `model.css` size: **15,786 bytes** (model id `na-fa5f26712dec0610`, recomputed with `modelToCss`; equals `models-css/v2-bc-duck-d1w6-s1.css`) against the shipped root `model.css` **22,816 bytes** (0.69×).
+- For comparison, the shipped model's record: 0 disagreements over 25,446 frames, 421 duck frames.
+
+### Reading (§6, applied verbatim)
+Row: **Both 150/150, CSS gate passes.**
+> **Equal reliability** at 150 seeds (McNemar b = c = 0, p = 1; each failure rate ≤ 1.98 % one-sided). **A tie: a behaviour and size change only.** Same behaviour (both duck), smaller net (291 vs 459 params, 282 vs 440 MACs, about 0.64× CSS cost per decision), smaller min margin (1.56e-4 vs 5.61e-4)
+
+Next (§6): **the user decides** whether to replace the shipped model. If yes, a separate ship step: export, `export-css`, `browser-check.js`, `net.test.js` pin update and a decision-log entry. Nothing was shipped here. A tie is not a win: 150 pairs exclude only failure rates above about 2 % per arm.
+
+**Offsets: held-out 625–774 are now spent. The next fresh offset is 775.**
