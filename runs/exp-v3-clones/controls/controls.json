@@ -1,0 +1,39 @@
+{
+ "pcOpen": {
+  "passed": 1000,
+  "fatal": 0,
+  "maxLag": 1,
+  "ok": true
+ },
+ "pcPost": {
+  "survey": {
+   "n": 1000,
+   "crashes": 0,
+   "seeds": 1000
+  },
+  "lag": {
+   "passed": 1000,
+   "fatal": 0,
+   "maxLag": 1
+  },
+  "crashOk": true,
+  "lagOk": true
+ },
+ "pcB": {
+  "n": 1000,
+  "crashes": 0,
+  "seeds": 1000,
+  "ok": true
+ },
+ "dcPost": {
+  "rows": 1000,
+  "contiguous": true,
+  "footer": true,
+  "fails": 1000,
+  "below100k": 0,
+  "in100to102k": 1000,
+  "minScore": 100015,
+  "maxScore": 101529,
+  "ok": true
+ }
+}
