@@ -1205,7 +1205,7 @@ async function main() {
   await cmd(args);
 }
 
-module.exports = { exportModel, evalHeldOut, loadModel, DEFAULTS, checkConfig };
+module.exports = { exportModel, evalHeldOut, loadModel, DEFAULTS, checkConfig, BUNDLED_MODELS };
 
 if (require.main === module) main().catch((e) => {
   console.error(`error: ${e.message}`);

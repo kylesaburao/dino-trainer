@@ -4,7 +4,7 @@ A Chrome-dino clone in plain JavaScript with an "AI mode" driven by a small neur
 
 ## Play
 
-Open `index.html` in a browser, directly over `file://`. There is no build step. Toggle AI mode on the page to watch the shipped model play. `index-css.html` runs the same network in the browser's CSS engine.
+Open `index.html` in a browser, directly over `file://`. There is no build step. Toggle AI mode on the page to watch the shipped model play. `index-css.html` runs the same network in the browser's CSS engine. On both pages you can pick another bundled model (the previous clones, the ES model and the uncertified rules-v3 clones) and fast-forward the AI from 1× to 4096×; the page shows the speed it actually achieves. `node trainer/cli.js export-models` regenerates the bundled models.
 
 **Game rules.** Add `?game=v1`, `?game=v2` or `?game=v3` to the URL of either page to pick the rules; by default a page plays the rules its model was trained for. Each version keeps its own high score.
 - **rules v1**: the original game; difficulty stops rising at about 1,700 points.
