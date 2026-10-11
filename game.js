@@ -5,6 +5,7 @@
 // (DinoCore); drawing is render.js (DinoRender); the optional AI player uses
 // policy.js (DinoPolicy) with the shipped model in model.js (DINO_MODEL) or one
 // of the bundled models in models.js (DINO_MODELS, `node trainer/cli.js export-models`).
+// The network view under the game is netview.js (DinoNetView); it only draws.
 const { FRAME_MS } = DinoCore;
 
 // Created first: its random ground texture is the page's first Math.random use.
@@ -119,10 +120,14 @@ function setAI(on) {
   aiButton.textContent = on ? 'AI: ON' : 'AI: OFF';
   aiButton.setAttribute('aria-pressed', String(on));
   speedSelect.disabled = !on;
+  netIdle();
 }
 
-function aiStep(now) {
+// `look`: also show this decision in the network view (observed before the keys
+// change the state, so the view sees exactly what the policy decided on).
+function aiStep(now, look) {
   const keys = agent.act(game);
+  if (look && game.state === 'running') netCapture(keys);
   if (game.state === 'over') {
     // Auto-restart: tap jump (the core ignores presses during the lockout).
     game.applyKeys(game.keys.jump ? DinoPolicy.ACTIONS[0] : DinoPolicy.ACTIONS[1], now);
@@ -174,6 +179,40 @@ const sameModel = (a, b) => !!a && !!b && a.layers.join() === b.layers.join() &&
 for (const el of [modelSelect, speedSelect]) el.addEventListener('change', () => el.blur());
 
 // ---------------------------------------------------------------------------
+// Network view (netview.js), under the game
+// ---------------------------------------------------------------------------
+// Shows the selected model's forward pass for an AI decision. It never decides:
+// the loop below observes a decision only after the policy has made it (inside
+// the fixed-timestep loop, on the first and the expected last update of a display
+// frame, so at most two per frame at any speed), and draws once per display frame.
+// The view's argmax is checked against the keys the agent applied. With AI off it
+// shows the model's shape only. The show/hide choice is remembered.
+const netView = DinoNetView.createView(document.getElementById('net-canvas'), {
+  arch: document.getElementById('net-arch'),
+  warn: document.getElementById('net-warn'),
+  tip: document.getElementById('net-tip'),
+  font: 'monospace',
+  warnText: (n) => `The view's forward pass disagreed with the AI's decision on ${n} frame(s)`,
+});
+const netCaption = document.getElementById('net-caption');
+const netX = new Float64Array(DinoPolicy.OBS_DIM);
+netView.setModel(model || 'no model loaded');
+const netPanel = DinoNetView.bindToggle(document.getElementById('net-toggle'), document.getElementById('net-body'), 'dino-netview', () => netIdle());
+
+function netCapture(keys) {
+  netView.capture(DinoPolicy.observe(game, netX), DinoPolicy.ACTIONS.indexOf(keys), (model.actionRepeat | 0) <= 1);
+}
+
+function netIdle() {
+  if (aiOn) {
+    netCaption.textContent = 'the latest AI decision';
+  } else {
+    netView.idle();
+    netCaption.textContent = model ? 'turn AI on to see its decisions' : '';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Input (ignored for jump/duck while AI mode is on)
 // ---------------------------------------------------------------------------
 function pressJump() {
@@ -198,8 +237,9 @@ function releaseDown() {
   game.releaseDown();
 }
 
-// A focused selector keeps its own keys (it blurs itself after a change).
-const inControls = (e) => e.target instanceof Element && !!e.target.closest('.controls');
+// A focused selector keeps its own keys (it blurs itself after a change); the
+// network view is not part of the play area either.
+const inControls = (e) => e.target instanceof Element && !!e.target.closest('.controls, .netview');
 
 document.addEventListener('keydown', (e) => {
   if (inControls(e)) return;
@@ -258,10 +298,13 @@ function frame(now) {
   acc += Math.min(Math.max(now - lastTime, 0), 50) * speed;
   lastTime = now;
   const deadline = performance.now() + STEP_BUDGET_MS;
+  const look = aiOn && netPanel.shown;
+  let first = true;
   behind = false;
   while (acc >= FRAME_MS - 2) {
     clock += FRAME_MS;
-    if (aiOn) aiStep(clock);
+    if (aiOn) aiStep(clock, look && (first || acc - FRAME_MS < FRAME_MS - 2));
+    first = false;
     if (game.state === 'running' && prevState !== 'running') aiRun = false;   // a new run began
     if (aiOn && game.state === 'running') aiRun = true;
     game.update(FRAME_MS, clock);
@@ -271,6 +314,7 @@ function frame(now) {
     if (performance.now() > deadline) { acc = 0; behind = true; break; }
   }
   renderer.draw(game, clock, hi);
+  netView.draw();
   if (now - rate.t0 >= 1000) {
     rate.speed = rate.frames * FRAME_MS / (now - rate.t0);
     rate.t0 = now;

@@ -20,12 +20,31 @@
       </select></label>
       <span id="speed-status">speed applies to AI mode</span>
     </div>
+    <section class="netview" aria-label="Neural network view">
+      <div class="netview-head">
+        <button id="net-toggle" type="button" aria-controls="net-body">Network: shown</button>
+        <span>Network <span id="net-arch"></span></span>
+      </div>
+      <div id="net-body">
+        <canvas id="net-canvas" role="img" aria-label="Neural network activations for the latest AI decision"></canvas>
+        <div class="net-legend">
+          <span><i style="background:#2a78d6"></i>positive</span>
+          <span><i style="background:#e34948"></i>negative</span>
+          <span>edge opacity = |weight × activation|</span>
+          <span>ring = chosen action</span>
+        </div>
+        <div class="net-caption" id="net-caption"></div>
+        <div class="net-warn" id="net-warn" hidden></div>
+        <div class="net-tip" id="net-tip"></div>
+      </div>
+    </section>
   </div>
   <script src="core.js"></script>
   <script src="render.js"></script>
   <script src="policy.js"></script>
   <script src="model.js"></script>
   <script src="models.js"></script>
+  <script src="netview.js"></script>
   <script src="game.js"></script>
 </body>
 </html>

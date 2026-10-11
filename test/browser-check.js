@@ -21,6 +21,12 @@
 //    own rules, and plays a few hundred frames at 4096x with the policy called
 //    once per update (index.html) and 0 CSS/JS disagreements (index-css.html); the
 //    selector remembers a choice and reloads with ?model=. Prints the achieved speed.
+// 7. Network view (netview.js) under the game on both pages: it shows the selected
+//    model's shape (and follows a model change), is idle with AI off, draws live
+//    decisions during AI play at 4096x with no mismatch warning (index.html: vs the
+//    agent's keys; index-css.html: the JS argmax vs the CSS --act), its show/hide
+//    toggle works without pressing jump, and both pages fit a 375px-wide phone.
+//    The CSS page loads models.js for the view only; it never loads the root model.js.
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -211,13 +217,14 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
     check('no console errors, warnings or exceptions on the v3 page', problems.length === 0, problems.join('; '));
 
     // ---- 5. CSS-network page (index-css.html + model.css) -----------------
-    // The page has no JavaScript network; the test compares against model.js itself.
+    // The page decides only in CSS (models.js is loaded for the network view only);
+    // the test compares against the root model.js itself.
     const shipped = require(path.join(ROOT, 'model.js'));
     const { modelId } = require(path.join(ROOT, 'trainer', 'css-model.js'));
     await load(path.join(ROOT, 'index-css.html'));
     const css = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), version: game && game.version,
-      loadsModelJs: typeof DINO_MODEL !== 'undefined' || typeof DINO_MODELS !== 'undefined', speeds: [...document.querySelectorAll('#speed option')].map(o => Number(o.value)) })`);
-    check('CSS page: self-test passes, model.css is from model.js, and model.js is not loaded',
+      loadsModelJs: typeof DINO_MODEL !== 'undefined', speeds: [...document.querySelectorAll('#speed option')].map(o => Number(o.value)) })`);
+    check('CSS page: self-test passes, model.css is from model.js, and the root model.js is not loaded',
       !css.failed && css.id === modelId(shipped) && css.version === (shipped.gameVersion || 'v1') && !css.loadsModelJs, JSON.stringify(css));
     check('CSS page: speed options 1x to 4096x', css.speeds.join() === SPEEDS, css.speeds.join());
     // Test-only: wrap the page's cssDecide to compare each CSS decision with policy.js on model.js.
@@ -261,6 +268,30 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
     check('index.html: default is the shipped model, shown as its models.js entry', def.shipped && def.select === shippedEntries[0].id &&
       def.options === bundled.length && def.version === shipped.gameVersion, JSON.stringify(def));
     check('index.html: speed options 1x to 4096x, disabled while AI is off', def.speeds.join() === SPEEDS && def.speedDisabled, def.speeds.join());
+    // Network view: idle with AI off, under the game, and its show/hide toggle.
+    const netInfo = `({ arch: document.getElementById('net-arch').textContent, live: netView.live, decisions: netView.decisions, draws: netView.draws,
+      mismatches: netView.mismatches, warnHidden: document.getElementById('net-warn').hidden, caption: document.getElementById('net-caption').textContent,
+      width: document.getElementById('net-canvas').clientWidth, height: document.getElementById('net-canvas').clientHeight,
+      below: document.getElementById('net-canvas').getBoundingClientRect().top >= document.getElementById('game').getBoundingClientRect().bottom })`;
+    const arch = (m) => m.layers.join('-') + ' · ';
+    await sleep(300);
+    const net0 = await evaluate(netInfo);
+    check('index.html: network view under the game shows the shipped model\'s shape, idle while AI is off',
+      net0.arch.startsWith(arch(shipped)) && !net0.live && net0.decisions === 0 && /turn AI on/.test(net0.caption) && net0.below &&
+      net0.width > 0 && net0.height > 0 && net0.draws > 0, JSON.stringify(net0));
+    const netToggle = async () => {
+      const r = await evaluate(`(() => { const b = document.getElementById('net-toggle'); b.scrollIntoView({ block: 'center' }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+      await click(r.x, r.y);
+      await sleep(50);
+      return evaluate(`({ hidden: document.getElementById('net-body').hidden, text: document.getElementById('net-toggle').textContent,
+        stored: localStorage.getItem('dino-netview'), state: game.state })`);
+    };
+    const hid = await netToggle();
+    const shownAgain = await netToggle();
+    await evaluate(`window.scrollTo(0, 0)`);
+    check('index.html: the network toggle hides and shows the view, remembers it, and never presses jump',
+      hid.hidden && hid.text === 'Network: hidden' && hid.stored === 'hidden' && !shownAgain.hidden && shownAgain.text === 'Network: shown' &&
+      shownAgain.stored === 'shown' && hid.state === 'idle' && shownAgain.state === 'idle', `${JSON.stringify(hid)} ${JSON.stringify(shownAgain)}`);
     await load(path.join(ROOT, 'index-css.html'));
     await waitUntil(`!!game || !!failed`, 5000);
     const cdef = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), href: document.getElementById('model-css').getAttribute('href'), select: $model.value })`);
@@ -273,9 +304,10 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
     await evaluate(`(() => { modelSelect.value = '${pick.id}'; modelSelect.dispatchEvent(new Event('change')); })()`);
     await sleep(1500);
     await waitUntil(`typeof MODEL !== 'undefined' && document.readyState === 'complete'`, 5000);
-    const picked = await evaluate(`({ search: location.search, id: MODEL.id, stored: localStorage.getItem('dino-model'), version: game.version, select: modelSelect.value })`);
-    check('index.html: picking a model reloads with ?model=<id>, keeps ?game=, remembers it', picked.id === pick.id && picked.stored === pick.id &&
-      new URLSearchParams(picked.search).get('model') === pick.id && picked.version === 'v1' && picked.select === pick.id, JSON.stringify(picked));
+    const picked = await evaluate(`({ search: location.search, id: MODEL.id, stored: localStorage.getItem('dino-model'), version: game.version, select: modelSelect.value,
+      arch: document.getElementById('net-arch').textContent })`);
+    check('index.html: picking a model reloads with ?model=<id>, keeps ?game=, remembers it, and the network view shows it', picked.id === pick.id && picked.stored === pick.id &&
+      new URLSearchParams(picked.search).get('model') === pick.id && picked.version === 'v1' && picked.select === pick.id && picked.arch.startsWith(arch(pick)), JSON.stringify(picked));
     await load(path.join(ROOT, 'index-css.html'));
     await waitUntil(`!!game || !!failed`, 15000);
     const remembered = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), select: $model.value })`);
@@ -301,11 +333,14 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
       check(`index.html ?model=${m.id}: plays rules ${m.gameVersion} and ${MODEL_FRAMES}+ frames at 4096x, policy once per update`,
         page.id === m.id && page.select === m.id && page.version === m.gameVersion && played && js.applyKeys === js.updates && problems.length === 0,
         `${JSON.stringify(page)} ${JSON.stringify(js)} ${problems.length} problems ${problems.slice(0, 3).join('; ')}`);
+      const jnet = await evaluate(netInfo);
+      check(`index.html ?model=${m.id}: network view shows ${m.layers.join('-')} and draws live AI decisions at 4096x, no mismatch warning`,
+        jnet.arch.startsWith(arch(m)) && jnet.live && jnet.decisions > 0 && jnet.draws > 0 && jnet.mismatches === 0 && jnet.warnHidden, JSON.stringify(jnet));
 
       await load(path.join(ROOT, 'index-css.html') + `?model=${m.id}`);
       await waitUntil(`!!game || !!failed`, 15000);
       const cpage = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), version: game && game.version, select: $model.value,
-        loadsWeightsJs: typeof DINO_MODEL !== 'undefined' || typeof DINO_MODELS !== 'undefined' })`);
+        loadsWeightsJs: typeof DINO_MODEL !== 'undefined' })`);
       await evaluate(`(() => { const net = DinoPolicy.createNet(${JSON.stringify(m.layers)}, ${JSON.stringify(m.params)});
         const cssOnly = cssDecide; window.__cmp = { frames: 0, disagree: 0 };
         window.cssDecide = (x) => { const a = cssOnly(x); __cmp.frames++; if (net(x) !== a) __cmp.disagree++; return a; };
@@ -316,10 +351,24 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
       check(`index-css.html ?model=${m.id}: models-css/${m.id}.css loads, plays rules ${m.gameVersion}, 0 CSS/JS disagreements over ${MODEL_FRAMES}+ decisions at 4096x`,
         !cpage.failed && cpage.id === m.cssId && cpage.version === m.gameVersion && cpage.select === m.id && !cpage.loadsWeightsJs &&
         cplayed && c.disagree === 0 && problems.length === 0, `${JSON.stringify(cpage)} frames ${c.frames} disagree ${c.disagree} ${problems.length} problems ${problems.slice(0, 3).join('; ')}`);
+      const cnet = await evaluate(netInfo);
+      check(`index-css.html ?model=${m.id}: network view shows ${m.layers.join('-')} and draws CSS decisions at 4096x, JS argmax = --act (no warning)`,
+        cnet.arch.startsWith(arch(m)) && cnet.live && cnet.decisions > 0 && cnet.draws > 0 && cnet.mismatches === 0 && cnet.warnHidden && cnet.below, JSON.stringify(cnet));
       speedRows.push({ id: m.id, jsFrames: js.running, jsAchieved: js.achieved, cssFrames: c.frames, cssDisagree: c.disagree, cssAchieved: c.achieved });
     }
     console.log('achieved speed at 4096x (simulated / real time):');
     for (const r of speedRows) console.log(`  ${r.id.padEnd(22)} index.html ${String(r.jsAchieved).padStart(5)}x   index-css.html ${String(r.cssAchieved).padStart(4)}x   (CSS ${r.cssDisagree}/${r.cssFrames} disagreements)`);
+
+    // ---- 7. Phone width: no horizontal scroll, the network view fits -------
+    await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 2, mobile: true });
+    for (const page of ['index.html', 'index-css.html']) {
+      await load(path.join(ROOT, page) + `?model=${bundled[bundled.length - 1].id}`);
+      await waitUntil(`typeof game !== 'undefined' && !!game`, 15000);
+      await sleep(300);
+      const phone = await evaluate(`({ scroll: document.documentElement.scrollWidth, inner: innerWidth, net: document.getElementById('net-canvas').getBoundingClientRect().width, draws: netView.draws })`);
+      check(`${page} at 375px: no horizontal scroll, network view fits and draws`, phone.scroll <= phone.inner && phone.net > 0 && phone.net <= phone.inner && phone.draws > 0 && problems.length === 0, JSON.stringify(phone));
+    }
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     cdp.close();
     chrome.kill();

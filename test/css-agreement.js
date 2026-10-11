@@ -33,7 +33,9 @@ const { seedMathRandom, launch } = require('./cdp.js');
 const ROOT = path.join(__dirname, '..');
 // models-css/index.js only lists the bundled models for the selector; with no
 // ?model= and nothing remembered (a fresh profile), the page plays model.css.
-const PAGE_FILES = ['index-css.html', 'style.css', 'core.js', 'render.js', 'policy.js', 'css-nn.js', 'models-css/index.js'];
+// models.js and netview.js are the network view's; a candidate that is not in
+// models.js gets no view (and no view check), the decisions are still CSS.
+const PAGE_FILES = ['index-css.html', 'style.css', 'core.js', 'render.js', 'policy.js', 'css-nn.js', 'models-css/index.js', 'models.js', 'netview.js'];
 
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; };
