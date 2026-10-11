@@ -125,5 +125,23 @@ As the plan said, the whole-arm speedup stays bounded by the CPU screens (openin
 ## 6. Decisions and open items
 
 1. **Default backend for `bc-train-batch`** (user, 2026-10-11, AskUserQuestion): **`mlx` when an mlx interpreter is configured** (`.venv-mlx` or `PYTHON_MLX`) and `--jobs` isn't given, **else `python`**. This applies the pre-registered reading wherever MLX exists and stays portable elsewhere.
-2. **Tier A packing** (§5): the user chose a follow-up branch, after this one is reviewed and merged.
+2. **Tier A packing** (§5): done on `wt/tiera-pack` (7199575, merged). Measured in §7.
 3. **Still open:** A4 and an 18-worker overlap test, if mixed-shape sweeps or GPU training next to tier B scans are planned.
+
+## 7. Packed tier A: rerun of A2 and A1 (2026-10-11)
+
+The user said "go" via mac-7. The setup was the same as §4: 10 seeds × 2×32, 15 epochs, `runs/exp-bc-e2e` demos, tier A to 1M with `--wasm` on the 18-worker pool. Runs were one at a time, with the CPU otherwise idle, at commit 7199575. Outputs are in `runs/exp-gpu-bench-pack/` (gitignored).
+
+| Arm | Before (§4, one model at a time) | Packed (7199575) | Change |
+|---|---|---|---|
+| A2, `--backend mlx` | 84 s | **67 s** | −20 % (3.0× against A0's 201 s) |
+| A1, `--backend python --jobs 6` | 91 s | **74 s** | −19 % (2.7× against A0) |
+
+- **Identity.** Params are identical to the §4 runs for 10/10 seeds in both arms. The training code didn't change, so this is expected. Validation is identical and 25/25 for 10/10 seeds, so packing changed no score.
+- **Where A2's time went.** About 20.7 s training, then about 46 s of tier A, against about 63 s before.
+- **A defect, now fixed.** The A2 log shows the first model of the MLX group starting its tier A alone, because the pump ran before the other 9 models had queued. That made 2 pool runs (1 + 9), with about 5 s for the lone model.
+  - Fix, in this branch: the pump starts on the next tick (`setImmediate`). A tiny 4-model MLX group now finishes all 4 tier As within 1 ms, as one pool run. Tests pass 140/140.
+  - Expected gain about 2 s on A2. **Not measured:** the benchmark above ran before the fix.
+- **A1 training span.** Training no longer waits for tier A. Per-model training time was 24.0 s on average (max 29.9), against 22.5 s before, from more overlap with tier A's workers.
+
+The `bc-train` stage for a 10-seed arm now takes 67–74 s instead of 201 s sequentially. Tier A (about 46 s) is still most of it.

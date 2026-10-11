@@ -1347,7 +1347,9 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
     tierABusy = false;
     pumpTierA();
   };
-  const packedScore = (model, seeds) => new Promise((resolve, reject) => { tierAQueue.push({ model, seeds, resolve, reject }); pumpTierA(); });
+  // The pump starts on the next tick, so models finishing together (an mlx group) all queue first
+  // and share one pool run, instead of the first one starting alone.
+  const packedScore = (model, seeds) => new Promise((resolve, reject) => { tierAQueue.push({ model, seeds, resolve, reject }); setImmediate(pumpTierA); });
   const finishing = [];
   const failed = [];
   const onSpawn = (c) => { children.add(c); c.on('exit', () => children.delete(c)); };
