@@ -765,7 +765,7 @@ function modelExportData(opts) {
     generation: meta && meta.generation, validation: meta && meta.validation, coreHash: meta && meta.coreHash,
     exportedAt: ts(), source: path.relative(ROOT, source), params: Array.from(model.params),
   };
-  if (data.coreHash && data.coreHash !== coreHash()) console.warn(`WARNING: ${data.source} was trained against a different core/policy hash`);
+  if (data.coreHash && data.coreHash !== coreHash()) console.warn(`WARNING: exporting a model trained against a different core/policy hash (${data.source})`);
   return data;
 }
 
