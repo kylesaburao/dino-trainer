@@ -21,14 +21,14 @@
 //   node trainer/cli.js bc-gen   --dir runs/<name> [--seeds 1-40] [--levels 0,2000,50000,300000,900000]
 //                              [--span0 3000] [--span 5000] [--keep-boring 10] [--game v2] [--workers N] [--overwrite]
 //                              [--teacher jump|duck] [--score-window A-B] [--student <best.json>]
-//   node trainer/cli.js bc-train --dir runs/<name> --hidden 32,32 [--backend node|python] [--epochs 15]
+//   node trainer/cli.js bc-train --dir runs/<name> --hidden 32,32 [--backend node|python|mlx] [--epochs 15]
 //                              [--batch 1024] [--lr 2e-3] [--seed 1] [--demos <dir or demos.json>]
 //                              [--target 1000000] [--workers N] [--wasm] [--force] [--overwrite] [--snapshots]
 //                              [--distill-from <best.json> [--distill-mode soft|hard] [--tau 1] [--alpha 0]]
 //                              [--quant-bits N [--quant-scheme row|layer|pow2]]
 //                              [--extra-demos <dir>[,<dir>...]] [--transition-weight W]
 //   node trainer/cli.js bc-train-batch --dir-pattern 'runs/<group>/v2-bc-<teacher>-d{depth}w{width}-s{seed}'
-//                              --shapes 32,32/8x2 --seeds 1-10 --demos <dir or demos.json> [--backend python] [--jobs 6]
+//                              --shapes 32,32/8x2 --seeds 1-10 --demos <dir or demos.json> [--backend python [--jobs 6] | mlx]
 //                              [every bc-train option except --dir, --hidden, --seed]
 //   node trainer/cli.js bc-quantize --from <best.json> --dir runs/<name> --quant-bits N [--quant-scheme row|layer|pow2]  (refuses another core hash unless --force)
 //                              [--target 1000000] [--workers N] [--wasm] [--overwrite]
@@ -51,11 +51,15 @@
 //             if absent) and bc-metrics.jsonl (per-epoch loss and recall; recall.duck only
 //             when the demos have duck rows).
 //             --backend node (default; plain Node) or python (trainer/bc_train.py, needs
-//             numpy: the repo's .venv/bin/python, or the PYTHON env var). Each backend is
-//             deterministic per --seed on one machine; the two do not match each other.
+//             numpy: the repo's .venv/bin/python, or the PYTHON env var) or mlx (Apple GPU:
+//             trainer/bc_train_mlx.py, needs .venv-mlx/bin/python or PYTHON_MLX; the python
+//             backend's algorithm, init and batch order, float32 with TF32 off, so its params
+//             match python's to float32 noise; config.engine records version, device, tf32).
+//             Each backend is deterministic per --seed on one machine; node does not match the
+//             other two. Every python-only flag below also works with mlx.
 //             Refuses demos generated on another core hash unless --force, and an
 //             existing best.json unless --overwrite.
-//             --snapshots (python backend only; off by default) also writes each epoch's
+//             --snapshots (python or mlx backend; off by default) also writes each epoch's
 //             params to <dir>/snapshots/epoch-NN.json ({layers, params, epoch}, NN from 01,
 //             the policy.createNet flat layout), taken after the epoch's last optimiser
 //             step; it does not change training. Replaces any existing <dir>/snapshots/.
@@ -89,14 +93,16 @@
 //             other options are shared and mean what they mean for bc-train; --demos is required.
 //             Refuses before training if any dir has best.json (unless --overwrite) or a live lock,
 //             then locks every dir with its pid. Each dir gets train.log (fresh; the bc-train start
-//             line plus ' batch=i/n jobs=K'), bc-metrics.jsonl live, snapshots/ with --snapshots,
+//             line plus ' batch=i/n[ jobs=K]'), bc-metrics.jsonl live, snapshots/ with --snapshots,
 //             and best.json after its tier A; config gains batchRun {id, index (0-based), size,
-//             backend, jobs, blasThreads} (config.batch stays the minibatch size), and trainer
-//             names bc-train-batch. --backend python (default; mlx is
-//             planned): --jobs K (default 6, the performance cores) bc_train.py processes at once,
-//             each with 1 BLAS thread, which gives the same params bytes as bc-train --backend
-//             python. Tier A runs on one shared --workers pool, one model at a time, as models
-//             finish. A failed model gets no best.json and a 'failed' line in its train.log; the
+//             backend, then jobs, blasThreads (python) or group, groupSize, groupIndex (mlx)}
+//             (config.batch stays the minibatch size), and trainer names bc-train-batch.
+//             --backend python (default): --jobs K (default 6, the performance cores)
+//             bc_train.py processes at once, each with 1 BLAS thread, which gives the same params
+//             bytes as bc-train --backend python. --backend mlx: one GPU process per shape (in
+//             groups of at most 40 seeds), shapes one after another; each model equals bc-train
+//             --backend mlx for its seed to float32 noise. Tier A runs on one shared --workers
+//             pool, one model at a time, as models finish (with mlx, while the next group trains). A failed model gets no best.json and a 'failed' line in its train.log; the
 //             others continue and the command exits non-zero. SIGINT/SIGTERM stop the children
 //             and release every lock.
 //   bc-quantize post-training quantization of --from (a best.json) with the same rule,
@@ -965,11 +971,12 @@ const quantText = (q) => ` quant=int${q.bits}/${q.scheme}`;
 // --hidden and --seed). say: the log function for the checks' messages.
 function prepareBcTrain(cli, opts, backend, say) {
   const bc = require('./bc.js');
-  if (opts.snapshots && backend !== 'python') throw new Error('--snapshots is only supported with --backend python');
+  const pyEngine = backend === 'python' || backend === 'mlx';   // both run bc_common.py's options
+  if (opts.snapshots && !pyEngine) throw new Error('--snapshots is only supported with --backend python or mlx');
   const dz = parseDistill(opts);
   const quant = parseQuant(opts, bc);
   for (const f of ['extraDemos', 'transitionWeight']) {
-    if (opts[f] !== undefined && backend !== 'python') throw new Error(`--${f.replace(/[A-Z]/g, c => '-' + c.toLowerCase())} is only supported with --backend python`);
+    if (opts[f] !== undefined && !pyEngine) throw new Error(`--${f.replace(/[A-Z]/g, c => '-' + c.toLowerCase())} is only supported with --backend python or mlx`);
   }
   let transitionWeight;
   if (opts.transitionWeight !== undefined) {
@@ -1056,11 +1063,16 @@ async function trainBcModel(ctx, backend, run, dir, { snapshotDir, logits, logit
     if (dz) extra.distill = { logits, mode: dz.mode, tau: dz.tau, alpha: dz.alpha };
     return bc.trainNode(bc.loadDemos(demos.binFile), { ...mo, ...extra, onEpoch });
   }
-  const outFile = path.join(dir, `bc-python.${process.pid}.tmp`);
+  const outFile = path.join(dir, `bc-${backend}.${process.pid}.tmp`);
   try {
     if (dz) extra.distill = { logitsFile, mode: dz.mode, tau: dz.tau, alpha: dz.alpha };
     if (extras.length) extra.extraDemos = extras.map(e => e.binFile);
     if (transitionWeight !== undefined) extra.transitionWeight = transitionWeight;
+    if (backend === 'mlx') {
+      const [r] = await bc.trainMlx(demos.binFile, [outFile], { ...mo, seeds: [run.seed], ...(snapshotDir ? { snapshotDirs: [snapshotDir] } : {}), ...extra, ...eo }, ROOT,
+        (k, row) => (k === null ? say(row) : onEpoch(row)));
+      return r;
+    }
     return await bc.trainPython(demos.binFile, outFile, { ...mo, ...(snapshotDir ? { snapshotDir } : {}), ...extra, ...eo }, ROOT, (line) => {
       if (line.startsWith('{')) onEpoch(JSON.parse(line)); else if (line) say(line);
     });
@@ -1094,6 +1106,7 @@ async function finishBcRun(ctx, backend, run, dir, result, { trainSeconds, snaps
     ...(quantConfig ? { quant: quantConfig } : {}),
     ...(extras.length ? { extraDemos: extras.map(e => ({ demos: path.relative(ROOT, e.manifestFile), demosSha256: e.sha, demosRows: e.manifest.rows })) } : {}),
     ...(transitionWeight !== undefined ? { transitionWeight, ...(result.transitions ? { transitions: result.transitions } : {}) } : {}),
+    ...(result.engine ? { engine: result.engine } : {}),   // mlx: version, device, models, tf32
     ...extraConfig,
   };
   const bestFile = path.join(dir, 'best.json');
@@ -1108,7 +1121,7 @@ async function bcTrainCmd({ config: cli, opts }) {
   const dir = requireDir(opts, 'bc-train');
   if (!cli.hidden) throw new Error('bc-train needs --hidden (e.g. --hidden 32,32)');
   const backend = opts.backend || 'node';
-  if (!['node', 'python'].includes(backend)) throw new Error(`--backend must be node or python, got ${backend}`);
+  if (!['node', 'python', 'mlx'].includes(backend)) throw new Error(`--backend must be node, python or mlx, got ${backend}`);
   const run = { hidden: cli.hidden, seed: cli.seed !== undefined ? cli.seed : require('./bc.js').TRAIN_DEFAULTS.seed };
   checkHidden(run.hidden);
   const ctx = prepareBcTrain(cli, { ...opts, demos: opts.demos || dir }, backend, (m) => log(m));
@@ -1126,7 +1139,7 @@ async function bcTrainCmd({ config: cli, opts }) {
   let result;
   const logitsFile = path.join(dir, `teacher-logits.${process.pid}.tmp`);
   try {
-    if (logits && backend === 'python') ctx.bc.writeLogits(logitsFile, logits);
+    if (logits && backend !== 'node') ctx.bc.writeLogits(logitsFile, logits);
     result = await trainBcModel(ctx, backend, run, dir, { snapshotDir, logits, logitsFile, onEpoch, say: (m) => log(m) });
   } finally {
     fs.rmSync(logitsFile, { force: true });
@@ -1144,6 +1157,10 @@ async function bcTrainCmd({ config: cli, opts }) {
   release();
   log(bcDoneLine(fin.validation, fin.seeds, trainSeconds, fin.bestFile));
 }
+
+// bc-train-batch --backend mlx: at most this many models per GPU process (per-model step time
+// flattens out by about 40: research/plan-gpu-trainer.md §2 Probe 1, §4.4).
+const MLX_GROUP = 40;
 
 // --shapes: '/'-separated hidden lists; each is comma-separated widths, WxD = D layers of width W.
 function parseShapes(v) {
@@ -1177,10 +1194,11 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
   if (!opts.shapes || opts.seeds === undefined) throw new Error('bc-train-batch needs --shapes (e.g. 32,32/8x2) and --seeds (e.g. 1-10)');
   if (!opts.demos) throw new Error('bc-train-batch needs --demos <dir or demos.json>');
   const backend = opts.backend || 'python';
-  if (backend === 'mlx') throw new Error('--backend mlx is not implemented yet (research/plan-gpu-trainer.md Phase 2)');
-  if (backend !== 'python') throw new Error(`bc-train-batch --backend must be python, got ${backend}`);
-  const jobs = opts.jobs !== undefined ? Number(opts.jobs) : 6;
-  if (!(Number.isInteger(jobs) && jobs >= 1)) throw new Error(`--jobs must be a positive integer, got ${opts.jobs}`);
+  if (!['python', 'mlx'].includes(backend)) throw new Error(`bc-train-batch --backend must be python or mlx, got ${backend}`);
+  if (backend === 'mlx' && opts.jobs !== undefined) throw new Error('--jobs is for --backend python (mlx trains each shape group in one GPU process)');
+  const jobs = backend === 'mlx' ? null : opts.jobs !== undefined ? Number(opts.jobs) : 6;
+  if (backend === 'python' && !(Number.isInteger(jobs) && jobs >= 1)) throw new Error(`--jobs must be a positive integer, got ${opts.jobs}`);
+  if (backend === 'mlx') require('./bc.js').mlxPythonPath(ROOT);   // fail before locking anything
   const shapes = parseShapes(opts.shapes), seeds = parseSeedRange(opts.seeds);
   const runs = [];
   for (const hidden of shapes) for (const seed of seeds) runs.push({ hidden, seed, dir: batchDir(opts.dirPattern, hidden, seed) });
@@ -1213,7 +1231,7 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
   const id = `${new Date().toISOString()}-${process.pid}`;
   const trainer = `trainer/cli.js bc-train-batch --backend ${backend}`;
   log(`bc-train-batch: ${runs.length} runs (${shapes.map(h => h.join(',')).join(' / ')} x seeds ${seeds[0]}-${seeds[seeds.length - 1]}) ` +
-    `backend=${backend} jobs ${jobs} id ${id}`);
+    `backend=${backend}${jobs ? ` jobs ${jobs}` : ` (shape groups of up to ${MLX_GROUP} on the GPU)`} id ${id}`);
   // Every run's train.log starts now, with the start line the dashboard parses (a locked dir
   // without it would not show as a BC run while it waits for a slot). Fresh: the dashboard
   // reads the first start line of the newest log.
@@ -1222,7 +1240,7 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
     r.say = (m) => fs.appendFileSync(logFile, `[${ts()}] ${m}\n`);
     fs.writeFileSync(logFile, '');
     fs.rmSync(path.join(r.dir, 'bc-metrics.jsonl'), { force: true });   // no stale epochs while queued (--overwrite)
-    r.say(bcStartLine(r.dir, backend, r, ctx, ` batch=${index + 1}/${runs.length} jobs=${jobs}`));
+    r.say(bcStartLine(r.dir, backend, r, ctx, ` batch=${index + 1}/${runs.length}${jobs ? ` jobs=${jobs}` : ''}`));
   }
   // Teacher logits once for the batch (python reads them from one file).
   let logits = bcTeacherLogits(ctx, (m) => log(m));
@@ -1232,40 +1250,79 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
   const pool = createPool(Math.min(workers, 25));
   let poolChain = Promise.resolve();   // pool.run is not reentrant: tier A runs one model at a time
   const failed = [];
-  const runOne = async (r, index) => {
-    const say = r.say;
-    const name = path.relative(ROOT, r.dir);
-    try {
-      const snapshotDir = opts.snapshots ? path.join(r.dir, 'snapshots') : null;
-      if (snapshotDir) fs.rmSync(snapshotDir, { recursive: true, force: true });
-      say('bc-train-batch: training started');
-      const onEpoch = bcEpochWriter(r.dir, backend, say);
-      const t0 = Date.now();
-      const result = await trainBcModel(ctx, backend, r, r.dir, {
-        snapshotDir, logitsFile, onEpoch, say,
-        eo: { blasThreads: 1, onSpawn: (c) => { children.add(c); c.on('exit', () => children.delete(c)); } },
-      });
-      const trainSeconds = (Date.now() - t0) / 1000;
-      // config.batch is the minibatch size, so the batch membership is config.batchRun.
-      const batchRun = { id, index, size: runs.length, backend, jobs, blasThreads: 1 };
-      const fin = await (poolChain = poolChain.catch(() => {}).then(() =>
-        finishBcRun(ctx, backend, r, r.dir, result, { trainSeconds, snapshotDir, pool, say, trainer, extraConfig: { batchRun } })));
-      say(bcDoneLine(fin.validation, fin.seeds, trainSeconds, fin.bestFile));
-      log(`bc-train-batch: ${name}: tier A ${fin.validation.count}/${fin.seeds}, min ${fin.validation.min}, trained in ${trainSeconds.toFixed(1)}s`);
-    } catch (e) {
-      // bc-metrics.jsonl (empty if it failed before epoch 0) keeps the dir a BC run on the dashboard.
-      fs.appendFileSync(path.join(r.dir, 'bc-metrics.jsonl'), '');
-      say(`bc-train-batch: failed: ${e.message}`);
-      log(`bc-train-batch: ${name}: FAILED: ${e.message}`);
-      failed.push(name);
-    } finally {
-      r.release();
-    }
+  const onSpawn = (c) => { children.add(c); c.on('exit', () => children.delete(c)); };
+  const fail = (r, e) => {
+    // bc-metrics.jsonl (empty if it failed before epoch 0) keeps the dir a BC run on the dashboard.
+    fs.appendFileSync(path.join(r.dir, 'bc-metrics.jsonl'), '');
+    r.say(`bc-train-batch: failed: ${e.message}`);
+    log(`bc-train-batch: ${path.relative(ROOT, r.dir)}: FAILED: ${e.message}`);
+    failed.push(path.relative(ROOT, r.dir));
+    r.release();
   };
-  let next = 0;
-  const slot = async () => { while (next < runs.length) { const i = next++; await runOne(runs[i], i); } };
+  // Before training: fresh snapshots/ and the per-epoch writer.
+  const start = (r) => {
+    r.snapshotDir = opts.snapshots ? path.join(r.dir, 'snapshots') : null;
+    if (r.snapshotDir) fs.rmSync(r.snapshotDir, { recursive: true, force: true });
+    r.say('bc-train-batch: training started');
+    r.onEpoch = bcEpochWriter(r.dir, backend, r.say);
+  };
+  // After training: tier A on the shared pool (queued: pool.run is not reentrant), then best.json.
+  // config.batch is the minibatch size, so the batch membership is config.batchRun.
+  const finish = (r, result, trainSeconds, batchRun) => (poolChain = poolChain.catch(() => {}).then(async () => {
+    try {
+      const fin = await finishBcRun(ctx, backend, r, r.dir, result, { trainSeconds, snapshotDir: r.snapshotDir, pool, say: r.say, trainer, extraConfig: { batchRun } });
+      r.say(bcDoneLine(fin.validation, fin.seeds, trainSeconds, fin.bestFile));
+      log(`bc-train-batch: ${path.relative(ROOT, r.dir)}: tier A ${fin.validation.count}/${fin.seeds}, min ${fin.validation.min}, trained in ${trainSeconds.toFixed(1)}s`);
+      r.release();
+    } catch (e) { fail(r, e); }
+  }));
+  // python: --jobs slots, one bc_train.py process per model.
+  const runOne = async (r) => {
+    try {
+      start(r);
+      const t0 = Date.now();
+      const result = await trainBcModel(ctx, backend, r, r.dir, { snapshotDir: r.snapshotDir, logitsFile, onEpoch: r.onEpoch, say: r.say, eo: { blasThreads: 1, onSpawn } });
+      await finish(r, result, (Date.now() - t0) / 1000, { id, index: r.index, size: runs.length, backend, jobs, blasThreads: 1 });
+    } catch (e) { fail(r, e); }
+  };
+  // mlx: one GPU process per shape group (at most MLX_GROUP models, same hidden list), groups one
+  // after another; a group's tier A runs on the CPU pool while the next group trains.
+  const runGroup = async (group) => {
+    const t0 = Date.now();
+    group.forEach(start);
+    let results;
+    try {
+      results = await ctx.bc.trainMlx(ctx.demos.binFile, group.map(r => path.join(r.dir, `bc-mlx.${process.pid}.tmp`)), {
+        hidden: group[0].hidden, epochs: ctx.o.epochs, batch: ctx.o.batch, lr: ctx.o.lr, seeds: group.map(r => r.seed),
+        ...(opts.snapshots ? { snapshotDirs: group.map(r => r.snapshotDir) } : {}),
+        ...(ctx.quant ? { quant: ctx.quant } : {}),
+        ...(ctx.dz ? { distill: { logitsFile, mode: ctx.dz.mode, tau: ctx.dz.tau, alpha: ctx.dz.alpha } } : {}),
+        ...(ctx.extras.length ? { extraDemos: ctx.extras.map(e => e.binFile) } : {}),
+        ...(ctx.transitionWeight !== undefined ? { transitionWeight: ctx.transitionWeight } : {}),
+        onSpawn,
+      }, ROOT, (k, row) => (k === null ? log(`bc-train-batch: engine: ${row}`) : group[k].onEpoch(row)));
+    } catch (e) {
+      group.forEach(r => fail(r, e));
+      return;
+    } finally {
+      for (const r of group) fs.rmSync(path.join(r.dir, `bc-mlx.${process.pid}.tmp`), { force: true });
+    }
+    const trainSeconds = (Date.now() - t0) / 1000;
+    group.forEach((r, k) => finish(r, results[k], trainSeconds,
+      { id, index: r.index, size: runs.length, backend, group: r.hidden.join(','), groupSize: group.length, groupIndex: k }));
+  };
+  runs.forEach((r, i) => { r.index = i; });
   try {
-    await Promise.all(Array.from({ length: Math.min(jobs, runs.length) }, slot));
+    if (backend === 'python') {
+      let next = 0;
+      const slot = async () => { while (next < runs.length) await runOne(runs[next++]); };
+      await Promise.all(Array.from({ length: Math.min(jobs, runs.length) }, slot));
+    } else {
+      for (const hidden of shapes) {
+        const members = runs.filter(r => r.hidden === hidden);
+        for (let i = 0; i < members.length; i += MLX_GROUP) await runGroup(members.slice(i, i + MLX_GROUP));
+      }
+    }
     await poolChain.catch(() => {});
   } finally {
     fs.rmSync(logitsFile, { force: true });

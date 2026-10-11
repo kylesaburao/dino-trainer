@@ -19,7 +19,8 @@
 //                       the student is grp/bc-old's best.json. grp/bc-run's config lists it in
 //                       extraDemos and has transitionWeight 4
 //   batch/v2-bc-jump-d2w32-s1..3  a bc-train-batch: one pid locks s2 (training, 1 epoch) and s3
-//                       (waiting for a slot: start line only); s1 finished (config.batchRun)
+//                       (waiting for a slot: start line only); s1 finished on --backend mlx
+//                       (config.batchRun, config.engine)
 //   plain               an empty directory (listed as before)
 //   grp/scans/          scan.js / survey.js output (not a run): done.jsonl (old header without
 //                       pid, footer, seeds out of order, 2 failures; model grp/bc-run),
@@ -104,9 +105,11 @@ function buildFixture(dir) {
     `lr 0.002 seed ${i} demos ${demosFile} (1000 rows, sha 000000000000) core=000000000000 batch=${i}/3 jobs=2\n`;
   const b1 = JSON.parse(src('runs/v2-bc-jump-d2w32-s1/best.json'));
   b1.config = { ...best.config, snapshots: undefined, extraDemos: undefined, transitionWeight: undefined, transitions: undefined,
-    trainer: 'trainer/cli.js bc-train-batch --backend python', batchRun: { id: '2026-10-11T00:00:00.000Z-1', index: 0, size: 3, backend: 'python', jobs: 2, blasThreads: 1 } };
+    trainer: 'trainer/cli.js bc-train-batch --backend mlx', backend: 'mlx',
+    engine: { name: 'mlx', version: '0.32.3', device: 'Device(gpu, 0)', models: 3, tf32: false },
+    batchRun: { id: '2026-10-11T00:00:00.000Z-1', index: 0, size: 3, backend: 'mlx', group: '32,32', groupSize: 3, groupIndex: 0 } };
   w(`${BATCH}1/best.json`, JSON.stringify(b1));
-  w(`${BATCH}1/bc-metrics.jsonl`, [0, 1, 2].map(e => JSON.stringify({ backend: 'python', epoch: e, loss: 0.1 / (e + 1), recall: { none: 0.99, jump: 0.98 }, seconds: 1 })).join('\n') + '\n');
+  w(`${BATCH}1/bc-metrics.jsonl`, [0, 1, 2].map(e => JSON.stringify({ backend: 'mlx', epoch: e, loss: 0.1 / (e + 1), recall: { none: 0.99, jump: 0.98 }, seconds: 1 })).join('\n') + '\n');
   w(`${BATCH}1/train.log`, startLine(1));
   for (const i of [2, 3]) {
     w(`${BATCH}${i}/train.lock`, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }) + '\n');
@@ -215,7 +218,7 @@ function cdpClient(url) {
         !by.grp && !by.batch && list.length === 12, (list || []).map(r => r.name).join(', '));
     const bm = [1, 2, 3].map(i => by[BATCH + i] || { bc: {} });
     check('bc-train-batch members: all BC runs; finished one stopped with batch 1/3 from config; training and waiting ones running as bc-train-batch with batch i/3 from the start line',
-      bm.every(r => r.kind === 'bc') && !bm[0].running && bm[0].bc.batchRun && bm[0].bc.batchRun.n === 1 && bm[0].bc.batchRun.size === 3 && bm[0].bc.batchRun.jobs === 2 &&
+      bm.every(r => r.kind === 'bc') && !bm[0].running && bm[0].bc.batchRun && bm[0].bc.batchRun.n === 1 && bm[0].bc.batchRun.size === 3 && bm[0].bc.backend === 'mlx' &&
       bm[1].running && bm[1].process === 'bc-train-batch' && bm[1].bc.batchRun && bm[1].bc.batchRun.n === 2 && bm[1].bc.epochsDone === 1 && (bm[1].bc.layers || []).join('-') === '44-32-32-3' &&
       bm[2].running && bm[2].process === 'bc-train-batch' && bm[2].bc.batchRun && bm[2].bc.batchRun.n === 3 && bm[2].bc.epochsDone === 0 && bm[2].bc.backend === 'python' &&
       by['grp/bc-run'].process === 'bc-train' && by['grp/bc-run'].bc.batchRun === null,
@@ -370,6 +373,8 @@ function cdpClient(url) {
     check('BC chip shows the badge, teacher, backend and layers', /BC.*grp\/bc-run.*running.*teacher-duck.*44-32-32-3.*python/.test(view.chip), view.chip);
     const batchChip = await evaluate(`(document.querySelector('[data-run="${BATCH}3"]') || {}).textContent || ''`);
     check('bc-train-batch member chip: running, layers, backend, batch i/n', /running.*44-32-32-3.*python.*batch 3\/3/.test(batchChip.replace(/\s+/g, ' ')), batchChip.replace(/\s+/g, ' ').trim());
+    const mlxChip = await evaluate(`(document.querySelector('[data-run="${BATCH}1"]') || {}).textContent || ''`);
+    check('finished MLX batch member chip: stopped, mlx backend, batch 1/3', /stopped.*44-32-32-3.*mlx.*batch 1\/3/.test(mlxChip.replace(/\s+/g, ' ')), mlxChip.replace(/\s+/g, ' ').trim());
     check('BC view lists the scans of its model', await evaluate(`!!document.querySelector('#run-scans tr.scan-row[data-scan="grp/scans/done.jsonl"]')`));
     check('BC view shows the demos manifest, validation and snapshots',
       view.snaps === 2 && /teacher-duck/.test(view.text) && /Solver crashes/.test(view.text) && /25\/25/.test(view.text));
