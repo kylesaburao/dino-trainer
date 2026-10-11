@@ -46,6 +46,34 @@ canvas {
   cursor: pointer;
 }
 
+.controls, .status {
+  margin-top: 10px;
+  font: 11px/1.6 monospace;
+  color: #535353;
+  text-align: center;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.controls select {
+  max-width: 100%;
+  font: inherit;
+  color: inherit;
+  background: #fff;
+  border: 1px solid #535353;
+  border-radius: 2px;
+}
+
+.controls select:disabled {
+  opacity: 0.4;
+}
+
 #ai-toggle:disabled {
   opacity: 0.4;
   cursor: default;

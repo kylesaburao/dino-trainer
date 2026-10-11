@@ -12,9 +12,15 @@
 //    control back.
 // 4. No console errors or exceptions on the page.
 // 5. index-css.html: the model.css network (CSS-evaluated weights) plays, every
-//    decision equals policy.js on model.js, speeds 1x-2048x, auto-restart.
+//    decision equals policy.js on model.js, speeds 1x-4096x, auto-restart.
 //    (This covers the opening only; test/css-agreement.js compares any run's
 //    model on CSS vs JS decisions through the pterodactyl/duck phase.)
+// 6. Model selector and speed on both pages: the default is the shipped model
+//    (root model.js / model.css, and models.js marks the same model shipped);
+//    every bundled model (models.js, models-css/) loads with ?model=<id>, plays its
+//    own rules, and plays a few hundred frames at 4096x with the policy called
+//    once per update (index.html) and 0 CSS/JS disagreements (index-css.html); the
+//    selector remembers a choice and reloads with ?model=. Prints the achieved speed.
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -31,6 +37,8 @@ function check(name, ok, detail = '') {
 
 // Seeded Math.random for both baseline and new pages (mulberry32, seed 12345).
 const SEED_SCRIPT = seedMathRandom(12345);
+const SPEEDS = '1,2,4,8,16,32,64,128,256,512,1024,2048,4096';
+const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in section 6
 
 (async () => {
   // Baseline page from commit 2da34de in a scratch directory.
@@ -138,7 +146,7 @@ const SEED_SCRIPT = seedMathRandom(12345);
     await sleep(900);   // past the restart lockout
     await click(btn.x, btn.y);
     await sleep(50);
-    check('toggle turns AI on ("AI: ON")', await evaluate(`aiOn && document.getElementById('ai-toggle').textContent === 'AI: ON'`));
+    check('toggle turns AI on ("AI: ON") and enables the speed selector', await evaluate(`aiOn && document.getElementById('ai-toggle').textContent === 'AI: ON' && !speedSelect.disabled`));
     check('clicking the toggle did not press jump', (await T('humanJump')) === 0);
     check('toggle does not keep keyboard focus', await evaluate(`document.activeElement !== document.getElementById('ai-toggle')`));
     const aiStarted = await waitUntil(`game.state === 'running'`, 2000);
@@ -172,6 +180,7 @@ const SEED_SCRIPT = seedMathRandom(12345);
     await sleep(50);
     const off = await evaluate(`({ aiOn, text: document.getElementById('ai-toggle').textContent, keys: { ...game.keys }, state: game.state, jumping: game.dino.jumping })`);
     check('toggle turns AI off mid-run ("AI: OFF")', !off.aiOn && off.text === 'AI: OFF' && off.state === 'running', JSON.stringify(off));
+    check('speed selector is AI-only: disabled again with AI off', await evaluate(`speedSelect.disabled`));
     check('turning AI off releases the AI-held keys', !off.keys.jump && !off.keys.down);
     check('clicking the toggle off did not press jump', (await T('humanJump')) === 0 && !off.jumping);
     await waitUntil(`!game.dino.jumping`, 2000);
@@ -207,10 +216,10 @@ const SEED_SCRIPT = seedMathRandom(12345);
     const { modelId } = require(path.join(ROOT, 'trainer', 'css-model.js'));
     await load(path.join(ROOT, 'index-css.html'));
     const css = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), version: game && game.version,
-      loadsModelJs: typeof DINO_MODEL !== 'undefined', speeds: [...document.querySelectorAll('#speed option')].map(o => Number(o.value)) })`);
+      loadsModelJs: typeof DINO_MODEL !== 'undefined' || typeof DINO_MODELS !== 'undefined', speeds: [...document.querySelectorAll('#speed option')].map(o => Number(o.value)) })`);
     check('CSS page: self-test passes, model.css is from model.js, and model.js is not loaded',
       !css.failed && css.id === modelId(shipped) && css.version === (shipped.gameVersion || 'v1') && !css.loadsModelJs, JSON.stringify(css));
-    check('CSS page: speed options 1x to 2048x', css.speeds.join() === '1,2,4,8,16,32,64,128,256,512,1024,2048', css.speeds.join());
+    check('CSS page: speed options 1x to 4096x', css.speeds.join() === SPEEDS, css.speeds.join());
     // Test-only: wrap the page's cssDecide to compare each CSS decision with policy.js on model.js.
     await evaluate(`(() => { const net = DinoPolicy.createNet(${JSON.stringify(shipped.layers)}, ${JSON.stringify(Array.from(shipped.params))});
       const cssOnly = cssDecide; window.__cmp = { frames: 0, disagree: 0 };
@@ -231,6 +240,86 @@ const SEED_SCRIPT = seedMathRandom(12345);
     check('CSS page: ?game=v3 plays the v3 rules', await evaluate(`!failed && game.version === 'v3'`) &&
       await waitUntil(`game.state === 'running' && game.score() > 0`, 5000));
     check('no console errors, warnings or exceptions on the v3 CSS page', problems.length === 0, problems.join('; '));
+
+    // ---- 6. Model selector and speed (both pages) --------------------------
+    const bundled = require(path.join(ROOT, 'models.js'));
+    const index = require(path.join(ROOT, 'models-css', 'index.js'));
+    const same = (a, b) => a.layers.join() === b.layers.join() && a.params.length === b.params.length && a.params.every((v, i) => v === b.params[i]);
+    const shippedEntries = bundled.filter(m => m.shipped);
+    check('models.js: exactly one shipped entry, and it is the root model.js', shippedEntries.length === 1 && same(shippedEntries[0], shipped) &&
+      shippedEntries[0].source === shipped.source, shippedEntries.map(m => m.id).join());
+    check('root model.css still matches model.js', fs.readFileSync(path.join(ROOT, 'model.css'), 'utf8').includes(`--nn-model-id: "${modelId(shipped)}"`));
+    check('models-css/index.js lists the same models as models.js, with each CSS file\'s id',
+      index.length === bundled.length && index.every((m, i) => m.id === bundled[i].id && m.cssId === modelId(bundled[i]) &&
+        fs.readFileSync(path.join(ROOT, m.css), 'utf8').includes(`--nn-model-id: "${m.cssId}"`)), index.map(m => m.id).join());
+
+    // Defaults with nothing remembered: the shipped model on both pages.
+    await evaluate(`localStorage.removeItem('dino-model')`);
+    await load(path.join(ROOT, 'index.html'));
+    const def = await evaluate(`({ shipped: MODEL === DINO_MODEL, select: modelSelect.value, options: modelSelect.options.length,
+      speeds: [...speedSelect.options].map(o => Number(o.value)), speedDisabled: speedSelect.disabled, version: game.version })`);
+    check('index.html: default is the shipped model, shown as its models.js entry', def.shipped && def.select === shippedEntries[0].id &&
+      def.options === bundled.length && def.version === shipped.gameVersion, JSON.stringify(def));
+    check('index.html: speed options 1x to 4096x, disabled while AI is off', def.speeds.join() === SPEEDS && def.speedDisabled, def.speeds.join());
+    await load(path.join(ROOT, 'index-css.html'));
+    await waitUntil(`!!game || !!failed`, 5000);
+    const cdef = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), href: document.getElementById('model-css').getAttribute('href'), select: $model.value })`);
+    check('index-css.html: default is model.css, shown as the shipped entry', !cdef.failed && cdef.href === 'model.css' && cdef.id === modelId(shipped) &&
+      cdef.select === shippedEntries[0].id, JSON.stringify(cdef));
+
+    // The selector remembers the choice and reloads with ?model=<id> (keeping ?game=).
+    const pick = bundled.find(m => !m.shipped);
+    await load(path.join(ROOT, 'index.html') + '?game=v1');
+    await evaluate(`(() => { modelSelect.value = '${pick.id}'; modelSelect.dispatchEvent(new Event('change')); })()`);
+    await sleep(1500);
+    await waitUntil(`typeof MODEL !== 'undefined' && document.readyState === 'complete'`, 5000);
+    const picked = await evaluate(`({ search: location.search, id: MODEL.id, stored: localStorage.getItem('dino-model'), version: game.version, select: modelSelect.value })`);
+    check('index.html: picking a model reloads with ?model=<id>, keeps ?game=, remembers it', picked.id === pick.id && picked.stored === pick.id &&
+      new URLSearchParams(picked.search).get('model') === pick.id && picked.version === 'v1' && picked.select === pick.id, JSON.stringify(picked));
+    await load(path.join(ROOT, 'index-css.html'));
+    await waitUntil(`!!game || !!failed`, 15000);
+    const remembered = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), select: $model.value })`);
+    check('index-css.html: plays the remembered choice without ?model=', !remembered.failed && remembered.id === pick.cssId && remembered.select === pick.id, JSON.stringify(remembered));
+    await evaluate(`localStorage.removeItem('dino-model')`);
+
+    // Every bundled model on both pages, at 4096x.
+    const speedRows = [];
+    for (const m of bundled) {
+      await load(path.join(ROOT, 'index.html') + `?model=${m.id}`);
+      const page = await evaluate(`({ id: MODEL.id, version: game.version, select: modelSelect.value, hiKey: HI_KEY })`);
+      await evaluate(`(() => {
+        window.__m = { applyKeys: 0, updates: 0, running: 0 };
+        const apply = game.applyKeys; game.applyKeys = (k, n) => { if (aiOn) __m.applyKeys++; return apply(k, n); };
+        const update = game.update; game.update = (ms, n) => { if (aiOn) { __m.updates++; if (game.state === 'running') __m.running++; } return update(ms, n); };
+      })()`);
+      const tb = await evaluate(`(() => { const r = document.getElementById('ai-toggle').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+      await click(tb.x, tb.y);   // a real click (a user gesture, so the AudioContext may start)
+      await evaluate(`speedSelect.value = '4096'`);
+      const played = await waitUntil(`__m.running >= ${MODEL_FRAMES}`, 20000);
+      await sleep(2500);   // two full rate windows at 4096x
+      const js = await evaluate(`({ ...__m, achieved: Math.round(rate.speed), status: speedStatus.textContent })`);
+      check(`index.html ?model=${m.id}: plays rules ${m.gameVersion} and ${MODEL_FRAMES}+ frames at 4096x, policy once per update`,
+        page.id === m.id && page.select === m.id && page.version === m.gameVersion && played && js.applyKeys === js.updates && problems.length === 0,
+        `${JSON.stringify(page)} ${JSON.stringify(js)} ${problems.length} problems ${problems.slice(0, 3).join('; ')}`);
+
+      await load(path.join(ROOT, 'index-css.html') + `?model=${m.id}`);
+      await waitUntil(`!!game || !!failed`, 15000);
+      const cpage = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), version: game && game.version, select: $model.value,
+        loadsWeightsJs: typeof DINO_MODEL !== 'undefined' || typeof DINO_MODELS !== 'undefined' })`);
+      await evaluate(`(() => { const net = DinoPolicy.createNet(${JSON.stringify(m.layers)}, ${JSON.stringify(m.params)});
+        const cssOnly = cssDecide; window.__cmp = { frames: 0, disagree: 0 };
+        window.cssDecide = (x) => { const a = cssOnly(x); __cmp.frames++; if (net(x) !== a) __cmp.disagree++; return a; };
+        $speed.value = '4096'; })()`);
+      const cplayed = await waitUntil(`__cmp.frames >= ${MODEL_FRAMES}`, 30000);
+      await sleep(2500);
+      const c = await evaluate(`({ ...__cmp, achieved: Math.round(rate.fps * FRAME_MS / 1000), status: $status.textContent })`);
+      check(`index-css.html ?model=${m.id}: models-css/${m.id}.css loads, plays rules ${m.gameVersion}, 0 CSS/JS disagreements over ${MODEL_FRAMES}+ decisions at 4096x`,
+        !cpage.failed && cpage.id === m.cssId && cpage.version === m.gameVersion && cpage.select === m.id && !cpage.loadsWeightsJs &&
+        cplayed && c.disagree === 0 && problems.length === 0, `${JSON.stringify(cpage)} frames ${c.frames} disagree ${c.disagree} ${problems.length} problems ${problems.slice(0, 3).join('; ')}`);
+      speedRows.push({ id: m.id, jsFrames: js.running, jsAchieved: js.achieved, cssFrames: c.frames, cssDisagree: c.disagree, cssAchieved: c.achieved });
+    }
+    console.log('achieved speed at 4096x (simulated / real time):');
+    for (const r of speedRows) console.log(`  ${r.id.padEnd(22)} index.html ${String(r.jsAchieved).padStart(5)}x   index-css.html ${String(r.cssAchieved).padStart(4)}x   (CSS ${r.cssDisagree}/${r.cssFrames} disagreements)`);
   } finally {
     cdp.close();
     chrome.kill();

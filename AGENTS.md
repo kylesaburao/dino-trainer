@@ -21,10 +21,11 @@ node trainer/dashboard.js                 # live dashboard at http://127.0.0.1:8
 node test/dashboard-check.js              # headless Chrome check of the dashboard on a temp runs/ fixture
 ```
 
-There is no build step and no linter. To play, open `index.html` (or `index-css.html`) directly in a browser.
+There is no build step and no linter. To play, open `index.html` (or `index-css.html`) directly in a browser. Both pages have a model selector and a speed selector (1×–4096×); see "Browser shell" and "CSS network page".
 
 Trainer CLI (`trainer/cli.js`; the header comment lists every option):
-- `train` / `assess` / `export` / `export-css` / `report`
+- `train` / `assess` / `export` / `export-css` / `export-models` / `report`
+- `export-models` regenerates the pages' model selector from `BUNDLED_MODELS` in `trainer/cli.js` (run dirs and labels): `models.js` (`DINO_MODELS`, with weights, for `index.html`), `models-css/<id>.css` (one CSS network each) and `models-css/index.js` (`DINO_MODEL_INDEX`, metadata and `--nn-model-id` only, for `index-css.html`). The id is the run-dir name. It never touches the root `model.js` / `model.css`. The outputs are committed, and `test/models.test.js` fails when they are stale. After shipping a new model, move `shipped: true` in `BUNDLED_MODELS` and rerun it.
 - `assess` (held-out assessment) was called `eval` until 2026-10-10 (user order). `eval` still works as a deprecated alias and prints a one-line notice. New records go to `<run>/assess.jsonl`; older runs' `evals.jsonl` were renamed, and every reader (dashboard, `ops.js` report, `scans.js`) merges both names (`readAssessLines` in `trainer/store.js`). Historical pre-registrations still say `eval`.
 - `finish`: eval, export, browser check, report and **git commit**.
 - `session`: `train` followed by `finish`.
@@ -96,7 +97,7 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 - The core must contain no DOM, clock, storage, audio or `Math.random`; `test/parity.test.js` enforces this.
 - Gameplay sizes are computed from the sprite pixel-map rows, not from canvases.
 
-**Dual-format files.** Every shared file (`core.js`, `policy.js`, `render.js`, `model.js`) works both as a classic `<script>` that sets a global (`DinoCore`, `DinoPolicy`, `DinoRender`, `window.DINO_MODEL`) and as a Node `require()`. That is because `file://` blocks ES modules and `fetch()`. Keep that pattern: no `import`/`export`, no JSON loading in the browser.
+**Dual-format files.** Every shared file (`core.js`, `policy.js`, `render.js`, `model.js`, `models.js`, `models-css/index.js`) works both as a classic `<script>` that sets a global (`DinoCore`, `DinoPolicy`, `DinoRender`, `window.DINO_MODEL`, `DINO_MODELS`, `DINO_MODEL_INDEX`) and as a Node `require()`. That is because `file://` blocks ES modules and `fetch()`. Keep that pattern: no `import`/`export`, no JSON loading in the browser.
 
 **Shared policy.** `policy.js` holds the observation extraction (44 features), MLP inference and the agent loop (action repeat, idle→start). The trainer workers, `eval`, the browser AI mode and the dashboard all use it, so the browser AI sees exactly what training saw.
 - Anti-cheat rules (tested in `test/policy.test.js`): observations may only use obstacles with x < 600.
@@ -110,9 +111,16 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 - AI mode calls the policy *inside* the fixed-timestep loop, right before each `update`, never once per rAF. It drives the same `pressJump`/`releaseJump`/`pressDown`/`releaseDown` path as a human.
 - With AI on, human jump/duck input is ignored and the AI auto-restarts after a crash.
 - A run with AI on at any point never writes HI. HI is stored per game version (`HI_KEY`).
+- Model selector: `?model=<id>` (an id in `models.js`), else the choice remembered in localStorage `dino-model` (shared with the CSS page), else the root `model.js`. Picking one stores it and reloads with `?model=<id>`, keeping `?game=`. The page plays the selected model's rules unless `?game=` overrides.
+- Speed selector (1×–4096×) applies to AI mode only and is disabled while AI is off, so human play and HI stay at 1×. Sound is muted above 2×.
+- Each display frame adds speed × real time to the fixed-timestep accumulator. Updates stop after a 12 ms step budget (`STEP_BUDGET_MS`), and the backlog is dropped. The page shows the achieved speed, measured as simulated time over real time.
+- The game clock (`clock`) advances `FRAME_MS` per update and is passed to `update`, `applyKeys`, `pressJump` and `draw`, so the restart lockout, night, flash and blink scale with game time at any speed.
 - `render.js` is the canvas renderer shared with the dashboard playback.
 
 **CSS network page.** `index-css.html` + `css-nn.js` evaluate the same MLP in the browser's style engine. `model.css` is generated from `model.js` by `trainer/css-model.js` via `export` or `export-css`; never edit it by hand. JavaScript only writes `--x0..--x43` and reads `--act`.
+- The page plays `model.css` by default. A selected model (`?model=`, or the remembered choice) swaps the `<link>` to `models-css/<id>.css`, and the page waits until `--nn-model-id` equals that entry's `cssId` before it plays. It never loads weights as JavaScript; `models-css/index.js` has no params.
+- Speed goes from 1× to 4096× with a 12 ms step budget. The status line shows the achieved speed, which falls far short at high settings: at 4096× in headless Chrome on the dev Mac (2026-10-10), about 65× for 2×8, 13× for 2×32 and 99× for 1×6.
+- `test/css-agreement.js` copies `models-css/index.js` into its scratch page; with no `?model=` and a fresh profile, the page still plays the candidate's `model.css`.
 
 **Game versions.** `v1` is the original rules and `createGame`'s default. `v2` is identical below 1k points, then ramps difficulty on a log scale up to 1M. All training so far uses v2. The version is stored in checkpoints, `best.json` and `model.js`; the page (and `index-css.html`) plays the model's version, and `?game=v1|v2|v3` overrides it. `assess --game <v>` plays other rules than the model's: a cross-rules assessment, so it warns, and the `assess.jsonl` record carries `gameVersion` and `modelGameVersion`.
 

@@ -7,6 +7,11 @@
 // training saw) into those properties and reads --act back. There is no
 // JavaScript fallback: if the CSS self-test fails, the dino doesn't play.
 // The page never loads model.js; the weights exist only in model.css.
+//
+// Model selector: ?model=<id>, else the choice remembered by either page
+// (localStorage 'dino-model'), switches the stylesheet to models-css/<id>.css
+// (`node trainer/cli.js export-models`; models-css/index.js lists ids, labels and
+// each file's --nn-model-id, never weights). With neither, the page plays model.css.
 const { FRAME_MS } = DinoCore;
 const { OBS_DIM, ACTIONS, observe } = DinoPolicy;
 
@@ -14,6 +19,19 @@ const renderer = DinoRender.createRenderer(document.getElementById('game'));
 const nn = document.getElementById('nn');
 const $status = document.getElementById('status');
 const $speed = document.getElementById('speed');
+const $model = document.getElementById('model');
+const $modelCss = document.getElementById('model-css');
+const $modelCssLink = document.getElementById('model-css-link');
+
+const MODEL_KEY = 'dino-model';
+const MODEL_INDEX = typeof DINO_MODEL_INDEX !== 'undefined' ? DINO_MODEL_INDEX : [];
+const SELECTED = (() => {
+  const byId = (id) => (id && MODEL_INDEX.find(m => m.id === id)) || null;
+  let stored = null;
+  try { stored = localStorage.getItem(MODEL_KEY); } catch (e) { /* storage unavailable */ }
+  return byId(new URLSearchParams(location.search).get('model')) || byId(stored);
+})();
+const MODEL_LOAD_MS = 10000;
 
 const STEP_BUDGET_MS = 12;     // simulation time per display frame before playback falls behind
 const RESTART_MS = 1000;       // pause on the crash frame before the next run
@@ -121,11 +139,52 @@ function frame(now) {
   showStatus();
 }
 
+// The achieved speed is measured (simulated frames per real second), not the
+// selected one; at high speeds the style engine falls far short of it.
 function showStatus() {
   const eff = rate.fps * FRAME_MS / 1000;
+  const want = Number($speed.value);
   $status.textContent = `game ${game.version}${game.version !== 'v1' ? ` (level ${game.level.toFixed(2)}${game.superLevel > 0 ? `, v3 level ${game.superLevel.toFixed(2)}` : ''})` : ''} · score ${game.score()}` +
-    ` · ${eff.toFixed(1)}× real time` + (behind ? ` (CSS can't keep up with ${$speed.value}×)` : '') +
+    ` · achieved ${eff >= 10 ? Math.round(eff) : eff.toFixed(1)}× real time` + (behind || eff < want * 0.9 ? ` of ${want}× (CSS can't keep up)` : '') +
     ` · ${Math.round(rate.fps / actionRepeat)} CSS decisions/s`;
+}
+
+// Fill the model selector; picking a model remembers it and reloads with ?model=<id>.
+// A loaded stylesheet that is not in the index (the root model.css when it holds
+// another model) appears as its own "model.css" entry.
+function fillModelSelect(loadedId) {
+  const current = SELECTED || MODEL_INDEX.find(m => m.cssId === loadedId);
+  if (!current) $model.add(new Option(`model.css (${loadedId})`, ''));
+  for (const m of MODEL_INDEX) $model.add(new Option(m.label, m.id));
+  $model.value = current ? current.id : '';
+  $model.disabled = $model.options.length < 2;
+  $model.addEventListener('change', () => {
+    const id = $model.value;
+    try { if (id) localStorage.setItem(MODEL_KEY, id); else localStorage.removeItem(MODEL_KEY); } catch (e) { /* storage unavailable */ }
+    const q = new URLSearchParams(location.search);
+    if (id) q.set('model', id); else q.delete('model');
+    location.search = q.toString();
+  });
+}
+for (const el of [$model, $speed]) el.addEventListener('change', () => el.blur());
+
+// Switch the stylesheet to the selected model's and wait until the style engine
+// reports that model's --nn-model-id.
+function loadSelected() {
+  if (!SELECTED) return Promise.resolve();
+  $modelCss.href = SELECTED.css;
+  $modelCssLink.href = SELECTED.css;
+  $modelCssLink.textContent = SELECTED.css;
+  const t0 = performance.now();
+  return new Promise((resolve, reject) => {
+    const poll = () => {
+      const id = cssString('--nn-model-id');
+      if (id === SELECTED.cssId) resolve();
+      else if (performance.now() - t0 > MODEL_LOAD_MS) reject(new Error(`${SELECTED.css} did not load (--nn-model-id "${id}", expected "${SELECTED.cssId}")`));
+      else setTimeout(poll, 20);
+    };
+    poll();
+  });
 }
 
 function fail(e) {
@@ -138,10 +197,14 @@ function fail(e) {
   console.error(e);
 }
 
-(function start() {
+loadSelected().then(start, fail);
+
+function start() {
   try {
     selfTest();
+    fillModelSelect(cssString('--nn-model-id'));
     gameVersion = cssString('--nn-game') || 'v1';
+    if (SELECTED && gameVersion !== SELECTED.gameVersion) throw new Error(`${SELECTED.css} is for rules ${gameVersion}, the index says ${SELECTED.gameVersion}`);
     // ?game=v1|v2|v3 plays those rules instead of the model's own (as on index.html).
     const asked = new URLSearchParams(location.search).get('game');
     if (DinoCore.GAME_VERSIONS.includes(asked)) gameVersion = asked;
@@ -153,4 +216,4 @@ function fail(e) {
   }
   newGame();
   requestAnimationFrame((t) => { last = t; rate.t0 = t; frame(t); });
-})();
+}

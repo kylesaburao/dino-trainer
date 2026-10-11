@@ -10,11 +10,22 @@
   <div class="stage">
     <canvas id="game" width="600" height="150"></canvas>
     <button id="ai-toggle" type="button" aria-pressed="false">AI: OFF</button>
+    <div class="controls">
+      <label>Model <select id="model"></select></label>
+      <label>Speed <select id="speed" disabled title="AI mode only">
+        <option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option>
+        <option value="16">16×</option><option value="32">32×</option><option value="64">64×</option><option value="128">128×</option>
+        <option value="256">256×</option><option value="512">512×</option><option value="1024">1024×</option><option value="2048">2048×</option>
+        <option value="4096">4096×</option>
+      </select></label>
+      <span id="speed-status">speed applies to AI mode</span>
+    </div>
   </div>
   <script src="core.js"></script>
   <script src="render.js"></script>
   <script src="policy.js"></script>
   <script src="model.js"></script>
+  <script src="models.js"></script>
   <script src="game.js"></script>
 </body>
 </html>

@@ -1,0 +1,92 @@
+/* Dino AI network, evaluated by CSS. Generated from model.js by trainer/css-model.js; do not edit.
+   Model: layers 44-6-3, generation n/a, game v3, 291 params. */
+@property --x0 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x1 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x2 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x3 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x4 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x5 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x6 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x7 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x8 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x9 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x10 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x11 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x12 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x13 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x14 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x15 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x16 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x17 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x18 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x19 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x20 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x21 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x22 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x23 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x24 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x25 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x26 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x27 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x28 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x29 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x30 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x31 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x32 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x33 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x34 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x35 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x36 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x37 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x38 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x39 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x40 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x41 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x42 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --x43 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --a1-0 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --a1-1 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --a1-2 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --a1-3 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --a1-4 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --a1-5 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --o0 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --o1 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --o2 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --m0 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --b0 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --c1 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --m1 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --b1 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --c2 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --m2 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --b2 { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --act { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --nn-probe { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --nn-probe-sign { syntax: "<number>"; inherits: false; initial-value: 0; }
+
+.css-net {
+  --nn-model-id: "na-ae597fed3cc10ce4";
+  --nn-game: "v3";
+  --nn-action-repeat: 1;
+  --a1-0: calc(1 - 2 / (exp(2 * (var(--x0) * -5.106699466705322 + var(--x1) * 2.3642685413360596 + var(--x2) * -2.5086185932159424 + var(--x3) * 6.43841552734375 + var(--x4) * -0.05479302257299423 + var(--x5) * 0.024801982566714287 + var(--x6) * -9.468036651611328 + var(--x7) * -0.001279877033084631 + var(--x8) * -0.2785293757915497 + var(--x9) * -0.21716444194316864 + var(--x10) * 2.146257162094116 + var(--x11) * -0.9684344530105591 + var(--x12) * 0.4162038564682007 + var(--x13) * -0.17864781618118286 + var(--x14) * 1.3151156902313232 + var(--x15) * 0.7344576716423035 + var(--x16) * -2.699495553970337 + var(--x17) * 0.3766511380672455 + var(--x18) * -0.27026069164276123 + var(--x19) * -0.14248503744602203 + var(--x20) * -0.2518388330936432 + var(--x21) * -0.32338210940361023 + var(--x22) * 0.09517776966094971 + var(--x23) * 0.14626377820968628 + var(--x24) * 0.3115660846233368 + var(--x25) * -1.008639931678772 + var(--x26) * -0.10414962470531464 + var(--x27) * 0.21248045563697815 + var(--x28) * -0.3365139663219452 + var(--x29) * -0.8399649858474731 + var(--x30) * -0.2852461338043213 + var(--x31) * -0.026874352246522903 + var(--x32) * -0.237714022397995 + var(--x33) * 0.0897517204284668 + var(--x34) * -0.03036646544933319 + var(--x35) * 0.09504227340221405 + var(--x36) * 0.11017976701259613 + var(--x37) * -0.19463680684566498 + var(--x38) * -0.12027223408222198 + var(--x39) * -0.08831450343132019 + var(--x40) * 0.11275917291641235 + var(--x41) * 0.1282881498336792 + var(--x42) * -0.10698901861906052 + var(--x43) * -0.14956071972846985 + -0.013982301577925682)) + 1));
+  --a1-1: calc(1 - 2 / (exp(2 * (var(--x0) * -13.754645347595215 + var(--x1) * -1.055045485496521 + var(--x2) * 4.465502738952637 + var(--x3) * -3.6692986488342285 + var(--x4) * 0.6106784343719482 + var(--x5) * -0.4314184784889221 + var(--x6) * -0.4420722723007202 + var(--x7) * -0.0655955821275711 + var(--x8) * -0.4225395619869232 + var(--x9) * -0.12475744634866714 + var(--x10) * 0.052649613469839096 + var(--x11) * 0.10188993811607361 + var(--x12) * -0.8120110630989075 + var(--x13) * 0.03142276778817177 + var(--x14) * 0.8804189562797546 + var(--x15) * -2.9494893550872803 + var(--x16) * -3.6223936080932617 + var(--x17) * 0.4439058005809784 + var(--x18) * 0.20866724848747253 + var(--x19) * -0.17702965438365936 + var(--x20) * 0.042046546936035156 + var(--x21) * 0.17546933889389038 + var(--x22) * -0.09754923731088638 + var(--x23) * -0.0108018908649683 + var(--x24) * 0.03776125609874725 + var(--x25) * -0.09377896785736084 + var(--x26) * 0.20277060568332672 + var(--x27) * 0.024212831631302834 + var(--x28) * 0.0033031711354851723 + var(--x29) * 0.018423954024910927 + var(--x30) * 0.44814836978912354 + var(--x31) * 0.3213648796081543 + var(--x32) * -0.23568670451641083 + var(--x33) * 0.11546823382377625 + var(--x34) * -0.12494361400604248 + var(--x35) * -0.11790324002504349 + var(--x36) * -0.32851067185401917 + var(--x37) * 0.18039529025554657 + var(--x38) * 0.12030087411403656 + var(--x39) * 0.4885147511959076 + var(--x40) * -0.15555919706821442 + var(--x41) * 0.15211854875087738 + var(--x42) * -0.09110783040523529 + var(--x43) * 0.12937545776367188 + -0.11051640659570694)) + 1));
+  --a1-2: calc(1 - 2 / (exp(2 * (var(--x0) * -6.2259979248046875 + var(--x1) * 1.379410982131958 + var(--x2) * -0.20395904779434204 + var(--x3) * -5.656277179718018 + var(--x4) * -0.014445568434894085 + var(--x5) * -0.2973552346229553 + var(--x6) * 3.876642942428589 + var(--x7) * -0.290584921836853 + var(--x8) * 0.052811939269304276 + var(--x9) * -0.23061436414718628 + var(--x10) * -0.36121347546577454 + var(--x11) * -0.2819468677043915 + var(--x12) * 0.40531980991363525 + var(--x13) * -0.0638585165143013 + var(--x14) * -0.33322691917419434 + var(--x15) * 0.7191759943962097 + var(--x16) * 2.281031847000122 + var(--x17) * -0.15687035024166107 + var(--x18) * 0.1468910425901413 + var(--x19) * -0.06625459343194962 + var(--x20) * 0.009083756245672703 + var(--x21) * 0.17224417626857758 + var(--x22) * 0.22382774949073792 + var(--x23) * 0.27374449372291565 + var(--x24) * 0.19831354916095734 + var(--x25) * 0.13057906925678253 + var(--x26) * 0.12595441937446594 + var(--x27) * 0.17471694946289062 + var(--x28) * 0.11595439165830612 + var(--x29) * 0.14894330501556396 + var(--x30) * -0.14126886427402496 + var(--x31) * -0.38713544607162476 + var(--x32) * 0.05857205390930176 + var(--x33) * -0.15173102915287018 + var(--x34) * -0.10822439193725586 + var(--x35) * 0.20293855667114258 + var(--x36) * 0.4415323734283447 + var(--x37) * -0.13901758193969727 + var(--x38) * 0.09420214593410492 + var(--x39) * 0.056811392307281494 + var(--x40) * 0.2535742223262787 + var(--x41) * -0.019762998446822166 + var(--x42) * 0.020391244441270828 + var(--x43) * 0.058701176196336746 + -0.19110557436943054)) + 1));
+  --a1-3: calc(1 - 2 / (exp(2 * (var(--x0) * 8.042449951171875 + var(--x1) * 2.1021692752838135 + var(--x2) * 3.203951120376587 + var(--x3) * -5.10141134262085 + var(--x4) * -0.41514334082603455 + var(--x5) * -0.16218270361423492 + var(--x6) * 8.116559982299805 + var(--x7) * 0.630935549736023 + var(--x8) * -0.12544190883636475 + var(--x9) * 0.04144603759050369 + var(--x10) * 5.535706996917725 + var(--x11) * -1.6741340160369873 + var(--x12) * -0.1684020459651947 + var(--x13) * 0.1930437833070755 + var(--x14) * 0.5286055207252502 + var(--x15) * -0.6117440462112427 + var(--x16) * 4.864020347595215 + var(--x17) * -0.3499746024608612 + var(--x18) * 0.001142304390668869 + var(--x19) * 0.1680462658405304 + var(--x20) * -0.0025450107641518116 + var(--x21) * 0.000469265942228958 + var(--x22) * -0.20030665397644043 + var(--x23) * -0.12468808889389038 + var(--x24) * -0.0074515873566269875 + var(--x25) * 0.32797151803970337 + var(--x26) * 0.13321608304977417 + var(--x27) * 0.14094099402427673 + var(--x28) * 0.3003453016281128 + var(--x29) * -0.07245821505784988 + var(--x30) * -0.022186018526554108 + var(--x31) * -0.052474748343229294 + var(--x32) * 0.5400434732437134 + var(--x33) * -0.0035468763671815395 + var(--x34) * -0.48169076442718506 + var(--x35) * -0.1041908711194992 + var(--x36) * 0.25834089517593384 + var(--x37) * -0.041512999683618546 + var(--x38) * -0.06600590795278549 + var(--x39) * -0.1666664183139801 + var(--x40) * 0.19957002997398376 + var(--x41) * 0.15118148922920227 + var(--x42) * 0.10131306201219559 + var(--x43) * 0.02954952046275139 + 0.25293034315109253)) + 1));
+  --a1-4: calc(1 - 2 / (exp(2 * (var(--x0) * 8.794999122619629 + var(--x1) * 3.4441685676574707 + var(--x2) * 0.22351691126823425 + var(--x3) * 10.563447952270508 + var(--x4) * 0.9711090326309204 + var(--x5) * -0.8177259564399719 + var(--x6) * 3.445317268371582 + var(--x7) * -0.8469582200050354 + var(--x8) * -0.051947396248579025 + var(--x9) * -0.566193699836731 + var(--x10) * -0.5937605500221252 + var(--x11) * -0.4803951680660248 + var(--x12) * -0.3389799892902374 + var(--x13) * 0.17668908834457397 + var(--x14) * -0.2473098784685135 + var(--x15) * -1.524432897567749 + var(--x16) * 0.7287161946296692 + var(--x17) * -0.20793865621089935 + var(--x18) * 0.429577499628067 + var(--x19) * -0.6030547022819519 + var(--x20) * 0.7111272811889648 + var(--x21) * 0.15070873498916626 + var(--x22) * 0.5897207260131836 + var(--x23) * 0.3804444372653961 + var(--x24) * 0.25590530037879944 + var(--x25) * 0.45820024609565735 + var(--x26) * 0.3602205812931061 + var(--x27) * -0.04077025502920151 + var(--x28) * 0.11475501954555511 + var(--x29) * 0.2562934160232544 + var(--x30) * -0.08371477574110031 + var(--x31) * 0.06889073550701141 + var(--x32) * -0.7214488983154297 + var(--x33) * -0.21338605880737305 + var(--x34) * 0.04862193390727043 + var(--x35) * 0.13387462496757507 + var(--x36) * 0.06120503693819046 + var(--x37) * 0.17948058247566223 + var(--x38) * -0.11757767200469971 + var(--x39) * 0.2964489161968231 + var(--x40) * 0.01815173774957657 + var(--x41) * 0.035473309457302094 + var(--x42) * 0.09270504862070084 + var(--x43) * 0.06206807494163513 + -0.5157292485237122)) + 1));
+  --a1-5: calc(1 - 2 / (exp(2 * (var(--x0) * -2.6461148262023926 + var(--x1) * 1.2608582973480225 + var(--x2) * -1.8328289985656738 + var(--x3) * -4.70205545425415 + var(--x4) * -1.2770429849624634 + var(--x5) * 0.08599366247653961 + var(--x6) * -1.2944890260696411 + var(--x7) * 0.2635551393032074 + var(--x8) * 0.09226927161216736 + var(--x9) * -1.2731870412826538 + var(--x10) * -1.7933560609817505 + var(--x11) * -4.059504985809326 + var(--x12) * 1.0844122171401978 + var(--x13) * -0.43972906470298767 + var(--x14) * 1.5734599828720093 + var(--x15) * 0.20793716609477997 + var(--x16) * 0.006208243779838085 + var(--x17) * 0.5331252217292786 + var(--x18) * 0.14679843187332153 + var(--x19) * -0.22609157860279083 + var(--x20) * 0.34380924701690674 + var(--x21) * 0.02762174792587757 + var(--x22) * 0.331816166639328 + var(--x23) * 0.44919344782829285 + var(--x24) * -0.04149630665779114 + var(--x25) * -0.5593085885047913 + var(--x26) * 0.22201764583587646 + var(--x27) * -0.049661170691251755 + var(--x28) * -0.38279762864112854 + var(--x29) * -0.6618322134017944 + var(--x30) * 0.4678206145763397 + var(--x31) * 0.07426641136407852 + var(--x32) * 0.38563767075538635 + var(--x33) * -0.07980665564537048 + var(--x34) * 0.11446627229452133 + var(--x35) * -0.15451866388320923 + var(--x36) * 0.0321475975215435 + var(--x37) * -0.015546279959380627 + var(--x38) * 0.26712682843208313 + var(--x39) * 0.012389088049530983 + var(--x40) * -0.0614246129989624 + var(--x41) * 0.09354228526353836 + var(--x42) * 0.05877162143588066 + var(--x43) * -0.111486054956913 + 0.09393716603517532)) + 1));
+  --o0: calc(var(--a1-0) * -2.905153512954712 + var(--a1-1) * -9.418468475341797 + var(--a1-2) * 8.043977737426758 + var(--a1-3) * 4.477825164794922 + var(--a1-4) * 6.7345123291015625 + var(--a1-5) * -2.3175342082977295 + 1.0213130712509155);
+  --o1: calc(var(--a1-0) * -0.4201848804950714 + var(--a1-1) * 9.213236808776855 + var(--a1-2) * -7.975252151489258 + var(--a1-3) * -0.7874090671539307 + var(--a1-4) * -6.701239585876465 + var(--a1-5) * 1.6591914892196655 + -1.0885576009750366);
+  --o2: calc(var(--a1-0) * 6.314144134521484 + var(--a1-1) * -0.09310571849346161 + var(--a1-2) * -0.608549177646637 + var(--a1-3) * -5.148311138153076 + var(--a1-4) * -2.375061511993408 + var(--a1-5) * 1.4396783113479614 + -0.2473849058151245);
+  --m0: var(--o0);
+  --b0: 0;
+  --c1: max(0, sign(var(--o1) - var(--m0)));
+  --m1: max(var(--m0), var(--o1));
+  --b1: calc(var(--c1) * 1 + (1 - var(--c1)) * var(--b0));
+  --c2: max(0, sign(var(--o2) - var(--m1)));
+  --m2: max(var(--m1), var(--o2));
+  --b2: calc(var(--c2) * 2 + (1 - var(--c2)) * var(--b1));
+  --act: var(--b2);
+  --nn-probe: calc(1 - 2 / (exp(2) + 1));
+  --nn-probe-sign: max(0, sign(-0.5));
+}
