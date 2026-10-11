@@ -751,6 +751,9 @@ function pythonPath(root) {
 // o.snapshotDir (optional): write each epoch's params to <snapshotDir>/epoch-NN.json.
 // o.extraDemos (optional): .bin files appended, in order, after binFile.
 // o.transitionWeight (optional): multiply duck-transition rows' weights (transitionMask).
+// o.blasThreads (optional): cap the BLAS threads of the child (VECLIB/OMP/OPENBLAS env vars);
+// bc-train-batch runs several at once with 1. The output is the same bytes for any thread count
+// (research/plan-gpu-trainer.md Phase 1, V1.3). o.onSpawn (optional) gets the child process.
 function trainPython(binFile, outFile, o, root, onLine = () => {}) {
   const { spawn } = require('child_process');
   const args = [path.join(__dirname, 'bc_train.py'), '--demos', binFile, '--obs-dim', String(OBS_DIM), '--hidden', o.hidden.join(','),
@@ -765,7 +768,10 @@ function trainPython(binFile, outFile, o, root, onLine = () => {}) {
   for (const f of o.extraDemos || []) args.push('--extra-demos', f);
   if (o.transitionWeight !== undefined) args.push('--transition-weight', String(o.transitionWeight));
   return new Promise((resolve, reject) => {
-    const child = spawn(pythonPath(root), ['-W', 'ignore', ...args], { stdio: ['ignore', 'pipe', 'inherit'] });
+    const t = o.blasThreads !== undefined ? String(o.blasThreads) : null;
+    const env = t ? { ...process.env, VECLIB_MAXIMUM_THREADS: t, OMP_NUM_THREADS: t, OPENBLAS_NUM_THREADS: t } : process.env;
+    const child = spawn(pythonPath(root), ['-W', 'ignore', ...args], { stdio: ['ignore', 'pipe', 'inherit'], env });
+    if (o.onSpawn) o.onSpawn(child);
     let buf = '';
     child.stdout.on('data', (d) => {
       buf += d;

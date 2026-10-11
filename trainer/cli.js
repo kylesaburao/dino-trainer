@@ -935,12 +935,16 @@ const distillConfig = (dz, bc) => ({
 const distillText = (dz) => ` distill=${dz.mode}${dz.mode === 'soft' ? ` tau=${dz.tau} alpha=${dz.alpha}` : ''} from=${path.relative(ROOT, dz.abs)}`;
 const quantText = (q) => ` quant=int${q.bits}/${q.scheme}`;
 
-async function bcTrainCmd({ config: cli, opts }) {
+// bc-train and bc-train-batch share these stages (research/plan-gpu-trainer.md §4.1): one
+// set of checks and options (prepareBcTrain), the start line the dashboard parses
+// (bcStartLine), one model's training (trainBcModel), and tier A plus best.json (finishBcRun).
+// Per run dir: lock, log, bc-metrics.jsonl, snapshots/, best.json. Shared by a batch: the
+// demos, the options and the teacher logits.
+
+// Options and demos shared by every model of a bc-train / bc-train-batch call (all but
+// --hidden and --seed). say: the log function for the checks' messages.
+function prepareBcTrain(cli, opts, backend, say) {
   const bc = require('./bc.js');
-  const dir = requireDir(opts, 'bc-train');
-  if (!cli.hidden) throw new Error('bc-train needs --hidden (e.g. --hidden 32,32)');
-  const backend = opts.backend || 'node';
-  if (!['node', 'python'].includes(backend)) throw new Error(`--backend must be node or python, got ${backend}`);
   if (opts.snapshots && backend !== 'python') throw new Error('--snapshots is only supported with --backend python');
   const dz = parseDistill(opts);
   const quant = parseQuant(opts, bc);
@@ -957,102 +961,112 @@ async function bcTrainCmd({ config: cli, opts }) {
   if (dz && (opts.extraDemos !== undefined || transitionWeight !== undefined)) throw new Error('--extra-demos and --transition-weight do not combine with --distill-from');
   const d = bc.TRAIN_DEFAULTS;
   const o = {
-    hidden: cli.hidden,
     epochs: opts.epochs !== undefined ? Number(opts.epochs) : d.epochs,
     batch: opts.batch !== undefined ? Number(opts.batch) : d.batch,
     lr: cli.lr !== undefined ? cli.lr : d.lr,
-    seed: cli.seed !== undefined ? cli.seed : d.seed,
   };
-  if (!o.hidden.every(h => Number.isInteger(h) && h > 0)) throw new Error('--hidden must be positive integers');
   if (!(Number.isInteger(o.epochs) && o.epochs > 0 && Number.isInteger(o.batch) && o.batch > 0)) throw new Error('--epochs and --batch must be positive integers');
   const target = cli.target || 1000000;
-  fs.mkdirSync(dir, { recursive: true });
-  const bestFile = path.join(dir, 'best.json');
-  if (fs.existsSync(bestFile) && !opts.overwrite) throw new Error(`${bestFile} exists; pass --overwrite to replace it`);
   const hash = coreHash();
-  const demos = bc.resolveDemos(path.resolve(opts.demos || dir));
-  const sha = bc.checkDemos(demos, hash, !!opts.force, (m) => log(m));
+  if (!opts.demos && !opts.dir) throw new Error('--demos <dir or demos.json> is required');
+  const demos = bc.resolveDemos(path.resolve(opts.demos || opts.dir));
+  const sha = bc.checkDemos(demos, hash, !!opts.force, say);
   // --extra-demos: each must match the base set (rules, features, teacher) and pass checkDemos.
   const extras = (opts.extraDemos === undefined ? [] : String(opts.extraDemos).split(',').filter(Boolean)).map((p) => {
     const e = bc.resolveDemos(path.resolve(p));
-    const eSha = bc.checkDemos(e, hash, !!opts.force, (m) => log(m));
+    const eSha = bc.checkDemos(e, hash, !!opts.force, say);
     const tn = (m) => m.teacherName || 'jump';
     if (e.manifest.gameVersion !== demos.manifest.gameVersion) throw new Error(`--extra-demos ${p}: rules ${e.manifest.gameVersion}, base demos ${demos.manifest.gameVersion}`);
     if (tn(e.manifest) !== tn(demos.manifest)) throw new Error(`--extra-demos ${p}: teacher ${tn(e.manifest)}, base demos ${tn(demos.manifest)}`);
     return { ...e, sha: eSha };
   });
   if (opts.extraDemos !== undefined && !extras.length) throw new Error('--extra-demos needs at least one demos dir');
-  const release = acquireLock(dir);
-  process.on('exit', release);
-  const snapshotDir = opts.snapshots ? path.join(dir, 'snapshots') : null;
-  if (snapshotDir) fs.rmSync(snapshotDir, { recursive: true, force: true });
   const gameVersion = demos.manifest.gameVersion;
   if (dz && dz.model.gameVersion && dz.model.gameVersion !== gameVersion) throw new Error(`--distill-from: teacher plays ${dz.model.gameVersion}, demos are ${gameVersion}`);
-  log(`bc-train: dir=${dir} backend=${backend} layers=${[OBS_DIM, ...o.hidden, 3].join('-')} epochs ${o.epochs} batch ${o.batch} lr ${o.lr} seed ${o.seed} ` +
+  return { bc, dz, quant, transitionWeight, o, target, hash, demos, sha, extras, gameVersion, wasm: !!cli.wasm };
+}
+
+const checkHidden = (hidden) => {
+  if (!hidden.length || !hidden.every(h => Number.isInteger(h) && h > 0)) throw new Error('--hidden must be positive integers');
+};
+
+// The start line; the dashboard's trainLineIn parses backend=, layers=, epochs and demos from it.
+function bcStartLine(dir, backend, run, ctx, suffix = '') {
+  const { o, demos, sha, hash, extras, transitionWeight, dz, quant } = ctx;
+  return `bc-train: dir=${dir} backend=${backend} layers=${[OBS_DIM, ...run.hidden, 3].join('-')} epochs ${o.epochs} batch ${o.batch} lr ${o.lr} seed ${run.seed} ` +
     `demos ${path.relative(ROOT, demos.manifestFile)} (${demos.manifest.rows} rows, sha ${sha.slice(0, 12)}) core=${hash.slice(0, 12)}` +
     extras.map(e => ` extra-demos ${path.relative(ROOT, e.manifestFile)} (${e.manifest.rows} rows, sha ${e.sha.slice(0, 12)})`).join('') +
     `${transitionWeight !== undefined ? ` transition-weight ${transitionWeight}` : ''}` +
-    `${dz ? distillText(dz) : ''}${quant ? quantText(quant) : ''}`);
-  // Teacher logits on every demo row, straight from the Float32 rows (no Float64 copy).
-  let logits = null;
-  if (dz) {
-    const buf = fs.readFileSync(demos.binFile);
-    const f = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
-    logits = bc.teacherLogits(dz.model, { X: f, n: f.length / bc.ROW, dim: OBS_DIM, stride: bc.ROW });
-    const ya = bc.argmaxLabels(logits);
-    let agree = 0;
-    for (let i = 0; i < ya.length; i++) if (ya[i] === f[i * bc.ROW + OBS_DIM]) agree++;
-    log(`distill: teacher ${path.relative(ROOT, dz.abs)} (${dz.model.layers.join('-')}) argmax = solver label on ${agree}/${ya.length} rows`);
-  }
+    `${dz ? distillText(dz) : ''}${quant ? quantText(quant) : ''}${suffix}`;
+}
 
+// Teacher logits on every demo row, straight from the Float32 rows (no Float64 copy); null without --distill-from.
+function bcTeacherLogits(ctx, say) {
+  const { bc, dz, demos } = ctx;
+  if (!dz) return null;
+  const buf = fs.readFileSync(demos.binFile);
+  const f = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+  const logits = bc.teacherLogits(dz.model, { X: f, n: f.length / bc.ROW, dim: OBS_DIM, stride: bc.ROW });
+  const ya = bc.argmaxLabels(logits);
+  let agree = 0;
+  for (let i = 0; i < ya.length; i++) if (ya[i] === f[i * bc.ROW + OBS_DIM]) agree++;
+  say(`distill: teacher ${path.relative(ROOT, dz.abs)} (${dz.model.layers.join('-')}) argmax = solver label on ${agree}/${ya.length} rows`);
+  return logits;
+}
+
+// The per-epoch handler: appends to <dir>/bc-metrics.jsonl (emptied first) and logs the epoch line.
+function bcEpochWriter(dir, backend, say) {
   const metricsFile = path.join(dir, 'bc-metrics.jsonl');
   fs.rmSync(metricsFile, { force: true });
-  const onEpoch = (row) => {
+  return (row) => {
     fs.appendFileSync(metricsFile, JSON.stringify({ backend, ...row }) + '\n');
-    log(`epoch ${row.epoch}: loss ${row.loss.toFixed(4)} recall none ${row.recall.none.toFixed(4)} jump ${row.recall.jump.toFixed(4)}` +
+    say(`epoch ${row.epoch}: loss ${row.loss.toFixed(4)} recall none ${row.recall.none.toFixed(4)} jump ${row.recall.jump.toFixed(4)}` +
       `${row.recall.duck !== undefined ? ` duck ${row.recall.duck.toFixed(4)}` : ''} (${row.seconds.toFixed(1)}s)`);
   };
-  const t0 = Date.now();
-  let result;
+}
+
+// Train one model; resolves to the engine result { layers, params, log[, scales|k, transitions] }.
+// logits (node backend) or logitsFile (python backend, written once by the caller) under --distill-from.
+// eo: extra engine options for the python backend (blasThreads, onSpawn).
+async function trainBcModel(ctx, backend, run, dir, { snapshotDir, logits, logitsFile, onEpoch, say, eo = {} }) {
+  const { bc, dz, quant, transitionWeight, o, demos, extras } = ctx;
+  const mo = { hidden: run.hidden, epochs: o.epochs, batch: o.batch, lr: o.lr, seed: run.seed };
   const extra = { ...(quant ? { quant } : {}) };
   if (backend === 'node') {
     if (dz) extra.distill = { logits, mode: dz.mode, tau: dz.tau, alpha: dz.alpha };
-    result = bc.trainNode(bc.loadDemos(demos.binFile), { ...o, ...extra, onEpoch });
-  } else {
-    const outFile = path.join(dir, `bc-python.${process.pid}.tmp`);
-    const logitsFile = path.join(dir, `teacher-logits.${process.pid}.tmp`);
-    try {
-      if (dz) { bc.writeLogits(logitsFile, logits); extra.distill = { logitsFile, mode: dz.mode, tau: dz.tau, alpha: dz.alpha }; }
-      if (extras.length) extra.extraDemos = extras.map(e => e.binFile);
-      if (transitionWeight !== undefined) extra.transitionWeight = transitionWeight;
-      result = await bc.trainPython(demos.binFile, outFile, { ...o, ...(snapshotDir ? { snapshotDir } : {}), ...extra }, ROOT, (line) => {
-        if (line.startsWith('{')) onEpoch(JSON.parse(line)); else if (line) log(line);
-      });
-    } finally {
-      fs.rmSync(outFile, { force: true });
-      fs.rmSync(logitsFile, { force: true });
-    }
+    return bc.trainNode(bc.loadDemos(demos.binFile), { ...mo, ...extra, onEpoch });
   }
-  logits = null;
-  const trainSeconds = (Date.now() - t0) / 1000;
+  const outFile = path.join(dir, `bc-python.${process.pid}.tmp`);
+  try {
+    if (dz) extra.distill = { logitsFile, mode: dz.mode, tau: dz.tau, alpha: dz.alpha };
+    if (extras.length) extra.extraDemos = extras.map(e => e.binFile);
+    if (transitionWeight !== undefined) extra.transitionWeight = transitionWeight;
+    return await bc.trainPython(demos.binFile, outFile, { ...mo, ...(snapshotDir ? { snapshotDir } : {}), ...extra, ...eo }, ROOT, (line) => {
+      if (line.startsWith('{')) onEpoch(JSON.parse(line)); else if (line) say(line);
+    });
+  } finally {
+    fs.rmSync(outFile, { force: true });
+  }
+}
+
+// Tier A (the 25 validation seeds, full games to the target, on pool) and best.json for one
+// trained model. extraConfig is appended to best.json's config. Resolves to the validation summary.
+async function finishBcRun(ctx, backend, run, dir, result, { trainSeconds, snapshotDir, pool, say, trainer, extraConfig = {} }) {
+  const { bc, dz, quant, transitionWeight, o, target, hash, demos, sha, extras, gameVersion, wasm } = ctx;
   let quantConfig = null;
   if (quant) quantConfig = bc.quantRecord(result.layers, result.params, quant, 'qat', result);   // throws unless exactly on the grid
   const model = { format: FORMAT, layers: result.layers, params: result.params, actionRepeat: 1, gameVersion };
-
   const valSeedList = validationSeeds(25);
-  const workers = Number(opts.workers) || defaultWorkers();
-  const pool = createPool(Math.min(workers, valSeedList.length));
-  log(`validation: ${valSeedList.length} seeds to ${target} (${gameVersion})`);
-  const scores = await scoreSeeds(pool, model, valSeedList, target, !!cli.wasm);
-  await pool.terminate();
+  say(`validation: ${valSeedList.length} seeds to ${target} (${gameVersion})`);
+  const scores = await scoreSeeds(pool, model, valSeedList, target, wasm);
   const validation = valSummary(scores, target);
   const last = result.log[result.log.length - 1];
   const config = {
-    target, hidden: o.hidden, actionRepeat: 1, gameVersion,
+    target, hidden: run.hidden, actionRepeat: 1, gameVersion,
     method: 'behaviour cloning of test/solver.js (supervised; no ES)',
-    trainer: `trainer/cli.js bc-train --backend ${backend}`, backend,
+    trainer, backend,
     teacherName: demos.manifest.teacherName || 'jump',
-    epochs: o.epochs, batch: o.batch, lr: o.lr, seed: o.seed,
+    epochs: o.epochs, batch: o.batch, lr: o.lr, seed: run.seed,
     demos: path.relative(ROOT, demos.manifestFile), demosSha256: sha, demosRows: demos.manifest.rows,
     trainSeconds, final: last ? { loss: last.loss, recall: last.recall } : null,
     ...(snapshotDir ? { snapshots: path.relative(ROOT, snapshotDir) } : {}),
@@ -1060,11 +1074,55 @@ async function bcTrainCmd({ config: cli, opts }) {
     ...(quantConfig ? { quant: quantConfig } : {}),
     ...(extras.length ? { extraDemos: extras.map(e => ({ demos: path.relative(ROOT, e.manifestFile), demosSha256: e.sha, demosRows: e.manifest.rows })) } : {}),
     ...(transitionWeight !== undefined ? { transitionWeight, ...(result.transitions ? { transitions: result.transitions } : {}) } : {}),
+    ...extraConfig,
   };
+  const bestFile = path.join(dir, 'best.json');
   writeJsonAtomic(bestFile, bc.assembleBest({ layers: result.layers, params: result.params, validation, coreHash: hash, config }));
+  return { validation, seeds: valSeedList.length, bestFile };
+}
+
+const bcDoneLine = (v, seeds, trainSeconds, bestFile) => `validation: median ${v.median} min ${v.min} count ${v.count}/${seeds}; ` +
+  `trained in ${trainSeconds.toFixed(1)}s -> ${path.relative(ROOT, bestFile)}`;
+
+async function bcTrainCmd({ config: cli, opts }) {
+  const dir = requireDir(opts, 'bc-train');
+  if (!cli.hidden) throw new Error('bc-train needs --hidden (e.g. --hidden 32,32)');
+  const backend = opts.backend || 'node';
+  if (!['node', 'python'].includes(backend)) throw new Error(`--backend must be node or python, got ${backend}`);
+  const run = { hidden: cli.hidden, seed: cli.seed !== undefined ? cli.seed : require('./bc.js').TRAIN_DEFAULTS.seed };
+  checkHidden(run.hidden);
+  const ctx = prepareBcTrain(cli, { ...opts, demos: opts.demos || dir }, backend, (m) => log(m));
+  fs.mkdirSync(dir, { recursive: true });
+  const bestFile = path.join(dir, 'best.json');
+  if (fs.existsSync(bestFile) && !opts.overwrite) throw new Error(`${bestFile} exists; pass --overwrite to replace it`);
+  const release = acquireLock(dir);
+  process.on('exit', release);
+  const snapshotDir = opts.snapshots ? path.join(dir, 'snapshots') : null;
+  if (snapshotDir) fs.rmSync(snapshotDir, { recursive: true, force: true });
+  log(bcStartLine(dir, backend, run, ctx));
+  let logits = bcTeacherLogits(ctx, (m) => log(m));
+  const onEpoch = bcEpochWriter(dir, backend, (m) => log(m));
+  const t0 = Date.now();
+  let result;
+  const logitsFile = path.join(dir, `teacher-logits.${process.pid}.tmp`);
+  try {
+    if (logits && backend === 'python') ctx.bc.writeLogits(logitsFile, logits);
+    result = await trainBcModel(ctx, backend, run, dir, { snapshotDir, logits, logitsFile, onEpoch, say: (m) => log(m) });
+  } finally {
+    fs.rmSync(logitsFile, { force: true });
+  }
+  logits = null;
+  const trainSeconds = (Date.now() - t0) / 1000;
+  const workers = Number(opts.workers) || defaultWorkers();
+  const pool = createPool(Math.min(workers, 25));
+  let fin;
+  try {
+    fin = await finishBcRun(ctx, backend, run, dir, result, { trainSeconds, snapshotDir, pool, say: (m) => log(m), trainer: `trainer/cli.js bc-train --backend ${backend}` });
+  } finally {
+    await pool.terminate();
+  }
   release();
-  log(`validation: median ${validation.median} min ${validation.min} count ${validation.count}/${valSeedList.length}; ` +
-    `trained in ${trainSeconds.toFixed(1)}s -> ${path.relative(ROOT, bestFile)}`);
+  log(bcDoneLine(fin.validation, fin.seeds, trainSeconds, fin.bestFile));
 }
 
 // bc-quantize: post-training quantization of a trained model into a new run dir.
