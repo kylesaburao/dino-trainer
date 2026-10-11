@@ -28,6 +28,24 @@
     </div>
     <div class="status" id="status">loading the CSS network…</div>
     <div class="status">Every decision is computed by the style engine from <a id="model-css-link" href="model.css">model.css</a>; JavaScript only writes the inputs and reads back <code>--act</code>.</div>
+    <section class="netview" aria-label="Neural network view">
+      <div class="netview-head">
+        <button id="net-toggle" type="button" aria-controls="net-body">Network: shown</button>
+        <span>Network <span id="net-arch"></span></span>
+      </div>
+      <div id="net-body">
+        <canvas id="net-canvas" role="img" aria-label="Neural network activations for the latest CSS decision"></canvas>
+        <div class="net-legend">
+          <span><i style="background:#2a78d6"></i>positive</span>
+          <span><i style="background:#e34948"></i>negative</span>
+          <span>edge opacity = |weight × activation|</span>
+          <span>ring = action from <code>--act</code></span>
+        </div>
+        <div class="net-caption" id="net-caption"></div>
+        <div class="net-warn" id="net-warn" hidden></div>
+        <div class="net-tip" id="net-tip"></div>
+      </div>
+    </section>
   </div>
   <!-- The network's inputs are written here; the model stylesheet computes --act on it. -->
   <div id="nn" class="css-net" aria-hidden="true"></div>
@@ -36,6 +54,10 @@
   <script src="policy.js"></script>
   <!-- The selectable models: ids, labels and CSS file names only (no weights). -->
   <script src="models-css/index.js"></script>
+  <!-- For the network view only (its picture and its check of --act): the bundled
+       models' weights as JavaScript. Decisions never come from them. -->
+  <script src="models.js"></script>
+  <script src="netview.js"></script>
   <script src="css-nn.js"></script>
 </body>
 </html>

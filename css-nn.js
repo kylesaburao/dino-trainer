@@ -6,7 +6,14 @@
 // This script writes the observation (policy.js observe(), exactly what
 // training saw) into those properties and reads --act back. There is no
 // JavaScript fallback: if the CSS self-test fails, the dino doesn't play.
-// The page never loads model.js; the weights exist only in model.css.
+// The page never loads model.js, and every decision comes from the stylesheet.
+//
+// Network view (netview.js, under the game): once per display frame it draws the
+// latest CSS decision: the activations from a JavaScript forward pass on the same
+// --x inputs, with the weights of the same model taken from models.js (matched by
+// --nn-model-id), and a ring on the action --act chose. If the forward pass's
+// argmax differs from --act it shows a warning. It only reads; it never decides.
+// A stylesheet that is not in models.js has no JavaScript weights, so no view.
 //
 // Model selector: ?model=<id>, else the choice remembered by either page
 // (localStorage 'dino-model'), switches the stylesheet to models-css/<id>.css
@@ -32,6 +39,7 @@ const SELECTED = (() => {
   return byId(new URLSearchParams(location.search).get('model')) || byId(stored);
 })();
 const MODEL_LOAD_MS = 10000;
+const VIEW_MODELS = typeof DINO_MODELS !== 'undefined' ? DINO_MODELS : [];   // weights for the network view only
 
 const STEP_BUDGET_MS = 12;     // simulation time per display frame before playback falls behind
 const RESTART_MS = 1000;       // pause on the crash frame before the next run
@@ -67,10 +75,32 @@ function selfTest() {
 }
 
 // ---------------------------------------------------------------------------
+// Network view (netview.js); see the header
+// ---------------------------------------------------------------------------
+const netView = DinoNetView.createView(document.getElementById('net-canvas'), {
+  arch: document.getElementById('net-arch'),
+  warn: document.getElementById('net-warn'),
+  tip: document.getElementById('net-tip'),
+  font: 'monospace',
+  warnText: (n) => `The JavaScript forward pass disagreed with the CSS network's --act on ${n} decision(s)`,
+});
+const netCaption = document.getElementById('net-caption');
+const netPanel = DinoNetView.bindToggle(document.getElementById('net-toggle'), document.getElementById('net-body'), 'dino-netview');
+netView.setModel('loading…');
+
+// The weights of the stylesheet with --nn-model-id `loadedId`, from models.js.
+function setViewModel(loadedId) {
+  const m = VIEW_MODELS.find(e => e.cssId === loadedId);
+  netView.setModel(m || 'no JavaScript weights for this stylesheet (not in models.js)');
+  netCaption.textContent = m ? 'the latest CSS decision; activations from the JavaScript forward pass on the same --x inputs' : '';
+}
+
+// ---------------------------------------------------------------------------
 // Game and agent
 // ---------------------------------------------------------------------------
 let gameVersion = 'v1', actionRepeat = 1;
 let game = null, wait = 0, current = ACTIONS[0], overAt = 0, best = 0;
+let lastAct = -1, decided = false;   // the latest CSS decision (on x), for the network view
 const x = new Float64Array(OBS_DIM);
 
 function newGame() {
@@ -92,7 +122,9 @@ function act() {
   if (game.state !== 'running') return ACTIONS[0];
   if (wait <= 0) {
     observe(game, x);
-    current = ACTIONS[cssDecide(x)];
+    lastAct = cssDecide(x);
+    current = ACTIONS[lastAct];
+    decided = true;
     wait = actionRepeat;
   }
   wait--;
@@ -136,6 +168,11 @@ function frame(now) {
     rate.frames = 0;
   }
   renderer.draw(game, game.frameIndex * FRAME_MS, best);
+  if (decided && netPanel.shown) {
+    decided = false;
+    netView.capture(x, lastAct, true);
+  }
+  netView.draw();
   showStatus();
 }
 
@@ -203,6 +240,7 @@ function start() {
   try {
     selfTest();
     fillModelSelect(cssString('--nn-model-id'));
+    setViewModel(cssString('--nn-model-id'));
     gameVersion = cssString('--nn-game') || 'v1';
     if (SELECTED && gameVersion !== SELECTED.gameVersion) throw new Error(`${SELECTED.css} is for rules ${gameVersion}, the index says ${SELECTED.gameVersion}`);
     // ?game=v1|v2|v3 plays those rules instead of the model's own (as on index.html).

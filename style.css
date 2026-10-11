@@ -74,6 +74,85 @@ canvas {
   opacity: 0.4;
 }
 
+/* Network view (netview.js), under the game */
+.netview {
+  position: relative;
+  width: 100%;
+  margin-top: 14px;
+  font: 11px/1.6 monospace;
+  color: #535353;
+}
+
+.netview-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+#net-toggle {
+  padding: 2px 8px;
+  font: inherit;
+  color: inherit;
+  background: #fff;
+  border: 1px solid #535353;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+#net-body {
+  position: relative;
+}
+
+#net-canvas {
+  display: block;
+  width: 100%;
+  height: 300px;
+  margin-top: 6px;
+}
+
+.net-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px 12px;
+}
+
+.net-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.net-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.net-caption, .net-warn {
+  text-align: center;
+}
+
+.net-warn {
+  color: #b00020;
+}
+
+.net-tip {
+  position: absolute;
+  text-align: left;
+  display: none;
+  z-index: 2;
+  pointer-events: none;
+  padding: 4px 7px;
+  white-space: nowrap;
+  background: #fff;
+  border: 1px solid #535353;
+  border-radius: 2px;
+}
+
 #ai-toggle:disabled {
   opacity: 0.4;
   cursor: default;
