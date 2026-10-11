@@ -92,3 +92,15 @@ Both use rules v2, the models' own rules, so no `--game`. Each appends one recor
 - **O3, timing:** before or after the rules-v3 clone study. They share no seeds or offsets, but both need the Mac.
 
 **Orchestrator rulings (mac-5, 2026-10-10 ~23:10Z, before anything ran):** O1 the largest-margin rule (picks s1). O2 no 1×4 (the user named 1×6). O3 after the rules-v3 clone study, D2 quantization and the release fix, as the user's queue has it (handoff `2026-10-10T2300Z` §3).
+
+## Results (executed 2026-10-10)
+
+Executor: a mac subagent for orchestrator mac-7, branch `worktree-agent-a345749c61b40961b` from main `3c98eac`. Run as registered, with rulings O1 (s1) and O2 (no 1×4). The user approved running it now.
+
+### Preconditions (§2, §3), checked before any run
+- **Offsets.** Read-only sweep of every `assess.jsonl`/`evals.jsonl` under the main checkout, all 27 other worktrees (`git worktree list`) and `dino-game-base/-bc/-d2/-d2m/-mac/-wasm`: 128 files. Ranges found: 0–3, 0–24, 25–99, 100–174, 175–324, 325–474, 475–624. Largest end 624. **Nothing at ≥ 625.**
+- **Candidate** `runs/exp-distill/v2-bc-duck-d1w6-s1/best.json` (on main): params sha256 `eb89e31f5c5d02e5e11519f1f9966179c3bf073074673877030127052c73070e` (**matches**), whole-file sha256 `b9bf41817171aa03…` (matches §2), `gameVersion` v2, `layers` [44, 6, 3], `config.teacherName` duck, `coreHash` `0f329d4e…`.
+- **Control** `runs/exp-bc-duck/v2-bc-duck-d2w8-s1/best.json`: params sha256 `34e8a3af6ea336ad…`, v2, [44, 8, 8, 3], duck, `coreHash` `0f329d4e…`.
+- **Core hash** of the executing tree: `65f3546cea0b28ebab020a55e9772ddd37933e6d52c2a2ad08d2431df39998e9` (the same as at registration; recorded, not a STOP, per §2).
+- **Seeds.** Held-out indices 625–774 of `evalSeeds`: first seed **2161572974**, last seed **2468104075**.
+- **Deviation from §7 ("no change to `trainer/` between registration and results"), noted.** `git diff --stat 63dcfa1..3c98eac -- core.js policy.js test/solver.js trainer/` shows `trainer/cli.js` (+`export-models`, and `exportModel` split into `modelExportData` + write, same exported data; the core-hash warning now names the source), `trainer/dashboard.html` and `trainer/scans.js`. `core.js`, `policy.js`, `test/solver.js`, `trainer/env.js` and the `assess` path are unchanged. O3 scheduled this run after that work, so it is recorded and not a STOP.
