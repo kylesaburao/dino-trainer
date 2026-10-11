@@ -241,3 +241,29 @@ The draft's open choices, as ruled before any run. The draft's changes to the br
 6. **AGENTS.md wording** (§11): it goes under "Invariants to preserve", and it fixes the opening seed range at 30,003,000–30,003,999, played to 2,000 points, as in `opening.js`.
 
 **Command rename (parallel change):** the CLI command `eval` becomes `assess` (`node trainer/cli.js assess`; record file `assess.jsonl`). This registration spends no held-out `assess` offsets.
+
+## 13. Amendment before any run (mac-5, 2026-10-11): rules-v3 extension, and the core-hash change
+**User's order (AskUserQuestion, 2026-10-11):** run the release fix next, ahead of D2, "scope extended to rules-v3 demos". The reason is `research/prereg-v3-clones.md` Results: rules-v3 clones learned everything past 2,000 points in every model (0 failures in 30,000 post-step crossings and 5,000 tier-B games), and **every failure was the opening release decision**. Clean counts were 1×6 4/10, 2×32 2/10 and 2×8 1/10.
+
+**(1) The rules-v2 study runs exactly as registered (§1–§12).** Its exact pairing with the stuck-study control depends on the v2 base demos, so nothing in stages 1–3 changes.
+
+**Core hash.** Main moved from `0f329d4e…` to `65f3546c…` with rules v3, after registration. This is not a STOP:
+- AGENTS.md ("Core hash", rules-v3 bullet) records that the v2 goldens, the regenerated duck demos (sha `363872f6…`, G1's own bar) and `bit-identity.js --core-changed` prove rules-v2 games and decisions unchanged.
+- G1 and the §4.3 control (params sha equal to the committed stuck-study models for all 40 seeds) re-prove it at full scale on this commit.
+- §10's "the core hash stays `0f329d4e…`" now reads "`core.js`, `policy.js` and `test/solver.js` are not changed by this study". The executor records `65f3546c…`.
+
+**(2) Stage 4, the rules-v3 extension.** It runs after stage 2 (or stage 3, when stage 3 runs).
+- **Arm selected by the rules-v2 result, by fixed rule:** the first arm in the order (a), (c), (b1), (b2) that meets the bar at either shape. If none does, the significant arm with the largest summed S over both shapes, ties broken by that order. If no arm is significant at either shape, stage 4 is not run (the H-optimisation reading holds), and the result is reported.
+- **Procedure:** apply that arm's flag to the rules-v3 procedure of `research/prereg-v3-clones.md`. Same v3 base demos (`runs/exp-v3-clones/v3-demos-duck-s1-40`, sha `b1bded86…`), same three shapes (1×6, 2×32, 2×8) and seeds 1–10, same screens: tier A, the opening scan, the post-step screen 95k → 130k (1,000/1,000 required), and tier B at most 2 per arm in seed order.
+  - Extra opening demos for (c)/(b) are generated with `--game v3`. Rules v3 equal rules v2 below 100k, so the window 400–800 has the same states, but the manifest must say v3 for `checkDemos`.
+  - Run dirs: `runs/exp-v3-clones/v3-bc-duck-d<D>w<W>-s<k>-<tag>`, with the tag from §4 (`trw4`, `open200`, `dagger1`, `dagger2`).
+- **Control:** the v3 clone study's own models, which are deterministic and already screened (`runs/exp-v3-clones/summary.json`). Pairing is by seed (exact for (a)). No re-run, except one positive-control retrain (`v3-bc-duck-d2w8-s2`, flag absent) whose params sha must equal the committed `7359f858c5b1…`. If it differs: STOP.
+- **Readings:**
+  - an arm with ≥ 9/10 clean at a shape means **the fix carries to rules v3 at that shape**, and its tier-B models become rules-v3 certification candidates (a separate registration, offsets from 775);
+  - significant (one-sided exact McNemar against the v3 control, p ≤ 0.05 / 3 for three shapes) but < 9/10 means **partial**;
+  - otherwise, **no detectable carry-over at 10 seeds**.
+- **Power at 10 seeds:** the v3 controls are 4/10, 2/10 and 1/10 clean. With c = 0, b ≥ 5 is needed for p ≤ 0.0167 (b = 5: p = 0.031, not enough; **b = 6: p = 0.0156**). So stage 4 can detect a large effect only. That is enough for "≥ 9/10 at a shape", which needs b ≥ 5–8.
+
+**(3) Execution.**
+- **Runner:** a serial runner at `research/scripts/prereg-teacher-duck-release-fix/run.js` (phases), launched by the orchestrator under a user allow rule. A subagent's own nohup launches are refused by auto mode.
+- **Machine:** the CPU is shared with mac-6's GPU-trainer work. Under the user's 2026-10-11 rule, one GPU job plus one CPU-heavy job may run at once, but two CPU-heavy jobs may not. Recorded run times may therefore include contention; results are deterministic.
