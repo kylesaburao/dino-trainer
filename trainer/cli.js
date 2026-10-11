@@ -1199,11 +1199,13 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
     r.release = acquireLock(r.dir);
     releases.push(r.release);
   }
+  const logitsFile = path.join(runs[0].dir, `teacher-logits.${process.pid}.tmp`);   // --distill-from only
   const children = new Set();
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {
       log(`bc-train-batch: ${sig}, stopping ${children.size} training process(es); no best.json for unfinished runs`);
       for (const c of children) c.kill('SIGTERM');
+      fs.rmSync(logitsFile, { force: true });
       releaseAll();
       process.exit(130);
     });
@@ -1224,7 +1226,6 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
   }
   // Teacher logits once for the batch (python reads them from one file).
   let logits = bcTeacherLogits(ctx, (m) => log(m));
-  const logitsFile = path.join(runs[0].dir, `teacher-logits.${process.pid}.tmp`);
   if (logits) ctx.bc.writeLogits(logitsFile, logits);
   logits = null;
   const workers = Number(opts.workers) || defaultWorkers();
@@ -1252,6 +1253,8 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
       say(bcDoneLine(fin.validation, fin.seeds, trainSeconds, fin.bestFile));
       log(`bc-train-batch: ${name}: tier A ${fin.validation.count}/${fin.seeds}, min ${fin.validation.min}, trained in ${trainSeconds.toFixed(1)}s`);
     } catch (e) {
+      // bc-metrics.jsonl (empty if it failed before epoch 0) keeps the dir a BC run on the dashboard.
+      fs.appendFileSync(path.join(r.dir, 'bc-metrics.jsonl'), '');
       say(`bc-train-batch: failed: ${e.message}`);
       log(`bc-train-batch: ${name}: FAILED: ${e.message}`);
       failed.push(name);
