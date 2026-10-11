@@ -125,8 +125,15 @@ function createView(canvas, opts = {}) {
     return argmax;
   }
 
+  // Margins fit the input-group and output labels in the current font.
   function layout(W, H) {
-    const L = model.layers, padT = 10, padB = 24, labelL = 78, labelR = 74;
+    ctx.font = `11px ${font}`;
+    let labelL = 0;
+    for (const g of GROUPS) labelL = Math.max(labelL, ctx.measureText(g.name).width);
+    labelL = Math.ceil(labelL) + 18;
+    ctx.font = `600 12px ${font}`;
+    const labelR = Math.ceil(Math.max(ctx.measureText('-00.00').width, ...ACTION_NAMES.map(s => ctx.measureText(s).width))) + 22;
+    const L = model.layers, padT = 10, padB = 24;
     const colX = L.map((_, l) => labelL + l * (W - labelL - labelR) / (L.length - 1));
     return L.map((n, l) => {
       let ys;
@@ -252,13 +259,14 @@ function createView(canvas, opts = {}) {
       ctx.fillStyle = text;
       ctx.fillText(g.name, bx - 5, (top + bot) / 2);
     }
-    // Hidden layer captions (just the width when the columns are close together).
+    // Hidden layer captions (shorter when the columns are close together).
     ctx.textAlign = 'center';
     ctx.fillStyle = muted;
-    const spacing = L.length > 1 ? nodes[1][0].x - nodes[0][0].x : W;
+    const spacing = nodes[1][0].x - nodes[0][0].x;
     for (let l = 1; l < L.length - 1; l++) {
-      const label = spacing >= 70 ? `hidden ${L.length > 3 ? l : ''}`.trim() + ` (${L[l]})` : String(L[l]);
-      ctx.fillText(label, nodes[l][0].x, H - 8);
+      const label = [`hidden ${L.length > 3 ? l : ''}`.trim() + ` (${L[l]})`, `h${l} (${L[l]})`, String(L[l])]
+        .find(s => ctx.measureText(s).width <= spacing - 6);
+      if (label) ctx.fillText(label, nodes[l][0].x, H - 8);
     }
     draws++;
     return true;

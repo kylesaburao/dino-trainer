@@ -365,7 +365,7 @@ ${src}
 }
 
 // The page runs the real game code, served straight from the repo.
-const SHARED = { '/core.js': 'core.js', '/policy.js': 'policy.js', '/render.js': 'render.js' };
+const SHARED = { '/core.js': 'core.js', '/policy.js': 'policy.js', '/render.js': 'render.js', '/netview.js': 'netview.js' };
 
 const send = (res, code, type, body) => {
   res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store' });
