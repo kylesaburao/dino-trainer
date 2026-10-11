@@ -75,11 +75,13 @@ The first E0 run failed every mode, with relative gradient error ≈ 2e-3 agains
 
 Common setup: 2×32, 15 epochs, `runs/exp-bc-e2e` jump demos (2,096,268 rows, rules v2, pre-v3 core hash, so `--force` as AGENTS.md allows), tier A to 1M on the 25 validation seeds with `--wasm`, and the default 18-worker pool. Outputs are in `runs/exp-gpu-bench/` (gitignored). Wall times are from the scripts' `date` stamps; `trainSeconds` comes from each best.json.
 
+The training span runs from the first "training started" to the last "epoch 14" line in the members' train.logs. In A1 it includes the first wave's tier A, which overlaps the second wave.
+
 | Arm | What | Wall | Training | Tier A |
 |---|---|---|---|---|
 | A0 | 10 × `bc-train --backend python`, sequential | **201 s** | 145.8 s in total (14.6 s/model) | 25/25 × 10 |
-| A1 | `bc-train-batch --backend python --jobs 6` | **91 s** (2.2×) | 22.5 s/model in contention (max 27.7) | 25/25 × 10 |
-| A1b | the same with `--jobs 10` | 107 s (1.9×) | 31.9 s/model | 25/25 × 10 |
+| A1 | `bc-train-batch --backend python --jobs 6` | **91 s** (2.2×) | span 72.4 s (2.0×), two waves; 22.5 s/model in contention (max 27.7) | 25/25 × 10 |
+| A1b | the same with `--jobs 10` | 107 s (1.9×) | span **32.1 s** (4.5×), one wave; 31.9 s/model; then all 10 tier A runs come after, none overlapped | 25/25 × 10 |
 | A2 | `bc-train-batch --backend mlx`, 10 seeds | **84 s** (2.4×) | **20.9 s for all 10** (1.39 s/epoch; 7.0× A0's training) | 25/25 × 10 |
 | A3 | `bc-train-batch --backend mlx`, 40 seeds | 312 s | **58.8 s for all 40** (3.92 s/epoch; ≈ 9.9× against 40 × 14.6 s) | 25/25 × 40 |
 | A5 | `opening.js` (3,000 games to 2,000; one thread), solo against during MLX training of 40 × 2×32 | solo 38.03 / 38.46 s; during 39.46 s (fully overlapped) and 40.39 s (partly) | MLX 52.4 s for 15 epochs under that load | — |
@@ -100,7 +102,10 @@ These apply plan §7's table verbatim.
 - **H-cpu holds, end to end.** A1 (91 s) is within 1.5× of A2 (84 s), because both are dominated by tier A, not training. On training alone MLX is far ahead: 20.9 s for 10 models, against 22–28 s **per model** for the 6 parallel numpy processes. Those processes slowed 1.5× per model, not the ≈ 1.07× of Probe 2, because tier A's 18 workers run at the same time.
 - **H-overlap holds** (1.03× ≤ 1.15×), within this scope: one single-threaded CPU screen. An 18-worker screen alongside MLX is untested. MLX's host side (permutations, the per-step dispatch) uses about one core.
 - **H-host is not shown.** Per-model GPU time keeps falling from N=10 (0.139 s/epoch per model) to N=40 (0.098).
-- **Table row "H-gpu holds, H-cpu holds"** reads: default `--backend mlx` only if H-overlap holds, which it does. So the pre-registered reading is to make **MLX the default for `bc-train-batch`**. *Not applied in code:* the default is still `python`, because an MLX default would fail on a machine without `.venv-mlx` (the WSL desktops). This is a decision for the user or orchestrator (§6).
+- **Table row "H-gpu holds, H-cpu holds"** reads: default `--backend mlx` only if H-overlap holds, which it does. So the pre-registered reading is to make **MLX the default for `bc-train-batch`**.
+  - *Not applied in code:* the default is still `python`.
+  - On this machine the two backends differ by 8 % end to end for a 10-seed stage (91 s against 84 s). That is within the 5–10 % wall noise, so the stage time doesn't decide it. Training alone does favour MLX: 20.9 s against a 32.1 s span at its best.
+  - The deciding factor is portability. An MLX default fails on a machine without `.venv-mlx` (the WSL desktops). That is the user's decision (§6).
 - **E4 passes**, so MLX is accepted as equivalent for research runs.
 
 ### Deviations

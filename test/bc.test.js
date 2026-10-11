@@ -920,6 +920,8 @@ const hasMlx = () => {
 };
 const NO_MLX = 'mlx backend not tested: no interpreter with mlx (set PYTHON_MLX, e.g. to the repo\'s .venv-mlx/bin/python)';
 
+// Compares against tmp/batch-single, the numpy run written by the bc-train-batch test above
+// (tests in a file run in order), so run both together (e.g. --test-name-pattern 'bc-train-batch|mlx').
 test('mlx backend: bc-train and bc-train-batch match the numpy backend to float32 noise, same tier A; engine and batchRun recorded (skipped without mlx)', async (t) => {
   const { dir } = await smallDemos();
   const jm = cli('bc-train-batch', '--dir-pattern', path.join(tmp, 'mx-x-{seed}'), '--shapes', '4', '--seeds', '1', '--demos', dir, '--backend', 'mlx', '--jobs', '2');
