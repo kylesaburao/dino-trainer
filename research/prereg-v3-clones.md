@@ -232,7 +232,8 @@ The desktops are not used.
 - **Duck share is reported for whole games only**; `duckshare.js` has no split at 100k, and adding one is out of scope (the "where the tool allows" clause in §4.5 item 1).
 - The step-2 tier-B reference scan used by the scan control lives in the `wt/exp-bc-duck` worktree (not on main). Its model params were checked equal to the committed `v2-bc-duck-d2w8-s1/best.json`.
 
-## Results (executed 2026-10-10 23:58Z – 2026-10-11 00:30Z, Mac only)
+## Executor's detailed record (executed 2026-10-10 23:58Z – 2026-10-11 00:30Z, Mac only)
+This supplements the orchestrator's "Results" section below, which was written in parallel from the same `summary.json`. The two agree on every number and reading. Where they differ in scope, the orchestrator's section governs (for example the next fresh offset, 775).
 
 **Provenance.**
 - Code: main `06d1014` (the §4.0 tooling merge `b0cd6b9` plus the rulings). The runner, gate and summary scripts are in `research/scripts/prereg-v3-clones/`: `run.js` and `gate.js` from `cc40483`, `summarize.js` from `3acb87b`. No `core.js`, `policy.js`, `test/solver.js` or training code was changed.
@@ -330,7 +331,7 @@ The clean-count asymmetry (§5): A's s8 and s9 are clean on tier A, the opening 
 - 1×6: v3 6/10 against v2 0/10, **p = 0.011**.
 
 ### §4.5 measures
-**Duck share** (whole games, `duckshare.js --n 10`, 30 models): **1.000 for every model**.
+**Duck share** (whole games, `duckshare.js --n 10`, 30 models): **1.000 for every model** at 4 decimals (min 0.99997).
 - Every met mid pterodactyl was ducked: 0 jumped, 0 mixed.
 - Games that crashed in the opening count their one overlapping pterodactyl as "crashed" (≤ 1 per model).
 - So every model "ducks" (≥ 0.9× the teacher's 1.000).
@@ -399,7 +400,7 @@ The clean-count asymmetry (§5): A's s8 and s9 are clean on tier A, the opening 
 
 **Next (each registered separately), per the readings:**
 - A release-fix registration for the opening, at 1×6 and 2×32. It is the only failure class observed.
-- A rules-v3 certification of the candidates on fresh held-out offsets from **625**. The baseline is the v2 models' 0/150 (P2).
+- A rules-v3 certification of the candidates on fresh held-out offsets from **775**: the 1×6 v2 certification spends 625–774, per the orchestrator's section. The baseline is the v2 models' 0/150 (P2).
 - CSS agreement on rules v3 before any ship reading, mandatory for any margin-flagged model.
 
 ### Notes on the prereg (found during execution; nothing changed in the registered design)
