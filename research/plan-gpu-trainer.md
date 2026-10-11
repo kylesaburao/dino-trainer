@@ -18,14 +18,14 @@ These come from the user's answers in the planning Q&A on 2026-10-10. Don't reop
 
 | # | Decision | Source |
 |---|---|---|
-| D1 | Framework: **MLX** (`mlx==0.29.3`, the last release that supports the repo `.venv`'s Python 3.9.6), installed **into the repo `.venv`** next to numpy | user (Q&A) |
+| D1 | Framework: **MLX**, at the **newest versions available**, in a **separate venv, `.venv-mlx`**, built on a pyenv-managed Python (§3.1). The repo `.venv` (Python 3.9.6, numpy 2.0.2, the numpy backend) is left untouched | user: first answer "MLX into `.venv`", then superseded by "pyenv for a newer Python is fine" and "what is the newest possible versions to use?" (2026-10-10) |
 | D2 | Many-model training is a **new subcommand, `bc-train-batch`**. Each model still gets its own normal run directory | user (Q&A) |
 | D3 | Scope is **BC training only**. Evaluation (tier A, tier B, screens, `assess`) and ES stay on the CPU. The reasons are in §6 | user (Q&A) |
 | D4 | No HANDOFF.md workflow | user (Q&A) |
 | D5 | The node and numpy backends are unchanged. The numpy backend must keep reproducing the shipped clone's params exactly | AGENTS.md |
 | D6 | Shape cap: ≤ 16 hidden layers and ≤ 32 units per layer | AGENTS.md (user order) |
 
-The user approved the `.venv` install as part of this plan. The executor still installs it only once the user has authorized implementation (Phase 0).
+The executor installs nothing until the user has authorized implementation **and** confirmed the exact versions in §3.1 through AskUserQuestion (Phase 0). pyenv 2.8.9 is installed at `/opt/homebrew/bin/pyenv`; the user installed it on 2026-10-10.
 
 ## 2. Current state (inspected at `c87d861`)
 
@@ -77,6 +77,7 @@ The Mac was otherwise idle: the rules-v3 runner was paused by mac-5 at the user'
 | 2×8 | 0.23 | 0.47 | 0.42 (0.042/model) | 0.76 (0.019/model) | 1.51 (0.015/model) |
 | 16×32 | 1.20 | 0.65 | 1.59 (0.159/model) | 4.99 (0.125/model) | 13.3 (0.133/model) |
 
+- **Baselines.** The probe's numpy step uses random batches and has no permutation slicing or recall pass, so it runs at 0.27 ms/step, against the real backend's measured ≈ 0.47 ms/step (0.95 s/epoch). Probe-against-probe ratios (this table) therefore **understate** the gain over the real backend. §6 uses the measured 0.95 s/epoch as the baseline, which gives the headline figures: ≈ 8× at N=10 and ≈ 16× at N=40 for training.
 - **Reading.** One model on the GPU is about 2× slower than numpy for small shapes, because launch and sync overhead dominate. Stacking N models is close to free up to N ≈ 10, and the cost per model flattens by N ≈ 40.
 - Aggregate speedup over sequential numpy: ≈ 5× at N=10 and ≈ 9–15× at N=40–100. Deep 16×32 nets gain ≈ 2× even alone.
 
@@ -100,8 +101,32 @@ The Mac was otherwise idle: the rules-v3 runner was paused by mac-5 at the user'
 - It is Apple's array framework, built for unified memory.
 - `mx.compile` fuses a whole training step, which matters because this workload is bound by launches, not compute.
 - Batched matmul over a leading model axis is native.
-- The install is about 30 MB, and the probe confirmed that it installs and runs on this machine's Python 3.9.6.
-- The pin to 0.29.3 is forced by Python 3.9. A newer MLX needs a newer `.venv` interpreter, which is out of scope.
+- The install is about 30 MB. Probe 1 confirmed that MLX 0.29.3 (the last release for Python 3.9) installs and runs on this machine. The plan pins the newest release instead (§3.1).
+
+### 3.1 Version pins (PyPI and pyenv, checked 2026-10-10)
+
+Sources: `https://pypi.org/pypi/<pkg>/json` and `pyenv install --list`.
+
+| Component | Pin | Why this version |
+|---|---|---|
+| Python | **3.14.8** (pyenv) | The newest Python that MLX ships wheels for. Python **3.15.0** exists in pyenv, but MLX 0.32.3 has no `cp315` wheel (wheels: cp310–cp314), so 3.15 would mean building MLX from source. Move to 3.15 once a `cp315` wheel appears |
+| MLX | **0.32.3** (with `mlx-metal` 0.32.3) | The latest release. `requires_python >=3.10`, with arm64 wheels tagged macOS 14, 15 and 26. pip accepts the `macosx_26_0` wheel on macOS 27.0.1 |
+| numpy | **2.5.4** | The latest release. `requires_python >=3.12`, wheels cp312–cp315 |
+| venv | **`.venv-mlx/`** in the repo root, gitignored like `.venv` | separate, so the numpy reference backend (`.venv`, Python 3.9.6, numpy 2.0.2) and its exact reproduction of the shipped clone cannot drift |
+
+**The one risk of the newest numpy: RNG streams.**
+- §4.2 depends on `default_rng(seed)` giving the same `normal`, `permutation` and `choice` streams in `.venv-mlx` (numpy 2.5.4) as in `.venv` (numpy 2.0.2).
+- NumPy's policy (NEP 19) does not guarantee `Generator` streams across versions, although the PCG64 `normal`, `permutation` and `choice` algorithms are not known to have changed since 1.17.
+- So this is **a Phase 0 gate, not an assumption**. If any stream differs, there are two fallbacks, and the executor asks the user which one to take:
+  - **(a)** `.venv-mlx` uses Python **3.12.15** with numpy **2.0.2**: the newest pair that keeps numpy identical. MLX 0.32.3 has cp312 wheels.
+  - **(b)** The host side of `bc_train_mlx.py` draws its RNG with the `.venv` interpreter, through a small helper process that writes the init and the permutations to a file. This is more moving parts.
+
+The float64 host-side quantization is plain IEEE arithmetic and unaffected by the numpy version, but V0.3 checks it anyway.
+
+**Interpreter selection.**
+- `trainer/bc_common.py` is imported by both interpreters (3.9.6 and 3.14.8). It must stay Python 3.9 compatible: no `match`, no `X | Y` type unions, no 3.10+ stdlib APIs.
+- `bc.js` gets `mlxPythonPath(root)`, which returns `process.env.PYTHON_MLX` if set, else `.venv-mlx/bin/python`, else an error naming the Phase 0 commands.
+- The existing `pythonPath()` and the `PYTHON` variable keep meaning the numpy backend's interpreter.
 
 **Rejected:**
 - **PyTorch MPS.**
@@ -114,7 +139,7 @@ The Mac was otherwise idle: the rules-v3 runner was paused by mac-5 at the user'
 - **WebGPU or Metal from Node.** Both need a native addon (Dawn bindings or a Metal bridge), which breaks the repo's no-npm-dependency rule for `trainer/`. A hand-written Metal/WGSL MLP plus Adam would also be a third implementation of the algorithm to keep in sync.
 - **A custom Swift/Metal binary.** It is a build step, and the repo has none. Its maintenance cost is out of proportion to a 15 s job.
 
-The no-npm rule is unaffected, because MLX lives behind the existing python-backend boundary (`trainer/bc_train*.py`, spawned by Node, with the `PYTHON` env var override). The game, browser and CSS paths never touch it.
+The no-npm rule is unaffected, because MLX lives behind the existing python-backend boundary (`trainer/bc_train*.py`, spawned by Node; the interpreter comes from `.venv-mlx` or the `PYTHON_MLX` env var, §3.1). The game, browser and CSS paths never touch it.
 
 ## 4. Design
 
@@ -161,7 +186,7 @@ Host cost: one `permutation(2.06M)` is about 20 ms per model per epoch. For N = 
 - **`--extra-demos` and `--transition-weight`.** These are host-side row preparation (shared helpers), so they are unchanged.
 - **Output.**
   - Each stdout JSON line gains `"model": k` (0-based within the process). The single-model path (N = 1) still prints `"model": 0`, and Node ignores the field for `bc-train`.
-  - `--out` becomes `--out-dir`, written as `model-<k>.json` with the existing result schema.
+  - `--out` becomes `--out-files` (one path per model; §4.6), each with the existing result schema.
   - The result gains `engine: {name: 'mlx', version, device}`.
 
 ### 4.4 Memory
@@ -189,8 +214,10 @@ All of this is unified memory (48 GB):
 
 **`trainer/bc.js`.**
 - Generalize `trainPython(binFile, outFile, o, root, onLine)` to `trainPythonEngine(script, …)`, or add a `script` field to `o`, so that one spawn and stream function serves `bc_train.py` and `bc_train_mlx.py`.
-- `pythonPath()` is unchanged.
-- Add `engineAvailable('mlx')`: run `python -c "import mlx.core"` once and give a clear error (`install mlx==0.29.3 into .venv, or set PYTHON`).
+- `pythonPath()` is unchanged and used for `bc_train.py`. `mlxPythonPath()` (§3.1) is used for `bc_train_mlx.py`.
+- Add `engineAvailable('mlx')`: run `<mlx python> -c "import mlx.core"` once and give a clear error (`create .venv-mlx per research/plan-gpu-trainer.md Phase 0, or set PYTHON_MLX`).
+- Engine output files: like today's `bc-python.<pid>.tmp`, each model's result is written to `<run dir>/bc-mlx.<pid>.tmp`. The engine takes `--out-files f0,f1,…`, one per model, instead of a single `--out-dir`. Node deletes these files after reading them, in a `finally`.
+- Both engines are spawned with `-W ignore`, as `trainPython` does now. The probes printed spurious `RuntimeWarning: divide by zero / overflow / invalid value encountered in matmul` lines from numpy matmul even on bounded data: floating-point flags leaking from Accelerate under numpy 2.x on macOS. They are not a bug signal.
 
 **`bc-train --backend mlx`** (`cli.js` `bcTrainCmd`).
 - Accept `mlx` next to `node|python`.
@@ -207,7 +234,7 @@ node trainer/cli.js bc-train-batch --dir-pattern 'runs/exp-x/v3-bc-duck-d{depth}
       --force --overwrite --snapshots --distill-from … --quant-bits … --extra-demos … --transition-weight]
 ```
 
-- **Shapes.** `--shapes` is `/`-separated hidden lists. `{depth}` and `{width}` are taken from each list; a non-uniform list uses `{hidden}`, with `-` joining the widths.
+- **Shapes.** `--shapes` is `/`-separated hidden lists. Each list is comma-separated widths, and `WxD` is shorthand for D layers of width W (for example `32x16` = sixteen 32s, and `8,8` = `8x2`). `{depth}` and `{width}` are taken from each list; a non-uniform list uses `{hidden}`, with `-` joining the widths.
 - **Grid.** The cross product shapes × seeds names the run directories. Shared options apply to every model; only shape and seed vary.
 - **Start.**
   - Refuse if any directory already has `best.json` (unless `--overwrite`) or a live lock.
@@ -252,7 +279,7 @@ The numpy backend stays the reference, and it must keep reproducing the shipped 
 | **E1, epoch 1** | `bc_train.py` against `bc_train_mlx.py`, N=1, same seed, 1 epoch, shipped demos `runs/exp-bc-e2e/demos.json`, 2×32 | loss Δ ≤ 1e-3 (the e2e precedent); max \|ΔW\| / max\|W\| ≤ 1e-3 | same init and batch order (§4.2), so only accumulation order differs |
 | **E2, stacking** | Model k of an N=10 stack against an MLX N=1 run with seed k, 1 epoch | as E1. Bitwise equality is recorded if it happens, but not required | stacking changes kernels, not math |
 | **E3, determinism** | The same MLX run twice | **recorded, not gated**: bitwise equal or not. If not equal, the AGENTS.md text says "MLX: not bitwise reproducible run to run; the float32 numerics are verified by E0–E2" | the repo claims per-seed determinism for node and python; be truthful about MLX |
-| **E4, behaviour** | The pre-registered §7 benchmark arms: 10 seeds 2×32 `teacher-jump` (`runs/exp-bc-e2e/demos.json`, rules v2), numpy against MLX | MLX: tier A 25/25 on every seed where numpy is 25/25; final-loss distributions overlap (\|mean Δ\| ≤ 2 SD of numpy's seed spread); **same-seed decision agreement on held-out demo rows (`runs/exp-bc-duck/v2-demos-duck-s41-60`, labels ignored) ≥ the numpy s1-vs-s2 agreement** (the seed-noise floor); 2 MLX models tier B 0/1,000 on seeds 30,002,000–30,002,999 (as e2e) | per-seed outcomes are chaotic over 30k steps, so equivalence is distributional, with the seed noise floor as the yardstick |
+| **E4, behaviour** | The pre-registered §7 benchmark arms: 10 seeds 2×32 `teacher-jump` (`runs/exp-bc-e2e/demos.json`, rules v2), numpy against MLX | MLX: tier A 25/25 on every seed where numpy is 25/25; final-loss distributions overlap (\|mean Δ\| ≤ 2 SD of numpy's seed spread); **for every seed k, the decision agreement (policy.js argmax in float64, ties to the first index) between MLX s_k and numpy s_k on held-out jump-teacher demo rows ≥ the minimum pairwise agreement among the 10 numpy models (45 pairs)**, the seed-noise floor; 2 MLX models tier B 0/1,000 on seeds 30,002,000–30,002,999 (as e2e). Held-out rows: `bc-gen` seeds 41–60, default teacher and levels, into `runs/exp-gpu-bench/v2-demos-jump-s41-60` (seconds). That is the precedent of `research/prereg-bc-sweep.md` §"Held-out demonstration agreement" and `research/scripts/prereg-bc-sweep/agreement.py`; adapt that script, or reuse its loader, for model-vs-model agreement | per-seed outcomes are chaotic over 30k steps, so equivalence is distributional, with the seed noise floor as the yardstick. Jump-teacher rows match the arms' training distribution: duck rows would contain ducking states a jump clone never visits |
 | **E5, features end to end** | `--quant-bits 4 --quant-scheme pow2` and `--distill-from` with MLX, 1 seed each | `bc.quantRecord` accepts (on the grid); best.json loads in `assess`; `--snapshots` writes 15 files that the dashboard plays | integration, not numerics |
 
 Note: E4 does **not** require MLX s_k to match numpy s_k per seed. For example, numpy's `v2-bc-duck-d2w32-s2` being the stuck-duck seed says nothing about MLX s2.
@@ -305,7 +332,7 @@ Example: 2×32, rules v2, the stuck-duck/v3-clones procedure.
 
 **Positive controls.**
 - **PC1:** sequential `bc-train --backend python` d2w32 seed 1 reproduces its committed params sha (or the shipped clone on its demos with `--seed 1`, as AGENTS.md states). The baseline then stays the baseline.
-- **PC2:** the MLX N=1 timing reproduces Probe 1's 0.50 ms/step ± 20 %.
+- **PC2 (machine-state control):** re-running the Probe 1 and Probe 2 scripts (recreated from §2's descriptions into the session scratchpad, run with `.venv-mlx` and `.venv` respectively) reproduces their 2×32 numbers ± 20 %. Run the probe script once more under a throwaway 0.29.3 venv if `.venv-mlx`'s 0.32.3 lands outside that band, to separate a version effect from machine state. The implementation's own N=1 time is **not** a control. Its hand-written backward (§4.3) may cost more or less than the probe's autodiff, and that difference is a benchmark measurement, read against the probe.
 
 **Arms**: wall time measured by `/usr/bin/time -l`; GPU utilization sampled.
 
@@ -315,11 +342,11 @@ Example: 2×32, rules v2, the stuck-duck/v3-clones procedure.
 | A1 | `bc-train-batch --backend python --jobs 6 --shapes 32,32 --seeds 1-10` |
 | A2 | `bc-train-batch --backend mlx --shapes 32,32 --seeds 1-10` |
 | A3 | `bc-train-batch --backend mlx --shapes 32,32 --seeds 1-40` |
-| A4 | `bc-train-batch --backend mlx --shapes 6/8,8/32,32/32×16 --seeds 1-10` (mixed shapes, grouping and overlap) |
+| A4 | `bc-train-batch --backend mlx --shapes 6/8x2/32x2/32x16 --seeds 1-10` (mixed shapes, grouping and overlap) |
 | A5 | A3 concurrently with `opening.js` on the shipped clone, against `opening.js` solo |
 
 **Variance and power.**
-- Wall-time noise from probe repeats was ≤ 5 %, so one run per arm suffices for the predicted 3–10× effects.
+- Wall-time noise in the probes was about 5–10 %: the K=6 and K=10 replicates spread about 4 %, and two single numpy runs differed by 7 %. One run per arm therefore suffices for the predicted 3–10× effects.
 - Repeat an arm (n = 3) only if it lands within 20 % of a decision threshold.
 - E4's behavioural arms (10 seeds each) come from A0 and A2's models, so they cost no extra training. Tier B covers 2 MLX models only (≈ 6–10 min).
 
@@ -334,17 +361,24 @@ Example: 2×32, rules v2, the stuck-duck/v3-clones procedure.
 | H-gpu fails, and H-host is shown | fix the host side (thread the permutations, upload once per epoch) and re-measure once. If it still fails, default `python --jobs 6` and keep MLX as an opt-in |
 | E4 fails | MLX is not accepted for research runs. Diagnose from E0–E2 (the bug is in the step) before any further use |
 
-**Scope of any null.** One machine (M5 Pro, 48 GB, macOS 27.0.1), MLX 0.29.3, Python 3.9.6, rules-v2 demos of 2.06M rows, the shapes in A0–A4. It reopens on a new MLX or Python, or on a much larger demo set.
+**Scope of any null.** One machine (M5 Pro, 48 GB, macOS 27.0.1), MLX 0.32.3 on Python 3.14.8 (the probes used MLX 0.29.3 on Python 3.9.6), rules-v2 demos of 2.06M rows, the shapes in A0–A4. It reopens on a new MLX or Python, or on a much larger demo set.
 
 ## 8. Phases
 
 Each phase ends with its verification passing and a commit on the implementation branch. Don't merge to `main` (the orchestrator merges).
 
 ### Phase 0: environment
-1. Confirm that the user has authorized implementation.
-2. `.venv/bin/python -m pip install mlx==0.29.3` (user-approved per D1).
-3. Check: `.venv/bin/python -c "import mlx.core as mx; print(mx.__version__, mx.default_device())"` prints `0.29.3 Device(gpu, 0)`, and `.venv/bin/python -c "import numpy; print(numpy.__version__)"` is still `2.0.2`.
-4. If pip tries to change numpy, stop and ask the user.
+1. Confirm that the user has authorized implementation. Then ask through AskUserQuestion to install exactly the §3.1 pins. Re-check PyPI first (`curl -s https://pypi.org/pypi/mlx/json`), because a newer MLX, or a `cp315` wheel, may have appeared; name the versions in the question.
+2. On approval, run from the repo root:
+   - `pyenv install 3.14.8` (builds from source, a few minutes);
+   - `$(pyenv root)/versions/3.14.8/bin/python -m venv .venv-mlx`;
+   - `.venv-mlx/bin/python -m pip install mlx==0.32.3 numpy==2.5.4`;
+   - add `.venv-mlx/` to `.gitignore`.
+
+   Don't change the global pyenv version (it stays `system`), and don't touch `.venv`.
+3. V0.1: `.venv-mlx/bin/python -c "import mlx.core as mx, numpy; print(mx.__version__, mx.default_device(), numpy.__version__)"` prints `0.32.3 Device(gpu, 0) 2.5.4`. Also check that `.venv/bin/python -c "import numpy; print(numpy.__version__)"` is still `2.0.2`.
+4. **V0.2, RNG stream gate (§3.1).** Write a 15-line script that, for seeds 1, 2 and 7 and the 2×32 layer list, draws the exact `bc_train.py` sequence: the init normals, then `permutation(2062427)` twice, then `choice(2062427, 200000, replace=False)`. It writes the sha256 of each array's bytes. Run it under `.venv` and `.venv-mlx`. Every hash must be equal. If any differs, stop and ask the user to choose fallback (a) or (b) from §3.1.
+5. V0.3: `quantize`, `quantize_pow2` and `flat_params` on a fixed float32 weight set give byte-identical float64 output under both interpreters. Do this after Phase 1, once `bc_common.py` exists; record it then.
 
 ### Phase 1: extract `bc_common.py` (numpy output byte-identical)
 1. Before editing, record reference outputs with the current `bc_train.py`, called directly so that no Node is involved. Use `runs/exp-bc-e2e/demos.bin` (regenerate it with `bc-gen` per `research/prereg-bc-pipeline-e2e.md` if it is gitignored and missing). Save each `--out` JSON's sha256 for these cases:
@@ -393,4 +427,5 @@ Run §7 exactly. Write `research/gpu-trainer-results.md`: the measurements, the 
 ## 9. Open choices for the user
 
 1. **Scheduling rule.** Should the orchestrator treat "one GPU training job plus one CPU-heavy job" as allowed at the same time (needed for the overlap gain, §6 point 2), pending H-overlap in §7?
-2. **Default backend for `bc-train-batch`.** Pre-registered to be decided by §7. The user may prefer to fix `python --jobs` as the default regardless, to avoid the MLX dependency in the default path.
+2. **Phase order.** `bc-train-batch --backend python --jobs K`, plus the `finishBcRun`/`bcStartLine` extraction and the dashboard fixture, depend on nothing in Phases 0 and 2. One alternative order is Phase 1, then that slice (≈ 5–8× on training with no new dependency, Probe 2), then Phases 0 and 2, then `--backend mlx`. It ships a gain sooner and de-risks the Node refactor before MLX touches it. The default is the order in §8.
+3. **Default backend for `bc-train-batch`.** Pre-registered to be decided by §7. The user may prefer to fix `python --jobs` as the default regardless, to avoid the MLX dependency in the default path.
