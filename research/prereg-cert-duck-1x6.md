@@ -136,3 +136,5 @@ Row: **Both 150/150, CSS gate passes.**
 Next (§6): **the user decides** whether to replace the shipped model. If yes, a separate ship step: export, `export-css`, `browser-check.js`, `net.test.js` pin update and a decision-log entry. Nothing was shipped here. A tie is not a win: 150 pairs exclude only failure rates above about 2 % per arm.
 
 **Offsets: held-out 625–774 are now spent. The next fresh offset is 775.**
+
+**User decision (2026-10-11, via AskUserQuestion to orchestrator mac-7): "Keep 2×8".** The shipped model stays `runs/exp-bc-duck/v2-bc-duck-d2w8-s1`. The 1×6 remains selectable in the page's model picker; no ship step.
