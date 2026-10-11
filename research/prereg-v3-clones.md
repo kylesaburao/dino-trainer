@@ -231,3 +231,85 @@ The desktops are not used.
 - **C-agree (§4.4) is dropped** as tautological: `agreement.py` scores snapshots only and has no labels-vs-themselves mode. The agreement tool's correctness rests on the §4.0 check that its `--split-x4` subsets recombine to the overall figure for all 15 epochs.
 - **Duck share is reported for whole games only**; `duckshare.js` has no split at 100k, and adding one is out of scope (the "where the tool allows" clause in §4.5 item 1).
 - The step-2 tier-B reference scan used by the scan control lives in the `wt/exp-bc-duck` worktree (not on main). Its model params were checked equal to the committed `v2-bc-duck-d2w8-s1/best.json`.
+
+## Results (2026-10-11, Mac; written by the orchestrator mac-5 from `runs/exp-v3-clones/summary.json`)
+**Provenance.** Main `06d1014` (tooling merge `b0cd6b9`) plus this branch's `research/scripts/prereg-v3-clones/{run.js,gate.js,summarize.js}`; core hash `65f3546c…`; python backend (`.venv`, numpy 2.0.2) with `OMP_NUM_THREADS=2 VECLIB_MAXIMUM_THREADS=2`, `--snapshots --wasm`, defaults otherwise. Runner launched 23:58:37Z by the orchestrator under a user allow rule (relayed approvals were refused by the auto-mode check), finished 00:30:39Z. **Timing caveat:** the runner was suspended (SIGSTOP) on the user's order while mac-6 used the Mac, during `bc-train v3-bc-duck-d1w6-s2`; that model's recorded train time includes the pause. Results are deterministic and unaffected.
+
+**Executor deviation (approved by the orchestrator before tier B ran).** Tier-B failures are replayed from 0 with `opening.js --base <seed> --n 1 --target 1000000`, not `--start <nearest level below>`, because a start-score replay plays a different game. (No tier-B failure occurred, so it was never used.)
+
+### §4.1 gate: PASS (both sets)
+Rules v3, teacher duck, core `65f3546c`, 0 solver crashes, every 98k episode crosses the step (x4 max 5.035); x4 per level as the grid predicts (5.01 at 101k … 7.71 at 995k).
+- `v3-demos-duck-s1-40`: **3,129,615 rows** (none 2,727,888, jump 344,966, duck 56,761), sha256 `b1bded8653b3eaf5bc74bd1c3881b60e9ccd43bef1e960ad6e31580dc2ce7154`. x4 ≤ 2.5: none 1,332,574, jump 141,200, duck 29,056; x4 > 2.5: none 1,395,314, jump 203,766, duck 27,705.
+- `v3-demos-duck-s41-60`: 1,563,766 rows, sha256 `079d77da73e56983f42e702c9e15eeaf33d095ae558c034b9f727eec64bae14a`.
+- bc-gen took 0.8 s and 0.5 s on 18 workers (§9 estimated up to a minute).
+
+### §4.4 controls: all PASS (`controls/controls.json`)
+| Control | Result |
+|---|---|
+| PC-open | 1,000/1,000, 0 fatal, max lag 1 |
+| PC-post | survey 0/1,000 crashes; lag run 1,000/1,000, max lag 1 |
+| PC-B | 0/1,000 crashes (full rules-v3 games) |
+| DC-post | 1,000/1,000 failures, none below 100k, **all** in 100,015–101,529 |
+| C-agree | dropped (ruling above) |
+
+### Per model (seeds 1–10 per arm)
+Opening = `opening.js` 1,000 games to 2,000 (stuck / early release). **Post-step: 1,000/1,000 for all 30 models.** Tier B (≤ 2 per arm, seed order): **0/1,000 failures for all 5 scanned.**
+
+| Arm | Seed | Tier A | Opening (st/er) | Class | Tier B | Min margin |
+|---|---|---|---|---|---|---|
+| A 1×6 | 1 | 25 | 998 (0/2) | opening-early | | |
+| | 2 | 25 | 1000 | **clean** | 0/1000 | **3.4e-6** (flag) |
+| | 3 | 25 | 999 (0/1) | opening-early | | |
+| | 4 | 25 | 1000 | **clean** | 0/1000 | 6.8e-5 |
+| | 5 | 25 | 979 (0/21) | opening-early | | |
+| | 6 | 25 | 998 (0/2) | opening-early | | |
+| | 7 | 23 | 861 (139/0) | opening-stuck | | |
+| | 8 | 25 | 1000 | clean (A + opening + post-step) | | |
+| | 9 | 25 | 1000 | clean (A + opening + post-step) | | |
+| | 10 | 25 | 985 (0/15) | opening-early | | |
+| B 2×32 | 1 | 25 | 977 (0/23) | opening-early | | |
+| | 2 | 25 | 956 (0/44) | opening-early | | |
+| | 3 | 25 | 951 (0/49) | opening-early | | |
+| | 4 | 25 | 960 (0/40) | opening-early | | |
+| | 5 | 25 | 1000 | **clean** | 0/1000 | 1.9e-4 |
+| | 6 | 25 | 999 (0/1) | opening-early | | |
+| | 7 | 25 | 1000 | **clean** | 0/1000 | **1.2e-6** (flag) |
+| | 8 | 25 | 994 (6/0) | opening-stuck | | |
+| | 9 | 25 | 986 (0/14) | opening-early | | |
+| | 10 | 25 | 986 (0/14) | opening-early | | |
+| C 2×8 | 1 | 22 | 846 (154/0) | opening-stuck | | |
+| | 2 | 25 | 1000 | **clean** | 0/1000 | 8.1e-4 |
+| | 3 | 25 | 986 (0/14) | opening-early | | |
+| | 4 | 25 | 994 (0/6) | opening-early | | |
+| | 5 | 22 | 868 (132/0) | opening-stuck | | |
+| | 6 | 25 | 974 (0/26) | opening-early | | |
+| | 7 | 25 | 993 (7/0) | opening-stuck | | |
+| | 8 | 20 | 760 (240/0) | opening-stuck | | |
+| | 9 | 25 | 992 (0/8) | opening-early | | |
+| | 10 | 22 | 889 (111/0) | opening-stuck | | |
+
+- **Every tier-A failure** (s7 of A; s1, s5, s8, s10 of C) is opening-stuck at 516–633 points (the `--val` replays: a final DOWN run of 61–66 frames over a mid pterodactyl, killed by the next cactus).
+- **No failure of any kind above 2,000 points** in any screen: 30 × 1,000 post-step crossings, 5 × 1,000 full tier-B games and 30 × 25 tier-A games.
+- Duck share 1.000 on every clean model (min over all 30 models 0.99997).
+- Held-out agreement (`v3-demos-duck-s41-60`, final params), clean models: 1×6 0.9917–0.9933, 2×32 0.9978–0.9983, 2×8 0.9962. **The x4 > 2.5 subset is at or above the x4 ≤ 2.5 subset for every clean model** (e.g. 2×32-s5: 0.99787 vs 0.99765).
+
+### Arms and tests
+| Arm | Clean/10 | CP 95 % | Seeds by class |
+|---|---|---|---|
+| A 1×6 | **4** | 0.122–0.738 | early 5, stuck 1 |
+| B 2×32 | **2** | 0.025–0.556 | early 7, stuck 1 |
+| C 2×8 | **1** | 0.003–0.445 | stuck 5, early 4 |
+
+- Exact McNemar (by seed index, two-sided): A vs B b = 4, c = 2, p = 0.69; A vs C b = 3, c = 0, p = 0.25; B vs C b = 2, c = 1, p = 1.0.
+- Opening-failure seeds against the v2 rates (descriptive Fisher): 2×32 8/10 vs 16/20 on rules v2, p = 1.0; **1×6 6/10 vs 0/10 on rules v2, p = 0.011**.
+
+### Readings (§7, as registered)
+1. **A 4/10, B 2/10, C 1/10: "an arm clean 3–8/10" (arm A) → learnable but seed-dependent.** No arm is reliable (≥ 9/10).
+2. **H-step: not supported.** 0 failures in 30,000 post-step crossings (per-model one-sided 95 % bound 0.299 % per crossing) and 0 in 5,000 full tier-B games. **H-late: not supported** (no failure above 130k anywhere).
+3. **Failures are opening-only → H-opening-persists** for 2×32 (8/10 vs v2's 16/20) and 2×8 (stuck-dominated, as on rules v2). **For 1×6, H-dilution (descriptive):** 6/10 opening-failure seeds against 0/10 on rules v2 (p = 0.011, descriptive by registration), mostly early release. The v3 rows weaken 1×6's opening.
+4. **H-capacity: not supported** (A ≥ B, no significant difference; "prefer the smaller shape among candidates").
+5. **H-learnable: the rules-v3 part is learned by every model at every shape on these screens.** The bottleneck is the opening release decision, the same problem the release-fix registration targets.
+6. **Candidates** (clean, tier B 0/1,000, duck share ≥ 0.9×, min margin ≥ 5.8e-5): **`v3-bc-duck-d2w8-s2`** (margin 8.1e-4), **`v3-bc-duck-d2w32-s5`** (1.9e-4), **`v3-bc-duck-d1w6-s4`** (6.8e-5, barely above the flag). **Flagged, not candidates without CSS agreement on rules v3:** `d1w6-s2` (3.4e-6) and `d2w32-s7` (1.2e-6).
+7. **Next (each registered separately):** (a) the release-fix registration, now with rules-v3 demos in scope; (b) a rules-v3 certification of the candidates on fresh offsets **from 775** (the 1×6 v2 certification spends 625–774), against the baseline that v2 models score 0/150 on rules v3; then the user decides.
+
+**Not done here.** No held-out offsets spent, nothing exported or shipped, root `model.js`/`model.css` untouched.

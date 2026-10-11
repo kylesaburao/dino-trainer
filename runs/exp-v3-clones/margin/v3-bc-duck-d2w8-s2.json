@@ -1,0 +1,1 @@
+{"model":"/Users/kyle/Desktop/dino-game/.claude/worktrees/agent-aafcd6ad3159c096f/runs/exp-v3-clones/v3-bc-duck-d2w8-s2/best.json","layers":"44-8-8-3","frames":960000,"games":9,"crashes":0,"minMargin":0.0008064452696467939,"at":{"level":0,"seed":30003000,"score":3617},"p01":2.375716643093619,"median":30.964160766742143,"levels":[0,2000,50000,98000,101000,207000,546000,886000]}
