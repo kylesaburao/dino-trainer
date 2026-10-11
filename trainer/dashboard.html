@@ -339,7 +339,7 @@ function kdTiles(b) {
 function bcChip(r) {
   const b = r.bc;
   const what = r.kind === 'demos' ? `demos · ${b.demos ? compact(b.demos.rows) + ' rows' : 'generating'}`
-    : `${layersText(b.layers)}${b.backend ? ' · ' + b.backend : ''}${b.epochsDone ? ` · epoch ${b.epochsDone}${b.epochs ? '/' + b.epochs : ''}` : ''}${kdText(b)}`;
+    : `${layersText(b.layers)}${b.backend ? ' · ' + b.backend : ''}${b.epochsDone ? ` · epoch ${b.epochsDone}${b.epochs ? '/' + b.epochs : ''}` : ''}${b.batchRun ? ` · batch ${b.batchRun.n}/${b.batchRun.size}` : ''}${kdText(b)}`;
   return `<button class="run-chip" type="button" aria-pressed="${r.name === selected}" data-run="${esc(r.name)}">
     <span class="dot ${r.running ? 'live' : ''}" aria-hidden="true"></span><span class="badge">${r.kind === 'demos' ? 'BC demos' : 'BC'}</span>${esc(r.name)}<span style="color:var(--text-muted)">${r.running ? 'running' : 'stopped'} · ${esc(b.teacher)} · ${esc(what)}</span></button>`;
 }
@@ -537,7 +537,7 @@ function renderBcDetail(d) {
       </div>` : `<div class="card wide"><h2>Training</h2><div class="sub">${b.quant && b.quant.mode === 'ptq' ? `No bc-metrics.jsonl: post-training quantization of ${esc(b.quant.from || 'another model')} (${esc(cfg.trainer || 'bc-quantize')}), no training epochs` : `No bc-metrics.jsonl: trained outside bc-train (${esc(cfg.trainer || 'unknown trainer')})`}</div></div>`}
       <div class="card">
         <h2>Snapshots</h2>
-        <div class="sub">${b.snapshots.length ? 'snapshots/epoch-NN.json, taken after each epoch; click to play one' : 'No snapshots/ (bc-train --snapshots, python backend)'}</div>
+        <div class="sub">${b.snapshots.length ? 'snapshots/epoch-NN.json, taken after each epoch; click to play one' : 'No snapshots/ (bc-train or bc-train-batch --snapshots, python backend)'}</div>
         <div class="snaps">${b.snapshots.map(s => `<button type="button" data-snap="${esc(s.name)}" aria-pressed="${$('#pb-which').value === s.name}">${s.epoch}</button>`).join('')}</div>
       </div>
       ${demosCard(b.demos, b.demosRef, best && best.coreHash)}

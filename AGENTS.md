@@ -45,6 +45,12 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend pytho
 ```
 
 - `--backend python` needs `.venv` with numpy (`.venv/bin/python`); the `PYTHON` env var overrides the interpreter. A worktree has no `.venv` of its own, so set `PYTHON` there.
+- Many models at once: `node trainer/cli.js bc-train-batch --dir-pattern 'runs/<group>/v2-bc-<teacher>-d{depth}w{width}-s{seed}' --shapes 32,32/8x2 --seeds 1-10 --demos <dir> [--jobs 6]`. It runs `--jobs` `bc_train.py` processes at once, each with 1 BLAS thread, and gives each model its own ordinary run dir.
+  - Each member's `best.json` is byte-identical in params to `bc-train --backend python` with the same shape and seed.
+  - Tier A runs on one shared worker pool, one model at a time.
+  - The dashboard lists every member while it waits, trains and validates (`config.batchRun`; `config.batch` stays the minibatch size).
+  - Plan and measurements: `research/plan-gpu-trainer.md`. About 5.6× training throughput at 6 jobs and about 8× at 10 on the M5 Pro. The MLX GPU backend is planned there (Phase 2), not built.
+  - Every other `bc-train` option is shared by the batch. The python step lives in `trainer/bc_train.py`; its host-side parts are in `trainer/bc_common.py`, for every python engine.
 - `bc-gen` writes `demos.bin` (gitignored) and `demos.json`; `bc-train` writes `best.json` and `bc-metrics.jsonl` (per-epoch loss and recall, not `metrics.jsonl`). `eval` and `export` then work as for an ES run.
 - `bc-gen --teacher jump|duck` picks the teacher (default `jump` = `createSolver`, byte-identical demos to before; `duck` = `createDuckSolver`, label 2 = down key). The manifest records `teacherName`, `bc-train` copies it into the `best.json` config, and recall gains a `duck` key only when duck rows exist.
 - `bc-train` refuses demos from another core hash unless `--force`. The flags are in the `trainer/cli.js` header.

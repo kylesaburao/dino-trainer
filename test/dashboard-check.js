@@ -18,6 +18,8 @@
 //   grp/dagger-set      nested DAgger rollouts (bc-gen --student --score-window), finished;
 //                       the student is grp/bc-old's best.json. grp/bc-run's config lists it in
 //                       extraDemos and has transitionWeight 4
+//   batch/v2-bc-jump-d2w32-s1..3  a bc-train-batch: one pid locks s2 (training, 1 epoch) and s3
+//                       (waiting for a slot: start line only); s1 finished (config.batchRun)
 //   plain               an empty directory (listed as before)
 //   grp/scans/          scan.js / survey.js output (not a run): done.jsonl (old header without
 //                       pid, footer, seeds out of order, 2 failures; model grp/bc-run),
@@ -50,6 +52,7 @@ function check(name, ok, detail = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` (${detail})` : ''}`);
 }
 
+const BATCH = 'batch/v2-bc-jump-d2w32-s';
 const KD = 'grp/v2-distill-duck-d2w32-s1-tau2', PTQ = 'grp/v2-quant-duck-d2w8-s1-int8', POW2 = 'grp/v2-quant-duck-d2w32-s1-int8-pow2';
 const bc = require(path.join(ROOT, 'trainer', 'bc.js'));
 
@@ -95,6 +98,21 @@ function buildFixture(dir) {
   const old = JSON.parse(src('runs/v2-bc-jump-d2w32-s1/best.json'));   // research-trained: no bc-metrics, no demos, no teacherName
   w('grp/bc-old/best.json', JSON.stringify(old));
   w('grp/bc-run.log', 'bc-train: dir=grp/bc-run backend=python layers=44-32-32-3 epochs 3\nepoch 0: loss 0.1000\nepoch 1: loss 0.0500\n');
+  // bc-train-batch, three members under one pid: s1 finished (config.batchRun, no lock), s2 training
+  // (lock, start line, 1 epoch), s3 waiting for a slot (lock and start line only).
+  const startLine = (i) => `[2026-10-11T00:00:00.000Z] bc-train: dir=${path.join(dir, BATCH + i)} backend=python layers=44-32-32-3 epochs 3 batch 1024 ` +
+    `lr 0.002 seed ${i} demos ${demosFile} (1000 rows, sha 000000000000) core=000000000000 batch=${i}/3 jobs=2\n`;
+  const b1 = JSON.parse(src('runs/v2-bc-jump-d2w32-s1/best.json'));
+  b1.config = { ...best.config, snapshots: undefined, extraDemos: undefined, transitionWeight: undefined, transitions: undefined,
+    trainer: 'trainer/cli.js bc-train-batch --backend python', batchRun: { id: '2026-10-11T00:00:00.000Z-1', index: 0, size: 3, backend: 'python', jobs: 2, blasThreads: 1 } };
+  w(`${BATCH}1/best.json`, JSON.stringify(b1));
+  w(`${BATCH}1/bc-metrics.jsonl`, [0, 1, 2].map(e => JSON.stringify({ backend: 'python', epoch: e, loss: 0.1 / (e + 1), recall: { none: 0.99, jump: 0.98 }, seconds: 1 })).join('\n') + '\n');
+  w(`${BATCH}1/train.log`, startLine(1));
+  for (const i of [2, 3]) {
+    w(`${BATCH}${i}/train.lock`, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }) + '\n');
+    w(`${BATCH}${i}/train.log`, startLine(i));
+  }
+  w(`${BATCH}2/bc-metrics.jsonl`, JSON.stringify({ backend: 'python', epoch: 0, loss: 0.1, recall: { none: 0.99, jump: 0.98 }, seconds: 1 }) + '\n');
 
   // Distillation + QAT run (finished; bc-metrics with distillLoss) and a post-training-quantized run (best.json only).
   const kd = JSON.parse(src('runs/v2-bc-jump-d2w32-s1/best.json'));
@@ -193,7 +211,15 @@ function cdpClient(url) {
     for (let i = 0; i < 50 && !list; i++) { try { list = await (await fetch(base + '/api/runs')).json(); } catch (e) { await sleep(100); } }
     const by = Object.fromEntries((list || []).map(r => [r.name, r]));
     check('run list: top-level, nested and plain dirs; a group is not a run',
-      ['es-run', 'grp/bc-run', 'grp/bc-old', 'grp/demos-set', 'grp/dagger-set', 'plain', KD, PTQ, POW2].every(n => by[n]) && !by.grp && list.length === 9, (list || []).map(r => r.name).join(', '));
+      ['es-run', 'grp/bc-run', 'grp/bc-old', 'grp/demos-set', 'grp/dagger-set', 'plain', KD, PTQ, POW2, ...[1, 2, 3].map(i => BATCH + i)].every(n => by[n]) &&
+        !by.grp && !by.batch && list.length === 12, (list || []).map(r => r.name).join(', '));
+    const bm = [1, 2, 3].map(i => by[BATCH + i] || { bc: {} });
+    check('bc-train-batch members: all BC runs; finished one stopped with batch 1/3 from config; training and waiting ones running as bc-train-batch with batch i/3 from the start line',
+      bm.every(r => r.kind === 'bc') && !bm[0].running && bm[0].bc.batchRun && bm[0].bc.batchRun.n === 1 && bm[0].bc.batchRun.size === 3 && bm[0].bc.batchRun.jobs === 2 &&
+      bm[1].running && bm[1].process === 'bc-train-batch' && bm[1].bc.batchRun && bm[1].bc.batchRun.n === 2 && bm[1].bc.epochsDone === 1 && (bm[1].bc.layers || []).join('-') === '44-32-32-3' &&
+      bm[2].running && bm[2].process === 'bc-train-batch' && bm[2].bc.batchRun && bm[2].bc.batchRun.n === 3 && bm[2].bc.epochsDone === 0 && bm[2].bc.backend === 'python' &&
+      by['grp/bc-run'].process === 'bc-train' && by['grp/bc-run'].bc.batchRun === null,
+      JSON.stringify(bm.map(r => [r.kind, r.running, r.process, r.bc.batchRun])));
     const es = by['es-run'] || {};
     check('assessments: legacy evals.jsonl and assess.jsonl merged, legacy first',
       (es.evals || []).length === 3 && es.evals[1].seedOffset === 175 && es.evals[2].seedOffset === 999 && es.lastEval.gameVersion === 'v3',
@@ -342,6 +368,8 @@ function cdpClient(url) {
       options: [...document.querySelectorAll('#pb-which option')].map(o => o.value) })`);
     check('BC charts render: loss, seconds per epoch, recall for none/jump/duck', charts && view.legend.join() === 'none,jump,duck', view.legend.join());
     check('BC chip shows the badge, teacher, backend and layers', /BC.*grp\/bc-run.*running.*teacher-duck.*44-32-32-3.*python/.test(view.chip), view.chip);
+    const batchChip = await evaluate(`(document.querySelector('[data-run="${BATCH}3"]') || {}).textContent || ''`);
+    check('bc-train-batch member chip: running, layers, backend, batch i/n', /running.*44-32-32-3.*python.*batch 3\/3/.test(batchChip.replace(/\s+/g, ' ')), batchChip.replace(/\s+/g, ' ').trim());
     check('BC view lists the scans of its model', await evaluate(`!!document.querySelector('#run-scans tr.scan-row[data-scan="grp/scans/done.jsonl"]')`));
     check('BC view shows the demos manifest, validation and snapshots',
       view.snaps === 2 && /teacher-duck/.test(view.text) && /Solver crashes/.test(view.text) && /25\/25/.test(view.text));

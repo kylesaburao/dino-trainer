@@ -861,3 +861,52 @@ test('cli: release-fix flags are python-only, validated, and recorded in best.js
   assert.notStrictEqual(dz.status, 0);
   assert.match(dz.stderr + dz.stdout, /do not combine with --distill-from/);
 });
+
+test('bc-train-batch: each member equals bc-train --backend python byte for byte; own run dir, train.log, config.batchRun; bad flags refused', async (t) => {
+  const { dir } = await smallDemos();
+  const bad = [
+    [['--dir', path.join(tmp, 'x'), '--shapes', '4', '--seeds', '1', '--demos', dir], /--dir-pattern, not --dir/],
+    [['--dir-pattern', path.join(tmp, 'x-{seed}'), '--hidden', '4', '--seeds', '1', '--demos', dir], /not --hidden/],
+    [['--dir-pattern', path.join(tmp, 'x-{seed}'), '--shapes', '4/6', '--seeds', '1', '--demos', dir], /same dir/],
+    [['--dir-pattern', path.join(tmp, 'x-{width}-{seed}'), '--shapes', '4,6', '--seeds', '1', '--demos', dir], /not uniform/],
+    [['--dir-pattern', path.join(tmp, 'x-{hidden}-{seed}'), '--shapes', '4,y', '--seeds', '1', '--demos', dir], /bad hidden list/],
+    [['--dir-pattern', path.join(tmp, 'x-{hidden}-{seed}'), '--shapes', '4', '--seeds', '1', '--demos', dir, '--backend', 'mlx'], /not implemented yet/],
+  ];
+  for (const [args, re] of bad) {
+    const r = cli('bc-train-batch', ...args);
+    assert.notStrictEqual(r.status, 0, args.join(' '));
+    assert.match(r.stderr + r.stdout, re);
+  }
+  if (!hasNumpy()) { t.skip(NO_NUMPY); return; }
+  const common = ['--demos', dir, '--epochs', '2', '--batch', '64', '--target', '50', '--workers', '1'];
+  const b = cli('bc-train-batch', '--dir-pattern', path.join(tmp, 'batch', 'd{depth}w{width}-s{seed}'), '--shapes', '4x2/6', '--seeds', '2-3', '--jobs', '3', '--snapshots', ...common);
+  assert.strictEqual(b.status, 0, b.stderr + b.stdout);
+  const runs = ['d2w4-s2', 'd2w4-s3', 'd1w6-s2', 'd1w6-s3'];
+  for (const [i, name] of runs.entries()) {
+    const d = path.join(tmp, 'batch', name);
+    assert.deepStrictEqual(fs.readdirSync(d).sort(), ['bc-metrics.jsonl', 'best.json', 'snapshots', 'train.log']);
+    const best = JSON.parse(fs.readFileSync(path.join(d, 'best.json'), 'utf8'));
+    assert.strictEqual(best.config.batch, 64);   // the minibatch size, unchanged
+    assert.strictEqual(best.config.trainer, 'trainer/cli.js bc-train-batch --backend python');
+    assert.deepStrictEqual({ ...best.config.batchRun, id: null }, { id: null, index: i, size: 4, backend: 'python', jobs: 3, blasThreads: 1 });
+    const log = fs.readFileSync(path.join(d, 'train.log'), 'utf8');
+    assert.match(log.split('\n')[0], new RegExp(`bc-train: dir=\\S+ backend=python layers=${best.layers.join('-')} epochs 2 .* batch=${i + 1}/4 jobs=3$`));
+    assert.match(log, /validation: median/);
+  }
+  // The same model through bc-train: identical params, validation and metrics (seconds aside).
+  const s = path.join(tmp, 'batch-single');
+  const r = cli('bc-train', '--dir', s, '--hidden', '4,4', '--seed', '3', '--backend', 'python', '--snapshots', ...common);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const one = (d) => {
+    const best = JSON.parse(fs.readFileSync(path.join(d, 'best.json'), 'utf8'));
+    return { params: best.params, validation: best.validation, final: best.config.final,
+      metrics: fs.readFileSync(path.join(d, 'bc-metrics.jsonl'), 'utf8').replace(/"seconds":[0-9.e-]+/g, ''),
+      snap: fs.readFileSync(path.join(d, 'snapshots', 'epoch-02.json'), 'utf8') };
+  };
+  assert.deepStrictEqual(one(path.join(tmp, 'batch', 'd2w4-s3')), one(s));
+  // A dir with best.json stops the whole batch before any training, unless --overwrite.
+  const again = cli('bc-train-batch', '--dir-pattern', path.join(tmp, 'batch', 'd{depth}w{width}-s{seed}'), '--shapes', '6', '--seeds', '3-4', ...common);
+  assert.notStrictEqual(again.status, 0);
+  assert.match(again.stderr + again.stdout, /best\.json exists; pass --overwrite/);
+  assert.ok(!fs.existsSync(path.join(tmp, 'batch', 'd1w6-s4')));
+});

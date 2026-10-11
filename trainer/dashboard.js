@@ -27,7 +27,11 @@
 //     student model first ('student', from the manifest's student.path). A --score-window is
 //     shown. BC runs trained with --extra-demos list each extra manifest, and
 //     --transition-weight with its row counts.
-// Running = train.lock with a live pid (train, bc-train), or a bc-gen temp file
+//   bc-train-batch members are ordinary BC run dirs (one lock pid for all, each its own
+//     train.log, written as soon as the batch locks them, so a member still waiting for a slot
+//     is listed): bc.batchRun {n (1-based), size, jobs[, id]} from config.batchRun or the live
+//     " batch=i/n jobs=K" start line, and process 'bc-train-batch'.
+// Running = train.lock with a live pid (train, bc-train, bc-train-batch), or a bc-gen temp file
 // demos.bin.<pid>.tmp with a live pid (bc-gen takes no lock). A nested run with no *.log
 // of its own shows <group>/<run>.log (where detached runs often log).
 //
@@ -181,7 +185,9 @@ function trainLineIn(dir, name) {
   return { backend: g(/backend=(\S+)/), layers: g(/layers=([\d-]+)/), epochs: Number(g(/ epochs (\d+)/)) || null, demos: g(/ demos (\S+)/),
     distill: g(/ distill=(\S+)/) ? { mode: g(/ distill=(\S+)/), tau: g(/ tau=(\S+)/) !== null ? Number(g(/ tau=(\S+)/)) : null,
       alpha: g(/ alpha=(\S+)/) !== null ? Number(g(/ alpha=(\S+)/)) : null, from: g(/ from=(\S+)/) } : null,
-    quant: g(/ quant=int(\d+)\//) ? { bits: Number(g(/ quant=int(\d+)\//)), scheme: g(/ quant=int\d+\/(\S+)/), mode: 'qat' } : null };
+    quant: g(/ quant=int(\d+)\//) ? { bits: Number(g(/ quant=int(\d+)\//)), scheme: g(/ quant=int\d+\/(\S+)/), mode: 'qat' } : null,
+    // bc-train-batch appends " batch=i/n jobs=K" (i 1-based).
+    batch: g(/ batch=(\d+)\//) ? { n: Number(g(/ batch=(\d+)\//)), size: Number(g(/ batch=\d+\/(\d+)/)), jobs: Number(g(/ jobs=(\d+)/)) || null } : null };
 }
 const trainLine = (name) => trainLineIn(path.join(RUNS, name), name);
 
@@ -254,13 +260,17 @@ function bcInfo(name, kind) {
     ...listDir(dir).filter(e => GEN_TMP.test(e.name)).map(e => mtime(path.join(dir, e.name))));
   // teacherName is additive (duck generation); runs without it are the jump generation.
   const teacher = (cfg && cfg.teacherName) || (best && best.teacherName) || (demos && demos.teacherName) || 'teacher-jump';
+  // A bc-train-batch member: from best.json's config.batchRun (index 0-based) or the live start line.
+  // (config.batch is the minibatch size.)
+  const br = cfg && cfg.batchRun;
+  const batchRun = br ? { n: br.index + 1, size: br.size, jobs: br.jobs || null, id: br.id || null } : live && live.batch ? live.batch : null;
   return {
     name,
     kind,
     running: !!((lock && pidAlive(lock.pid)) || gen),
     pid: lock && pidAlive(lock.pid) ? lock.pid : gen ? gen.pid : lock ? lock.pid : null,
     startedAt: lock && pidAlive(lock.pid) ? lock.startedAt : gen ? gen.startedAt : lock ? lock.startedAt : null,
-    process: lock && pidAlive(lock.pid) ? 'bc-train' : gen ? 'bc-gen' : null,
+    process: lock && pidAlive(lock.pid) ? (batchRun ? 'bc-train-batch' : 'bc-train') : gen ? 'bc-gen' : null,
     generation: null,
     config: cfg,
     best: best ? { generation: best.generation, validation: best.validation, coreHash: best.coreHash, gameVersion: best.gameVersion } : null,
@@ -274,6 +284,7 @@ function bcInfo(name, kind) {
       layers,
       epochs: (cfg && cfg.epochs) || (live && live.epochs) || null,
       epochsDone: rows.length,
+      batchRun,
       demos,
       demosRef: (cfg && cfg.demos) || (live && live.demos) || null,
       // bc-train --extra-demos / --transition-weight (absent for runs that did not use them).
