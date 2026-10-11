@@ -79,7 +79,7 @@ const game = DinoCore.createGame({
   rng: DinoCore.createRng((Math.random() * 4294967296) >>> 0),
   version: GAME_VERSION,
   hooks: {
-    sound: (name) => sounds[name](),
+    sound: (name) => { if (!aiOn || Number(speedSelect.value) <= 2) sounds[name](); },   // silent when fast-forwarding
     night: (on) => document.body.classList.toggle('night', on),
     gameOver: (s) => {
       if (!aiRun && s > hi) {
