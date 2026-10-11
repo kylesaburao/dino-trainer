@@ -751,11 +751,21 @@ function pythonPath(root) {
 // o.snapshotDir (optional): write each epoch's params to <snapshotDir>/epoch-NN.json.
 // o.extraDemos (optional): .bin files appended, in order, after binFile.
 // o.transitionWeight (optional): multiply duck-transition rows' weights (transitionMask).
+// o.blasThreads (optional): cap the BLAS threads of the child (VECLIB/OMP/OPENBLAS env vars);
+// bc-train-batch runs several at once with 1. The output is the same bytes for any thread count
+// (research/plan-gpu-trainer.md Phase 1, V1.3). o.onSpawn (optional) gets the child process.
 function trainPython(binFile, outFile, o, root, onLine = () => {}) {
-  const { spawn } = require('child_process');
-  const args = [path.join(__dirname, 'bc_train.py'), '--demos', binFile, '--obs-dim', String(OBS_DIM), '--hidden', o.hidden.join(','),
-    '--epochs', String(o.epochs), '--batch', String(o.batch), '--lr', String(o.lr), '--seed', String(o.seed), '--out', outFile];
+  const args = [path.join(__dirname, 'bc_train.py'), ...engineArgs(binFile, o), '--seed', String(o.seed), '--out', outFile];
   if (o.snapshotDir) args.push('--snapshot-dir', o.snapshotDir);
+  const t = o.blasThreads !== undefined ? String(o.blasThreads) : null;
+  const env = t ? { ...process.env, VECLIB_MAXIMUM_THREADS: t, OMP_NUM_THREADS: t, OPENBLAS_NUM_THREADS: t } : process.env;
+  return runEngine(pythonPath(root), args, env, o, onLine, 'bc_train.py').then(() => JSON.parse(fs.readFileSync(outFile, 'utf8')));
+}
+
+// The options both python engines take (bc_common.arg_parser), all but the seed and outputs.
+function engineArgs(binFile, o) {
+  const args = ['--demos', binFile, '--obs-dim', String(OBS_DIM), '--hidden', o.hidden.join(','),
+    '--epochs', String(o.epochs), '--batch', String(o.batch), '--lr', String(o.lr)];
   // o.distill: { logitsFile (float64 n x 3, writeLogits), mode, tau, alpha }; o.quant: { bits, scheme }.
   if (o.distill) {
     args.push('--teacher-logits', o.distill.logitsFile, '--distill-mode', o.distill.mode);
@@ -764,8 +774,15 @@ function trainPython(binFile, outFile, o, root, onLine = () => {}) {
   if (o.quant) { checkQuantOptions(o.quant); args.push('--quant-bits', String(o.quant.bits), '--quant-scheme', o.quant.scheme); }
   for (const f of o.extraDemos || []) args.push('--extra-demos', f);
   if (o.transitionWeight !== undefined) args.push('--transition-weight', String(o.transitionWeight));
+  return args;
+}
+
+// Spawn an engine; onLine gets each stdout line; resolves on exit 0.
+function runEngine(python, args, env, o, onLine, name) {
+  const { spawn } = require('child_process');
   return new Promise((resolve, reject) => {
-    const child = spawn(pythonPath(root), ['-W', 'ignore', ...args], { stdio: ['ignore', 'pipe', 'inherit'] });
+    const child = spawn(python, ['-W', 'ignore', ...args], { stdio: ['ignore', 'pipe', 'inherit'], env });
+    if (o.onSpawn) o.onSpawn(child);
     let buf = '';
     child.stdout.on('data', (d) => {
       buf += d;
@@ -773,12 +790,37 @@ function trainPython(binFile, outFile, o, root, onLine = () => {}) {
       while ((k = buf.indexOf('\n')) >= 0) { onLine(buf.slice(0, k)); buf = buf.slice(k + 1); }
     });
     child.on('error', reject);
-    child.on('exit', (code) => {
-      if (code !== 0) return reject(new Error(`bc_train.py exited with code ${code}`));
-      const r = JSON.parse(fs.readFileSync(outFile, 'utf8'));
-      resolve(r);
-    });
+    child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`${name} exited with code ${code}`))));
   });
+}
+
+// ---------------------------------------------------------------------------
+// MLX backend (trainer/bc_train_mlx.py; Apple GPU; research/plan-gpu-trainer.md)
+// ---------------------------------------------------------------------------
+// The interpreter with mlx: PYTHON_MLX, else <root>/.venv-mlx/bin/python (pyenv Python 3.14.8,
+// mlx 0.32.3, numpy 2.5.4). A worktree has no .venv-mlx of its own, so set PYTHON_MLX there.
+function mlxPythonPath(root) {
+  if (process.env.PYTHON_MLX) return process.env.PYTHON_MLX;
+  const venv = path.join(root, '.venv-mlx', 'bin', 'python');
+  if (fs.existsSync(venv)) return venv;
+  throw new Error(`--backend mlx needs ${venv} (research/plan-gpu-trainer.md Phase 0) or the PYTHON_MLX env var`);
+}
+
+// Train several models of ONE shape (o.hidden) at once on the GPU, one per o.seeds[k], into
+// outFiles[k]; o.snapshotDirs (optional) one per seed. Resolves to the results in seed order
+// ({ layers, params, log[, scales|k, transitions], engine }). onLine(k, line) gets each model's
+// epoch lines (k = index into o.seeds) and onLine(null, line) any other stdout line.
+function trainMlx(binFile, outFiles, o, root, onLine = () => {}) {
+  if (outFiles.length !== o.seeds.length) throw new Error('trainMlx: one output file per seed');
+  const args = [path.join(__dirname, 'bc_train_mlx.py'), ...engineArgs(binFile, o), '--seeds', o.seeds.join(','), '--out-files', outFiles.join(',')];
+  if (o.snapshotDirs) args.push('--snapshot-dirs', o.snapshotDirs.join(','));
+  const route = (line) => {
+    if (!line.startsWith('{')) return line && onLine(null, line);
+    const { model, ...row } = JSON.parse(line);
+    onLine(model, row);
+  };
+  return runEngine(mlxPythonPath(root), args, process.env, o, route, 'bc_train_mlx.py')
+    .then(() => outFiles.map(f => JSON.parse(fs.readFileSync(f, 'utf8'))));
 }
 
 // Write n x 3 logits as little-endian float64 for bc_train.py --teacher-logits.
@@ -803,7 +845,7 @@ function assembleBest({ layers, params, validation, coreHash, config }) {
 
 module.exports = {
   DEMOS_FORMAT, ROW, GEN_DEFAULTS, TRAIN_DEFAULTS, TEACHERS, resolveTeacher, actionLabel, isBoring, genEpisode, genSeed, studentFactory, transitionMask, generateDemos, resolveDemos, checkDemos,
-  loadDemos, sha256File, layerOffsets, createTrainer, classWeights, trainNode, pythonPath, trainPython, assembleBest,
+  loadDemos, sha256File, layerOffsets, createTrainer, classWeights, trainNode, pythonPath, trainPython, mlxPythonPath, trainMlx, assembleBest,
   teacherLogits, argmaxLabels, softTargets, QUANT_SCHEMES, quantMax, checkQuantOptions, pow2Exponent, quantizeInto, quantizeParams, checkQuantized, quantRecord,
   writeLogits, paramsSha256,
 };

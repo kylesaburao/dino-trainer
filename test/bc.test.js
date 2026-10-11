@@ -861,3 +861,102 @@ test('cli: release-fix flags are python-only, validated, and recorded in best.js
   assert.notStrictEqual(dz.status, 0);
   assert.match(dz.stderr + dz.stdout, /do not combine with --distill-from/);
 });
+
+test('bc-train-batch: each member equals bc-train --backend python byte for byte; own run dir, train.log, config.batchRun; bad flags refused', async (t) => {
+  const { dir } = await smallDemos();
+  const bad = [
+    [['--dir', path.join(tmp, 'x'), '--shapes', '4', '--seeds', '1', '--demos', dir], /--dir-pattern, not --dir/],
+    [['--dir-pattern', path.join(tmp, 'x-{seed}'), '--hidden', '4', '--seeds', '1', '--demos', dir], /not --hidden/],
+    [['--dir-pattern', path.join(tmp, 'x-{seed}'), '--shapes', '4/6', '--seeds', '1', '--demos', dir], /same dir/],
+    [['--dir-pattern', path.join(tmp, 'x-{width}-{seed}'), '--shapes', '4,6', '--seeds', '1', '--demos', dir], /not uniform/],
+    [['--dir-pattern', path.join(tmp, 'x-{hidden}-{seed}'), '--shapes', '4,y', '--seeds', '1', '--demos', dir], /bad hidden list/],
+    [['--dir-pattern', path.join(tmp, 'x-{hidden}-{seed}'), '--shapes', '4', '--seeds', '1', '--demos', dir, '--backend', 'node'], /must be python or mlx/],
+  ];
+  for (const [args, re] of bad) {
+    const r = cli('bc-train-batch', ...args);
+    assert.notStrictEqual(r.status, 0, args.join(' '));
+    assert.match(r.stderr + r.stdout, re);
+  }
+  if (!hasNumpy()) { t.skip(NO_NUMPY); return; }
+  const common = ['--demos', dir, '--epochs', '2', '--batch', '64', '--target', '50', '--workers', '1'];
+  const b = cli('bc-train-batch', '--dir-pattern', path.join(tmp, 'batch', 'd{depth}w{width}-s{seed}'), '--shapes', '4x2/6', '--seeds', '2-3', '--jobs', '3', '--snapshots', ...common);
+  assert.strictEqual(b.status, 0, b.stderr + b.stdout);
+  const runs = ['d2w4-s2', 'd2w4-s3', 'd1w6-s2', 'd1w6-s3'];
+  for (const [i, name] of runs.entries()) {
+    const d = path.join(tmp, 'batch', name);
+    assert.deepStrictEqual(fs.readdirSync(d).sort(), ['bc-metrics.jsonl', 'best.json', 'snapshots', 'train.log']);
+    const best = JSON.parse(fs.readFileSync(path.join(d, 'best.json'), 'utf8'));
+    assert.strictEqual(best.config.batch, 64);   // the minibatch size, unchanged
+    assert.strictEqual(best.config.trainer, 'trainer/cli.js bc-train-batch --backend python');
+    assert.deepStrictEqual({ ...best.config.batchRun, id: null }, { id: null, index: i, size: 4, backend: 'python', jobs: 3, blasThreads: 1 });
+    const log = fs.readFileSync(path.join(d, 'train.log'), 'utf8');
+    assert.match(log.split('\n')[0], new RegExp(`bc-train: dir=\\S+ backend=python layers=${best.layers.join('-')} epochs 2 .* batch=${i + 1}/4 jobs=3$`));
+    assert.match(log, /validation: median/);
+  }
+  // The same model through bc-train: identical params, validation and metrics (seconds aside).
+  const s = path.join(tmp, 'batch-single');
+  const r = cli('bc-train', '--dir', s, '--hidden', '4,4', '--seed', '3', '--backend', 'python', '--snapshots', ...common);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const one = (d) => {
+    const best = JSON.parse(fs.readFileSync(path.join(d, 'best.json'), 'utf8'));
+    return { params: best.params, validation: best.validation, final: best.config.final,
+      metrics: fs.readFileSync(path.join(d, 'bc-metrics.jsonl'), 'utf8').replace(/"seconds":[0-9.e-]+/g, ''),
+      snap: fs.readFileSync(path.join(d, 'snapshots', 'epoch-02.json'), 'utf8') };
+  };
+  assert.deepStrictEqual(one(path.join(tmp, 'batch', 'd2w4-s3')), one(s));
+  // A dir with best.json stops the whole batch before any training, unless --overwrite.
+  const again = cli('bc-train-batch', '--dir-pattern', path.join(tmp, 'batch', 'd{depth}w{width}-s{seed}'), '--shapes', '6', '--seeds', '3-4', ...common);
+  assert.notStrictEqual(again.status, 0);
+  assert.match(again.stderr + again.stdout, /best\.json exists; pass --overwrite/);
+  assert.ok(!fs.existsSync(path.join(tmp, 'batch', 'd1w6-s4')));
+});
+
+// The MLX engine (Apple GPU) needs an interpreter with mlx: PYTHON_MLX or <root>/.venv-mlx.
+const hasMlx = () => {
+  let py;
+  try { py = bc.mlxPythonPath(ROOT); } catch (e) { return false; }
+  const probe = spawnSync(py, ['-c', 'import mlx.core'], { encoding: 'utf8' });
+  return !probe.error && probe.status === 0;
+};
+const NO_MLX = 'mlx backend not tested: no interpreter with mlx (set PYTHON_MLX, e.g. to the repo\'s .venv-mlx/bin/python)';
+
+// Compares against tmp/batch-single, the numpy run written by the bc-train-batch test above
+// (tests in a file run in order), so run both together (e.g. --test-name-pattern 'bc-train-batch|mlx').
+test('mlx backend: bc-train and bc-train-batch match the numpy backend to float32 noise, same tier A; engine and batchRun recorded (skipped without mlx)', async (t) => {
+  const { dir } = await smallDemos();
+  const jm = cli('bc-train-batch', '--dir-pattern', path.join(tmp, 'mx-x-{seed}'), '--shapes', '4', '--seeds', '1', '--demos', dir, '--backend', 'mlx', '--jobs', '2');
+  assert.notStrictEqual(jm.status, 0);
+  if (!hasMlx() || !hasNumpy()) { t.skip(hasMlx() ? NO_NUMPY : NO_MLX); return; }
+  assert.match(jm.stderr + jm.stdout, /--jobs is for --backend python/);
+  const common = ['--demos', dir, '--epochs', '2', '--batch', '64', '--target', '50', '--workers', '1'];
+  const b = cli('bc-train-batch', '--backend', 'mlx', '--dir-pattern', path.join(tmp, 'mxb', 'd{depth}w{width}-s{seed}'), '--shapes', '4x2/6', '--seeds', '2-3', '--snapshots', ...common);
+  assert.strictEqual(b.status, 0, b.stderr + b.stdout);
+  const s = path.join(tmp, 'mx-single');
+  assert.strictEqual(cli('bc-train', '--dir', s, '--hidden', '4,4', '--seed', '3', '--backend', 'mlx', ...common).status, 0);
+  const load = (d) => JSON.parse(fs.readFileSync(path.join(d, 'best.json'), 'utf8'));
+  const np = load(path.join(tmp, 'batch-single'));   // the numpy run of the same model (bc-train-batch test above)
+  for (const m of [load(path.join(tmp, 'mxb', 'd2w4-s3')), load(s)]) {
+    assert.strictEqual(m.config.backend, 'mlx');
+    assert.strictEqual(m.config.engine.name, 'mlx');
+    assert.strictEqual(m.config.engine.tf32, false);
+    assert.strictEqual(m.params.length, np.params.length);
+    const d = Math.max(...m.params.map((v, i) => Math.abs(v - np.params[i])));
+    assert.ok(d < 1e-4, `max |params - numpy params| ${d}`);
+    assert.deepStrictEqual(m.validation, np.validation);
+  }
+  const g = load(path.join(tmp, 'mxb', 'd1w6-s2')).config;
+  assert.deepStrictEqual({ ...g.batchRun, id: null }, { id: null, index: 2, size: 4, backend: 'mlx', group: '6', groupSize: 2, groupIndex: 0 });
+  assert.strictEqual(g.batch, 64);
+  assert.ok(fs.existsSync(path.join(tmp, 'mxb', 'd1w6-s2', 'snapshots', 'epoch-02.json')));
+  assert.match(fs.readFileSync(path.join(tmp, 'mxb', 'd1w6-s2', 'train.log'), 'utf8').split('\n')[0], /backend=mlx layers=44-6-3 .* batch=3\/4$/);
+  // Default backend: mlx when an mlx interpreter is configured, python with --jobs or without one
+  // (each run below stops at the existing best.json, after logging its choice).
+  const pat = ['--dir-pattern', path.join(tmp, 'mxb', 'd{depth}w{width}-s{seed}'), '--shapes', '6', '--seeds', '2', ...common];
+  assert.match(cli('bc-train-batch', ...pat).stdout, /--backend mlx \(default: mlx interpreter found\)/);
+  assert.match(cli('bc-train-batch', ...pat, '--jobs', '2').stdout, /--backend python \(default: mlx interpreter found, but --jobs given\)/);
+  if (!fs.existsSync(path.join(ROOT, '.venv-mlx'))) {
+    const env = { ...process.env }; delete env.PYTHON_MLX;
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'trainer', 'cli.js'), 'bc-train-batch', ...pat], { encoding: 'utf8', env });
+    assert.match(r.stdout, /--backend python \(default: no \.venv-mlx or PYTHON_MLX\)/);
+  }
+});

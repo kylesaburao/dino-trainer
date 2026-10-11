@@ -46,6 +46,24 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend pytho
 ```
 
 - `--backend python` needs `.venv` with numpy (`.venv/bin/python`); the `PYTHON` env var overrides the interpreter. A worktree has no `.venv` of its own, so set `PYTHON` there.
+- `--backend mlx` (Apple GPU, `trainer/bc_train_mlx.py`): `bc-train` and `bc-train-batch` both accept it.
+  - It needs `.venv-mlx`: pyenv Python 3.14.8, `mlx==0.32.3`, `numpy==2.5.4`. The `PYTHON_MLX` env var overrides the interpreter; a worktree has no `.venv-mlx`, so set `PYTHON_MLX` there.
+  - It runs the python backend's algorithm with the same init and batch order (host-side RNG in `trainer/bc_common.py`). Its params match the numpy backend's to float32 noise, about 1e-7 after an epoch, and it is bitwise deterministic run to run.
+  - It sets `MLX_ENABLE_TF32=0`: MLX's GPU float32 matmul defaults to TF32, which made gradients 1,000× noisier.
+  - Every python-only flag works with it. `config.engine` records the version, the device and `tf32`.
+- Many models at once: `node trainer/cli.js bc-train-batch --dir-pattern 'runs/<group>/v2-bc-<teacher>-d{depth}w{width}-s{seed}' --shapes 32,32/8x2 --seeds 1-10 --demos <dir> [--backend python [--jobs 6] | mlx]`. Each model gets its own ordinary run dir.
+  - The default backend is `mlx` when an mlx interpreter is configured (`.venv-mlx` or `PYTHON_MLX`) and `--jobs` isn't given; otherwise `python`. This was the user's choice on 2026-10-11. The command logs which one it picked.
+  - `--backend python` runs `--jobs` `bc_train.py` processes at once, each with 1 BLAS thread. Each member's params are byte-identical to `bc-train --backend python` with the same shape and seed (checked on the full demos, 10/10).
+  - `--backend mlx` trains each shape's seeds in one GPU process (groups of at most 40).
+  - Tier A runs on one shared worker pool, one model at a time; with mlx, that overlaps the next group's training.
+  - The dashboard lists every member while it waits, trains and validates (`config.batchRun`; `config.batch` stays the minibatch size).
+  - Measured for 10 seeds of 2×32 on the M5 Pro (`research/gpu-trainer-results.md`):
+    - sequential `bc-train`: 201 s;
+    - `--jobs 6`: 91 s;
+    - mlx: 84 s, of which training is 21 s;
+    - mlx with 40 seeds: training 59 s.
+  - Tier A is now the bottleneck. Plan: `research/plan-gpu-trainer.md`.
+  - Every other `bc-train` option is shared by the batch. The numpy step lives in `trainer/bc_train.py`; host-side parts shared by both python engines are in `trainer/bc_common.py`, which must stay Python 3.9-compatible.
 - `bc-gen` writes `demos.bin` (gitignored) and `demos.json`; `bc-train` writes `best.json` and `bc-metrics.jsonl` (per-epoch loss and recall, not `metrics.jsonl`). `eval` and `export` then work as for an ES run.
 - `bc-gen --teacher jump|duck` picks the teacher (default `jump` = `createSolver`, byte-identical demos to before; `duck` = `createDuckSolver`, label 2 = down key). The manifest records `teacherName`, `bc-train` copies it into the `best.json` config, and recall gains a `duck` key only when duck rows exist.
 - `bc-train` refuses demos from another core hash unless `--force`. The flags are in the `trainer/cli.js` header.

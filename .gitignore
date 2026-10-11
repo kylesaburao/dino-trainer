@@ -17,3 +17,6 @@ runs/exp-*/
 runs/v2-h16/
 # Local Python analysis environment.
 .venv/
+# MLX engine environment (pyenv Python 3.14.8; research/plan-gpu-trainer.md §3.1).
+.venv-mlx/
+__pycache__/
