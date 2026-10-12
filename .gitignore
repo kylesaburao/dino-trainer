@@ -19,4 +19,6 @@ runs/v2-h16/
 .venv/
 # MLX engine environment (pyenv Python 3.14.8; research/plan-gpu-trainer.md §3.1).
 .venv-mlx/
+# Venvs moved aside by ./setup.sh --recreate (<dir>.bak-<UTC timestamp>).
+.venv*.bak-*/
 __pycache__/
