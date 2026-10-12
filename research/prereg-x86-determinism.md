@@ -111,3 +111,13 @@ A node upgrade on either machine (rerun the probe on both), a `core.js`/`policy.
   - no cross-architecture resume.
 - The node pins in `test/bc.test.js` are now checked only on darwin arm64, like the python pins. The one-hot distillation test compares against plain training on the same machine instead of the pin, so it holds on any architecture.
 - Not done: replacing `Math.log10`, `Math.pow` and `Math.tanh` in `core.js` and `policy.js` with pure-JS versions that are bit-exact on any CPU. It would change the core hash and invalidate every golden, demo set and model. Reopen it only if bit-identity across architectures becomes a requirement.
+
+## 11. Follow-up (2026-10-12): the shipped model on x86, replicate
+
+**Decision informed.** Whether x86 players, most browser users, get the reliability the Mac certified. The Mac's result for the shipped `model.js` (`v2-bc-duck-d2w8-s1`) was 150/150 on held-out offsets 325–474 (`research/prereg-teacher-duck-cert.md`).
+
+**Prediction.** 150/150. Any failure would be replayed on the Mac to see whether it is x86-specific. Under §10 this run is a replicate, not a reproduction.
+
+**Run.** desktop-1 (Linux x64 WSL2, Ryzen 7 9700X, node v26.9.0), at `7c398cc` in a clean detached worktree: `node trainer/cli.js assess --model model.js --target 1000000 --seeds 150 --seed-offset 325`, on the wasm kernel (the default).
+
+**Result.** **150/150** to 1M, with 95% CP [0.9757, 1.0000]. Wall time was 34.2 s on 16 threads (1,536% CPU, max RSS 521 MB). The x86 game differs from the Mac's in rare last bits, and that did not cost the shipped model any game on these seeds.
