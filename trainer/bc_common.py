@@ -43,8 +43,8 @@ class Data:
         if a.extra_demos:
             # --extra-demos (research/prereg-teacher-duck-release-fix.md §4.1): rows appended in order.
             D = np.concatenate([D] + [np.fromfile(f, dtype=np.float32).reshape(-1, ROW + 2) for f in a.extra_demos])
-        cols = list(range(ROW))
-        X = D[:, cols].astype(np.float32); y = D[:, ROW].astype(np.int64); sw = D[:, ROW + 1].astype(np.float32)
+        # C order: minibatch gathers X[idx] read whole rows (a column slice would be strided).
+        X = np.ascontiguousarray(D[:, :ROW]); y = D[:, ROW].astype(np.int64); sw = D[:, ROW + 1].astype(np.float32)
         del D
         N = len(y); counts = np.array([(sw * (y == c)).sum() for c in range(3)])
         cw = np.where(counts > 0, np.sqrt(counts.sum() / (2 * np.maximum(counts, 1))), 0.0)

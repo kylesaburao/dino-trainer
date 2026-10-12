@@ -5,7 +5,7 @@
 //   node trainer/cli.js train  [--target 10000] [--resume [--force]] [--workers N]
 //                              [--time-budget MIN] [--generations N] [--dir runs/main] ...
 //   node trainer/cli.js assess [--dir runs/main] [--which best|current] [--model model.js] [--target N]
-//                              [--seeds 25] [--seed-offset 0] [--wasm] [--game v1|v2|v3]
+//                              [--seeds 25] [--seed-offset 0] [--no-wasm] [--game v1|v2|v3]
 //             held-out assessment; appends to <run>/assess.jsonl (older runs also have
 //             evals.jsonl, from before the rename; readers merge both). `eval` is a
 //             deprecated alias that prints a notice.
@@ -28,7 +28,7 @@
 //                              [--teacher jump|duck] [--score-window A-B] [--student <best.json>]
 //   node trainer/cli.js bc-train --dir runs/<name> --hidden 32,32 [--backend node|python|mlx] [--epochs 15]
 //                              [--batch 1024] [--lr 2e-3] [--seed 1] [--demos <dir or demos.json>]
-//                              [--target 1000000] [--workers N] [--wasm] [--force] [--overwrite] [--snapshots]
+//                              [--target 1000000] [--workers N] [--no-wasm] [--force] [--overwrite] [--snapshots]
 //                              [--distill-from <best.json> [--distill-mode soft|hard] [--tau 1] [--alpha 0]]
 //                              [--quant-bits N [--quant-scheme row|layer|pow2]]
 //                              [--extra-demos <dir>[,<dir>...]] [--transition-weight W]
@@ -36,7 +36,7 @@
 //                              --shapes 32,32/8x2 --seeds 1-10 --demos <dir or demos.json> [--backend python [--jobs 6] | mlx]
 //                              [every bc-train option except --dir, --hidden, --seed]
 //   node trainer/cli.js bc-quantize --from <best.json> --dir runs/<name> --quant-bits N [--quant-scheme row|layer|pow2]  (refuses another core hash unless --force)
-//                              [--target 1000000] [--workers N] [--wasm] [--overwrite]
+//                              [--target 1000000] [--workers N] [--no-wasm] [--overwrite]
 //
 // Behaviour cloning of test/solver.js (trainer/bc.js; supervised, no ES):
 //   bc-gen    plays the teacher on each seed (inclusive range) from each start level, for
@@ -210,8 +210,11 @@
 //   --wasm                run the policy network on a WebAssembly SIMD kernel (trainer/wasm-net.js)
 //                         in the training, validation and held-out workers. Decisions are
 //                         bit-identical to policy.js (test/wasm-net.test.js), so results do not
-//                         change; fails at startup if the runtime has no wasm SIMD. Also
-//                         accepted by assess and bench. The browser always uses policy.js.
+//                         change; fails at startup if the runtime has no wasm SIMD. Opt-in
+//                         for train (and session's training) and bench; finish's assessment
+//                         uses policy.js. On by default for assess and for the validation in
+//                         bc-train, bc-train-batch and bc-quantize; --no-wasm runs those on
+//                         policy.js. The browser always uses policy.js.
 // Boolean options can be turned off on --resume with --no-<option>. Everything except
 // --hidden, --action-repeat and --game can change on --resume.
 //
@@ -791,8 +794,18 @@ async function evalHeldOut(opts, targetOverride, wasm = false, gameOverride) {
   return record;
 }
 
+// assess and BC validation (bc-train, bc-train-batch, bc-quantize) run the network on the wasm
+// kernel unless --no-wasm (same scores, faster). ES train/session/finish and bench keep it
+// opt-in: DEFAULTS.wasm stays false, because ES checkpoints record it. Fails at startup
+// without wasm SIMD; no silent fallback.
+function wasmByDefault(cli) {
+  const wasm = cli.wasm !== false;
+  if (wasm) require('./wasm-net.js').assertAvailable({ defaultOn: true });
+  return wasm;
+}
+
 async function evalCmd({ config: cli, opts }) {
-  const record = await evalHeldOut(opts, cli.target, !!cli.wasm, cli.gameVersion);
+  const record = await evalHeldOut(opts, cli.target, wasmByDefault(cli), cli.gameVersion);
   const ci = record.passCI95;
   const rules = record.gameVersion && record.gameVersion !== record.modelGameVersion ? `, ${record.modelGameVersion} model on rules ${record.gameVersion}` : '';
   console.log(`held-out assessment (${record.seeds} seeds${record.seedOffset ? ` from index ${record.seedOffset}` : ''}, cap ${record.target}${rules}) of ${record.source}:`);
@@ -1087,7 +1100,7 @@ function prepareBcTrain(cli, opts, backend, say) {
   if (opts.extraDemos !== undefined && !extras.length) throw new Error('--extra-demos needs at least one demos dir');
   const gameVersion = demos.manifest.gameVersion;
   if (dz && dz.model.gameVersion && dz.model.gameVersion !== gameVersion) throw new Error(`--distill-from: teacher plays ${dz.model.gameVersion}, demos are ${gameVersion}`);
-  return { bc, dz, quant, transitionWeight, o, target, hash, demos, sha, extras, gameVersion, wasm: !!cli.wasm };
+  return { bc, dz, quant, transitionWeight, o, target, hash, demos, sha, extras, gameVersion, wasm: wasmByDefault(cli) };
 }
 
 const checkHidden = (hidden) => {
@@ -1442,6 +1455,7 @@ async function bcQuantizeCmd({ config: cli, opts }) {
   if (!opts.from) throw new Error('bc-quantize needs --from <best.json>');
   const quant = parseQuant(opts, bc);
   if (!quant) throw new Error('bc-quantize needs --quant-bits N');
+  const wasm = wasmByDefault(cli);
   const { abs, model: src } = loadTrainedModel(opts.from, '--from');
   const hash = coreHash();
   if (src.coreHash && src.coreHash !== hash) {
@@ -1466,7 +1480,7 @@ async function bcQuantizeCmd({ config: cli, opts }) {
   const workers = Number(opts.workers) || defaultWorkers();
   const pool = createPool(Math.min(workers, valSeedList.length));
   log(`validation: ${valSeedList.length} seeds to ${target} (${gameVersion})`);
-  const scores = await scoreSeeds(pool, model, valSeedList, target, !!cli.wasm);
+  const scores = await scoreSeeds(pool, model, valSeedList, target, wasm);
   await pool.terminate();
   const validation = valSummary(scores, target);
   const sc = src.config || {};
