@@ -196,34 +196,43 @@ stale_shebangs() { # <venv dir>: prints the names, space-separated
   printf '%s\n' "${out# }"
 }
 
+# The fix hint for a problem; for an interpreter from PYTHON/PYTHON_MLX, setup.sh is not the fix.
+FIX_ENV=
+fix() {
+  if [ -n "$FIX_ENV" ]; then printf '(fix: point %s at a venv set up by ./setup.sh, e.g. the main checkout'"'"'s, or unset it)' "$FIX_ENV"
+  else printf '(fix: %s)' "$1"; fi
+}
+
 # check_env <numpy|mlx> <python> <venv dir or empty>
 # Prints findings and sets CHK_STATE: ok | missing (no venv) | fixable (pip or packages; repaired in
 # place by setup) | broken (interpreter unusable; needs --recreate or another interpreter).
 check_env() {
-  local kind=$1 py=$2 dir=$3 req lo hi out ver impl mach ft exe major rest minor pipv pipver stale
-  CUR_N=0; CUR_TEXT=; CHK_STATE=ok
+  local kind=$1 py=$2 dir=$3 req lo hi out ver impl mach ft exe major rest minor pipv pipver stale line
+  CUR_N=0; CUR_TEXT=; CHK_STATE=ok; FIX_ENV=
+  if [ -z "$dir" ]; then if [ "$kind" = numpy ]; then FIX_ENV=PYTHON; else FIX_ENV=PYTHON_MLX; fi; fi
   if [ "$kind" = numpy ]; then req=$REQ_NUMPY; lo=$NP_LO; hi=$NP_HI; else req=$REQ_MLX; lo=$MLX_LO; hi=$MLX_HI; fi
   if [ -n "$dir" ] && [ ! -e "$dir" ]; then
-    problem "no $kind venv at $dir (fix: ./setup.sh)"; CHK_STATE=missing; return 0
+    if [ "$MODE" = check ]; then problem "no $kind venv at $dir $(fix ./setup.sh)"; else info "no $kind venv at $dir yet"; fi
+    CHK_STATE=missing; return 0
   fi
   if [ -n "$dir" ] && [ ! -e "$py" ] && [ ! -L "$py" ]; then
     problem "$dir exists but has no bin/python, so it is not a venv (fix: ./setup.sh --recreate moves it aside)"
     CHK_STATE=broken; return 0
   fi
   if ! out=$("$py" -I -B -c "$PY_INFO" 2>&1); then
-    problem "$py does not run (its base interpreter was moved or removed?): $(printf '%s\n' "$out" | head -n 1) (fix: ./setup.sh --recreate)"
+    problem "$py does not run (its base interpreter was moved or removed?): $(printf '%s\n' "$out" | head -n 1) $(fix './setup.sh --recreate')"
     CHK_STATE=broken; return 0
   fi
   read -r ver impl mach ft exe <<<"$out"
   major=${ver%%.*}; rest=${ver#*.}; minor=${rest%%.*}
   info "interpreter: $impl $ver ($mach) $py"
   if [ "$impl" != CPython ] || [ "$major" != 3 ] || [ "$minor" -lt "$lo" ] || [ "$minor" -gt "$hi" ]; then
-    problem "$py is $impl $ver; the $kind venv needs CPython 3.$lo-3.$hi, the versions its pinned wheels exist for (fix: ./setup.sh --recreate)"
+    problem "$py is $impl $ver; the $kind venv needs CPython 3.$lo-3.$hi, the versions its pinned wheels exist for $(fix './setup.sh --recreate')"
     CHK_STATE=broken; return 0
   fi
   if [ "$mach" != "$ARCH" ]; then
     if [ "$kind" = mlx ]; then
-      problem "$py is a $mach interpreter on $ARCH hardware; mlx needs a native arm64 Python (fix: ./setup.sh --recreate --python-mlx <arm64 python>)"
+      problem "$py is a $mach interpreter on $ARCH hardware; mlx needs a native arm64 Python $(fix './setup.sh --recreate --python-mlx <arm64 python>')"
       CHK_STATE=broken; return 0
     fi
     warn "$py is a $mach interpreter on $ARCH hardware (Rosetta?); it works, but it is not the reference engine"
@@ -237,17 +246,17 @@ check_env() {
   [ "$ft" = 0 ] || warn "$py is a free-threaded build; it works, but it is not the reference engine"
 
   if ! pipv=$("$py" -I -B -m pip --version --disable-pip-version-check 2>/dev/null); then
-    problem "pip is not available to $py (fix: ./setup.sh)"; CHK_STATE=fixable
+    problem "pip is not available to $py $(fix ./setup.sh)"; CHK_STATE=fixable
   else
     pipver=$(printf '%s\n' "$pipv" | awk '{print $2}')
     if ver_ge "$pipver" "$PIP_MIN"; then info "pip $pipver"
-    else problem "pip $pipver is older than $PIP_MIN, the first pip that knows the macOS 11+ arm64 and PEP 600 manylinux wheel tags (fix: ./setup.sh)"; CHK_STATE=fixable; fi
+    else problem "pip $pipver is older than $PIP_MIN, the first pip that knows the macOS 11+ arm64 and PEP 600 manylinux wheel tags $(fix ./setup.sh)"; CHK_STATE=fixable; fi
   fi
 
   if ! out=$("$py" -I -B -c "$PY_PINS" "$req" 2>&1); then
-    problem "could not read the installed versions: $(printf '%s\n' "$out" | tail -n 1) (fix: ./setup.sh)"; CHK_STATE=fixable
+    problem "could not read the installed versions: $(printf '%s\n' "$out" | tail -n 1) $(fix ./setup.sh)"; CHK_STATE=fixable
   elif [ -n "$out" ]; then
-    while IFS= read -r line; do problem "$line (fix: ./setup.sh)"; done <<<"$out"
+    while IFS= read -r line; do problem "$line $(fix ./setup.sh)"; done <<<"$out"
     CHK_STATE=fixable
   else
     info "pins match ${req##*/}"
@@ -258,14 +267,14 @@ check_env() {
           warn "numpy links ${out#* }, not Apple Accelerate (needs macOS 14+); test/bc.test.js's python param pins assume Accelerate"
         fi
       else
-        problem "import numpy fails: $(printf '%s\n' "$out" | tail -n 1) (fix: ./setup.sh --recreate)"; CHK_STATE=fixable
+        problem "import numpy fails: $(printf '%s\n' "$out" | tail -n 1) $(fix './setup.sh --recreate')"; CHK_STATE=fixable
       fi
     else
       if out=$("$py" -I -B -c "$PY_MLX" 2>&1); then
         info "mlx ${out%% *}, default device ${out#* }"
         case $out in *gpu*) ;; *) warn "mlx's default device is not the GPU" ;; esac
       else
-        problem "import mlx.core fails: $(printf '%s\n' "$out" | tail -n 1) (fix: ./setup.sh --recreate)"; CHK_STATE=fixable
+        problem "import mlx.core fails: $(printf '%s\n' "$out" | tail -n 1) $(fix './setup.sh --recreate')"; CHK_STATE=fixable
       fi
     fi
   fi
@@ -283,18 +292,22 @@ check_env() {
 
 # ---- setup -----------------------------------------------------------------------------------
 # try_base <kind> <candidate>: sets BASE/BASE_VER when the candidate runs and fits the kind's range.
-REJECTED=
+REJECTED=; LAST_WHY=
 try_base() {
   local kind=$1 cand=$2 out ver impl mach ft exe rest minor lo hi
   if [ "$kind" = numpy ]; then lo=$NP_LO; hi=$NP_HI; else lo=$MLX_LO; hi=$MLX_HI; fi
+  LAST_WHY="not found"
   command -v "$cand" >/dev/null 2>&1 || return 1
-  out=$("$cand" -I -B -c "$PY_INFO" 2>/dev/null) || { REJECTED="$REJECTED; $cand (does not run)"; return 1; }
+  LAST_WHY="does not run"
+  out=$("$cand" -I -B -c "$PY_INFO" 2>/dev/null) || { REJECTED="$REJECTED; $cand ($LAST_WHY)"; return 1; }
   read -r ver impl mach ft exe <<<"$out"
   rest=${ver#*.}; minor=${rest%%.*}
+  LAST_WHY="$impl $ver"
   if [ "$impl" != CPython ] || [ "${ver%%.*}" != 3 ] || [ "$minor" -lt "$lo" ] || [ "$minor" -gt "$hi" ]; then
-    REJECTED="$REJECTED; $cand ($impl $ver)"; return 1
+    REJECTED="$REJECTED; $cand ($LAST_WHY)"; return 1
   fi
-  if [ "$kind" = mlx ] && [ "$mach" != arm64 ]; then REJECTED="$REJECTED; $cand ($mach, not arm64)"; return 1; fi
+  LAST_WHY="$mach, not arm64"
+  if [ "$kind" = mlx ] && [ "$mach" != arm64 ]; then REJECTED="$REJECTED; $cand ($LAST_WHY)"; return 1; fi
   BASE=$exe; BASE_VER=$ver
 }
 
@@ -304,7 +317,7 @@ find_base() {
   BASE=; BASE_VER=; REJECTED=
   if [ "$kind" = numpy ]; then
     if [ -n "$BASE_PY" ]; then
-      try_base numpy "$BASE_PY" || die "refusing --python $BASE_PY:${REJECTED#;}${REJECTED:+.} The numpy venv needs CPython 3.$NP_LO-3.$NP_HI (numpy 2.0.2 publishes wheels for cp39-cp312 only)"
+      try_base numpy "$BASE_PY" || die "refusing --python $BASE_PY ($LAST_WHY): the numpy venv needs CPython 3.$NP_LO-3.$NP_HI (numpy 2.0.2 publishes wheels for cp39-cp312 only)"
       return 0
     fi
     for c in python3.9 python3.10 python3.11 python3.12; do try_base numpy "$c" && return 0; done
@@ -314,7 +327,7 @@ find_base() {
     die "no CPython 3.$NP_LO-3.$NP_HI found for the numpy venv (rejected:${REJECTED#;}). Install one (macOS: xcode-select --install gives 3.9; Debian/Ubuntu: apt install python3 python3-venv), or pass --python PATH"
   fi
   if [ -n "$BASE_PY_MLX" ]; then
-    try_base mlx "$BASE_PY_MLX" || die "refusing --python-mlx $BASE_PY_MLX:${REJECTED#;}${REJECTED:+.} The mlx venv needs an arm64 CPython 3.$MLX_LO-3.$MLX_HI (mlx 0.32.3 wheels: cp310-cp314; numpy 2.5.4: >= 3.12)"
+    try_base mlx "$BASE_PY_MLX" || die "refusing --python-mlx $BASE_PY_MLX ($LAST_WHY): the mlx venv needs an arm64 CPython 3.$MLX_LO-3.$MLX_HI (mlx 0.32.3 wheels: cp310-cp314; numpy 2.5.4: >= 3.12)"
     return 0
   fi
   if command -v pyenv >/dev/null 2>&1; then
@@ -403,6 +416,12 @@ say "setup.sh ($MODE) on $PLAT: $WHAT"
 if [ "$MLX_OK" = 0 ] && [ "$MLX_ONLY" = 0 ]; then note "skipping the mlx venv: $MLX_WHY. The numpy backend covers everything."; fi
 if [ "$DO_NUMPY" = 1 ] && [ "$OS/$ARCH" != Darwin/arm64 ]; then
   note "numpy backend results are recorded on macOS arm64 (numpy 2.0.2 + Accelerate); with OpenBLAS here they are not expected to be bit-identical, and test/bc.test.js skips its python param pins on this platform"
+fi
+
+# A git worktree's .git is a file naming the main checkout. Its venvs belong there, not here.
+if [ -f "$ROOT/.git" ] && { [ "$DO_NUMPY$NP_DIR" = "1$ROOT/.venv" ] || [ "$DO_MLX$MLX_DIR_T" = "1$ROOT/.venv-mlx" ]; }; then
+  MAIN=$(sed -n 's|^gitdir: \(.*\)/\.git/worktrees/.*|\1|p' "$ROOT/.git" 2>/dev/null || true)
+  note "this is a git worktree; rather than new venvs here, use the main checkout's: export PYTHON=${MAIN:-<main checkout>}/.venv/bin/python PYTHON_MLX=${MAIN:-<main checkout>}/.venv-mlx/bin/python, then ./setup.sh --check"
 fi
 
 if [ "$DO_NUMPY" = 1 ]; then
