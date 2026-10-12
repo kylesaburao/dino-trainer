@@ -16,7 +16,8 @@
 //     the new rows are allowed (new metric columns); fields only in the old rows are a difference.
 //   - checkpoint.json: theta, adam, rngState, best, heldOut, lastValidated, generation,
 //     reason, sigma, stallMult, annealedAt, lastValMin, window, layers, coreHash; config on
-//     the keys present in both (new config keys are listed, not compared).
+//     the keys present in both (new config keys are listed, not compared; the runtime key
+//     wasm, the network kernel, is skipped: RUNTIME_CONFIG).
 //   - best.json: everything except config, savedAt and timestamps; coreHash on its own line.
 // Every compared scalar is counted. Prints per scenario `IDENTICAL (n values)` or the first
 // difference, then an overall verdict; exits 0 only if everything is identical.
@@ -65,6 +66,11 @@ const METRIC_SKIP = new Set(['time', 'genMs', 'fps', 'cumulativeMs']);
 const CKPT_FIELDS = ['theta', 'adam', 'rngState', 'best', 'heldOut', 'lastValidated', 'generation', 'reason', 'sigma',
   'stallMult', 'annealedAt', 'lastValMin', 'window', 'layers', 'coreHash'];
 const BEST_SKIP = new Set(['config', 'savedAt', 'timestamps', 'coreHash']);
+// Checkpoint config keys that are runtime choices, not training settings: neither compared
+// nor required in both. wasm is the network kernel (wasm-net.js vs policy.js), whose decisions
+// are bit-identical (test/wasm-net.test.js); trees before 2026-10-12 record wasm: false, later
+// ones run the kernel by default and do not record it.
+const RUNTIME_CONFIG = new Set(['wasm']);
 
 function parseArgs(argv) {
   const out = { trees: [], workers: 4, keep: false, only: null, allowBusy: false };
@@ -179,10 +185,13 @@ function compareRun(oldDir, newDir, phaseLabel) {
   }
   const newConfig = [];
   for (const k of Object.keys(cn.config)) {
+    if (RUNTIME_CONFIG.has(k)) continue;
     if (k in co.config) c.eq(`${where} config.${k}`, co.config[k], cn.config[k]);
     else newConfig.push(`${k}=${show(cn.config[k])}`);
   }
-  const goneConfig = Object.keys(co.config).filter(k => !(k in cn.config));
+  const runtime = [...RUNTIME_CONFIG].filter(k => co.config[k] !== cn.config[k]).map(k => `${k} ${show(co.config[k])} -> ${show(cn.config[k])}`);
+  if (runtime.length) notes.push(`runtime config (not compared): ${runtime.join(', ')}`);
+  const goneConfig = Object.keys(co.config).filter(k => !(k in cn.config) && !RUNTIME_CONFIG.has(k));
   if (goneConfig.length) throw new Diff(`${where} config: keys missing in new: ${goneConfig.join(', ')}`);
   if (newConfig.length) notes.push(`new config keys (ignored): ${newConfig.join(', ')}`);
 

@@ -2,7 +2,7 @@
 'use strict';
 // Dino trainer CLI (plain Node, no npm dependencies).
 //
-//   node trainer/cli.js train  [--target 10000] [--resume [--force]] [--workers N]
+//   node trainer/cli.js train  [--target 10000] [--resume [--force]] [--workers N] [--no-wasm]
 //                              [--time-budget MIN] [--generations N] [--dir runs/main] ...
 //   node trainer/cli.js assess [--dir runs/main] [--which best|current] [--model model.js] [--target N]
 //                              [--seeds 25] [--seed-offset 0] [--no-wasm] [--game v1|v2|v3]
@@ -11,7 +11,7 @@
 //             deprecated alias that prints a notice.
 //             --game plays those rules instead of the model's own gameVersion (a cross-rules
 //             assessment, e.g. a v2 model on rules v3: it warns, and the record notes both).
-//   node trainer/cli.js bench  [--seconds 3] [--workers N] [--hidden 16] [--wasm]
+//   node trainer/cli.js bench  [--seconds 3] [--workers N] [--hidden 16] [--no-wasm]
 //   node trainer/cli.js export [--dir runs/main] [--which best|current] [--out model.js]
 //                              (also writes model.css next to it: the same weights for index-css.html)
 //   node trainer/cli.js export-css [--model model.js]   regenerate model.css from an existing model.js
@@ -207,14 +207,16 @@
 //   --pair-episodes       each antithetic pair plays its own episode seeds (and starts);
 //                         gradient weights are pair fitness differences / std (ARS V1)
 // Speed:
-//   --wasm                run the policy network on a WebAssembly SIMD kernel (trainer/wasm-net.js)
-//                         in the training, validation and held-out workers. Decisions are
-//                         bit-identical to policy.js (test/wasm-net.test.js), so results do not
-//                         change; fails at startup if the runtime has no wasm SIMD. Opt-in
-//                         for train (and session's training) and bench; finish's assessment
-//                         uses policy.js. On by default for assess and for the validation in
-//                         bc-train, bc-train-batch and bc-quantize; --no-wasm runs those on
-//                         policy.js. The browser always uses policy.js.
+//   --no-wasm             run the policy network on policy.js instead of the default WebAssembly
+//                         SIMD kernel (trainer/wasm-net.js), which every command that plays it
+//                         uses: train, assess, bench, finish, session, and the validation in
+//                         bc-train, bc-train-batch and bc-quantize. Decisions are bit-identical
+//                         to policy.js (test/wasm-net.test.js), so results do not change; the
+//                         kernel is about 1.7x faster. Without wasm SIMD these fail at startup
+//                         and name --no-wasm. --wasm is still accepted (a no-op). A runtime
+//                         choice: never saved in checkpoints or best.json, and on --resume the
+//                         current command line decides (older checkpoints' config.wasm is
+//                         dropped). The browser always uses policy.js.
 // Boolean options can be turned off on --resume with --no-<option>. Everything except
 // --hidden, --action-repeat and --game can change on --resume.
 //
@@ -277,13 +279,15 @@ const DEFAULTS = {
   sigmaAnneal: false,     // shrink sigma while perturbed candidates crash in the opening
   sigmaMin: 0.02,         // sigma-anneal floor
   pairEpisodes: false,    // per-pair episode seeds with pair-difference weights
-  wasm: false,            // network on the wasm SIMD kernel (same decisions, faster)
 };
+// Not here: wasm. The network kernel is a runtime choice of each command (wasmByDefault: on
+// unless --no-wasm), not a training setting, so it is neither saved nor restored on --resume.
+// Checkpoints from before 2026-10-12 carry config.wasm; train drops it.
 // Keys added after the first checkpoints: backfilled from DEFAULTS when resuming
 // checkpoints that predate them (their defaults reproduce the old behaviour).
 const BACKFILL = ['window', 'startZeroFrac', 'startMin', 'startDist', 'startZeroCap', 'windowAdapt', 'select', 'stopRule',
   'valSeeds', 'evalWhenFitMax', 'foldValidation', 'rankTies', 'decay', 'stallRule', 'sigmaScale', 'sigmaAnneal', 'sigmaMin', 'pairEpisodes',
-  'windowAdaptEvery', 'fitnessAgg', 'wasm', 'rampFrac', 'rampMin', 'rampMax'];
+  'windowAdaptEvery', 'fitnessAgg', 'rampFrac', 'rampMin', 'rampMax'];
 // Settings that change the parameter layout or the policy's behaviour cannot change on resume.
 const STRUCTURAL = ['hidden', 'actionRepeat', 'gameVersion'];
 
@@ -422,7 +426,9 @@ const summary = (scores) => ({ median: median(scores), min: Math.min(...scores),
 // ---------------------------------------------------------------------------
 // train
 // ---------------------------------------------------------------------------
-async function train({ config: cli, opts }) {
+async function train({ config: parsed, opts }) {
+  const { wasm: wasmFlag, ...cli } = parsed;   // the kernel is runtime-only (see DEFAULTS)
+  const wasm = wasmByDefault({ wasm: wasmFlag });
   const dir = path.resolve(opts.dir || path.join(ROOT, 'runs', 'main'));
   fs.mkdirSync(dir, { recursive: true });
   const release = acquireLock(dir);
@@ -449,7 +455,8 @@ async function train({ config: cli, opts }) {
       if (k in cli && JSON.stringify(cli[k]) !== JSON.stringify(saved)) throw new Error(`--${k} cannot change on resume`);
     }
     const backfill = Object.fromEntries(BACKFILL.filter(k => !(k in ck.config)).map(k => [k, DEFAULTS[k]]));
-    config = { ...ck.config, gameVersion: ck.config.gameVersion || 'v1', ...backfill, ...cli };
+    const { wasm: _savedWasm, ...saved } = ck.config;   // older checkpoints recorded the kernel; this command line decides
+    config = { ...saved, gameVersion: saved.gameVersion || 'v1', ...backfill, ...cli };
     if (config.generations === null) config.generations = Infinity;
     st = {
       generation: ck.generation, theta: Float64Array.from(ck.theta),
@@ -493,10 +500,10 @@ async function train({ config: cli, opts }) {
   const committedMs = () => st.cumulativeMs + (Date.now() - lastCommitAt);
 
   checkConfig(config);
-  if (config.wasm) require('./wasm-net.js').assertAvailable();
   const stopRule = parseStopRule(config.stopRule);
   const valSeedList = validationSeeds(config.valSeeds);
-  log(`train: dir=${dir} game=${config.gameVersion} workers=${workers} params=${numParams(layers)} layers=${layers.join('-')} core=${hash.slice(0, 12)}`);
+  log(`train: dir=${dir} game=${config.gameVersion} workers=${workers} params=${numParams(layers)} layers=${layers.join('-')} core=${hash.slice(0, 12)} ` +
+    `net=${wasm ? 'wasm' : 'policy.js (--no-wasm)'}`);
   log(`watch it live: node trainer/dashboard.js  ->  http://127.0.0.1:8080  (run from ${ROOT})`);
   log(`config ${JSON.stringify(config)}${budgetMs < Infinity ? ` time-budget=${opts.timeBudget}min` : ''}`);
 
@@ -558,7 +565,7 @@ async function train({ config: cli, opts }) {
     return { ...s, generation: gen };
   }
   async function validate() {
-    const scores = await scoreSeeds(pool, modelOf(st.theta), valSeedList, config.target, config.wasm);
+    const scores = await scoreSeeds(pool, modelOf(st.theta), valSeedList, config.target, wasm);
     return recordValidation(scores, st.theta, st.generation);
   }
 
@@ -567,7 +574,7 @@ async function train({ config: cli, opts }) {
     const best = st.best;
     const attempt = ((st.heldOut && st.heldOut.attempt) || 0) + 1;
     const seeds = evalSeeds(stopRule.seeds);
-    const score = (chunk) => scoreSeeds(pool, modelOf(best.params), chunk, config.target, config.wasm);
+    const score = (chunk) => scoreSeeds(pool, modelOf(best.params), chunk, config.target, wasm);
     if (stopRule.kind === 'median') {
       const scores = await score(seeds);
       const s = summary(scores);
@@ -611,7 +618,7 @@ async function train({ config: cli, opts }) {
     if (config.foldValidation) for (const s of valSeedList) jobs.push({ noiseSeed: 0, sign: 0, seeds: [s] });
     const sigmaEff = st.sigma * st.stallMult;
     const sigma = sigmaVector(layers, sigmaEff, config.sigmaScale);
-    const setup = { theta: st.theta, layers, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion, sigma, target: config.target, wasm: config.wasm };
+    const setup = { theta: st.theta, layers, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion, sigma, target: config.target, wasm };
     const { train: results, val: valResults } = splitFolded(await pool.run(setup, jobs), config.popSize);
 
     // Fitness: mean capped score, using fractional distance for a finer signal.
@@ -794,13 +801,13 @@ async function evalHeldOut(opts, targetOverride, wasm = false, gameOverride) {
   return record;
 }
 
-// assess and BC validation (bc-train, bc-train-batch, bc-quantize) run the network on the wasm
-// kernel unless --no-wasm (same scores, faster). ES train/session/finish and bench keep it
-// opt-in: DEFAULTS.wasm stays false, because ES checkpoints record it. Fails at startup
-// without wasm SIMD; no silent fallback.
+// Every command that plays the network (train, assess, bench, finish, session, and BC
+// validation in bc-train, bc-train-batch and bc-quantize) runs it on the wasm kernel unless
+// --no-wasm (same decisions, faster). A runtime choice, never saved in a config. Fails at
+// startup without wasm SIMD; no silent fallback.
 function wasmByDefault(cli) {
   const wasm = cli.wasm !== false;
-  if (wasm) require('./wasm-net.js').assertAvailable({ defaultOn: true });
+  if (wasm) require('./wasm-net.js').assertAvailable();
   return wasm;
 }
 
@@ -916,8 +923,7 @@ async function benchCmd({ config: cli, opts }) {
   const { benchSingle } = require('./bench.js');
   const seconds = Number(opts.seconds) || 3;
   const workers = Number(opts.workers) || defaultWorkers();
-  const net = { hidden: cli.hidden || [16], wasm: !!cli.wasm };
-  if (net.wasm) require('./wasm-net.js').assertAvailable();
+  const net = { hidden: cli.hidden || [16], wasm: wasmByDefault(cli) };
   console.log(`bench: ${seconds}s per measurement; workers detected: ${defaultWorkers()} (using ${workers}); ` +
     `net ${layersOf(net).join('-')}${net.wasm ? ' (wasm)' : ''}`);
   const sim = benchSingle('sim', seconds * 1000);
@@ -1529,7 +1535,7 @@ async function main() {
   await cmd(args);
 }
 
-module.exports = { exportModel, evalHeldOut, loadModel, DEFAULTS, checkConfig, BUNDLED_MODELS, scoreSeeds, scoreSeedsMany };
+module.exports = { exportModel, evalHeldOut, loadModel, DEFAULTS, checkConfig, BUNDLED_MODELS, scoreSeeds, scoreSeedsMany, wasmByDefault };
 
 if (require.main === module) main().catch((e) => {
   console.error(`error: ${e.message}`);

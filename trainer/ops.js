@@ -124,12 +124,13 @@ async function stopTrainer(dir) {
 }
 
 async function finishCmd({ config, opts }) {
-  const { evalHeldOut, exportModel } = require('./cli.js');
+  const { evalHeldOut, exportModel, wasmByDefault } = require('./cli.js');
+  const wasm = wasmByDefault(config);   // the wasm kernel unless --no-wasm (same scores)
   const dir = runDir(opts);
   await stopTrainer(dir);
   if (!fs.existsSync(path.join(dir, 'best.json'))) throw new Error(`no ${rel(path.join(dir, 'best.json'))}: nothing to evaluate or export`);
 
-  const ev = await evalHeldOut({ dir, which: 'best', workers: opts.workers }, config.target);
+  const ev = await evalHeldOut({ dir, which: 'best', workers: opts.workers }, config.target, wasm);
   say(`held-out assessment of best (gen ${ev.generation}, cap ${ev.target}): median ${ev.median}, min ${ev.min}, max ${ev.max}`);
   const ex = exportModel({ dir, which: 'best' });
   say(`exported ${ex.data.source} (gen ${ex.data.generation}) -> ${ex.file}`);

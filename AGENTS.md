@@ -33,7 +33,7 @@ Trainer CLI (`trainer/cli.js`; the header comment lists every option):
 Training outlasts foreground limits, so run it detached and log to the run directory. An experimental ES run looks like this:
 
 ```sh
-nohup node trainer/cli.js train --wasm --hidden 32,32 --target 1000000 --time-budget 70 --dir runs/exp-<name> >> runs/exp-<name>/train.log 2>&1 &
+nohup node trainer/cli.js train --hidden 32,32 --target 1000000 --time-budget 70 --dir runs/exp-<name> >> runs/exp-<name>/train.log 2>&1 &
 kill -INT <pid>    # PID is in runs/<dir>/train.lock; saves a checkpoint and releases the lock
 ```
 
@@ -172,10 +172,10 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
   - `--window-adapt`: gated, so the window shrinks while start-0 episodes mostly fail and only grows once the opening is learned. Decided every `--window-adapt-every` generations (default 5) on pooled pass counts. Needs `--start-dist points`;
   - `--fitness-agg mean|geomean`: geomean lets a failing stage (for example the opening) dominate. Needs `--window`.
   - `--ramp-frac F --ramp-min P --ramp-max P`: natural-ramp starts. The solver (`test/solver.js`) plays from 0 and hands over to the student at a level in [P_min, P_max] (for example 400–800), when grounded with keys up. These count as "late" episodes for `--window-adapt`. Needs `--window`. Costs about 2.8 ms of teacher prefix per ramp episode.
-- Speed: `--wasm` runs the MLP forward pass as WASM SIMD in the trainer only. It is bit-identical to JS (verified on arm64 and x86) and about 1.65–1.7× faster.
-  - Opt-in for `train` (and `session`) and `bench`: pass `--wasm` in all ES experiments. `DEFAULTS.wasm` stays false because ES checkpoints record it. `finish` assesses on JS.
-  - On by default for `assess` and for the validation in `bc-train`, `bc-train-batch` and `bc-quantize` (since 2026-10-12). `--no-wasm` runs them on JS.
-  - Without wasm SIMD these commands fail at startup; there is no silent fallback.
+- Speed: the trainer runs the MLP forward pass as WASM SIMD (`trainer/wasm-net.js`). It is bit-identical to JS (verified on arm64 and x86) and about 1.65–1.7× faster. The browser always uses `policy.js`.
+  - On by default (since 2026-10-12) in every command that plays the network: `train`, `session`, `finish`, `assess`, `bench`, and the validation in `bc-train`, `bc-train-batch` and `bc-quantize`. `--no-wasm` runs them on JS. `--wasm` is still accepted.
+  - It is a runtime choice, not a training setting: checkpoints and `best.json` no longer record it, and on `--resume` the current command line decides (older checkpoints' `config.wasm: false` is dropped). `bit-identity.js` skips that key.
+  - Without wasm SIMD these commands fail at startup and name `--no-wasm`; there is no silent fallback.
 - Selection and stopping: `--select median|count`, `--stop-rule median|allpass[:N]`, `--val-seeds N`, `--fold-validation` (validates every generation inside the training batch), `--eval-when-fit-max`.
 - ES:
   - `--rank-ties index|mid`;

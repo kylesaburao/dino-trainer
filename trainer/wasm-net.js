@@ -1,6 +1,7 @@
 'use strict';
-// WebAssembly SIMD forward pass for the policy MLP (opt-in for train and bench with --wasm;
-// the default for assess and BC validation, off with --no-wasm). Trainer only:
+// WebAssembly SIMD forward pass for the policy MLP: the default in every trainer command that
+// plays the network (train, assess, bench, finish, session, BC validation), off with
+// --no-wasm. Trainer only:
 // the browser, eval playback and the dashboard keep policy.js's createNet.
 //
 // Bit-identical to policy.js createNet, by construction:
@@ -94,20 +95,16 @@ let compiled = null;
 function wasmModule() {
   if (compiled) return compiled;
   const bytes = moduleBytes();
-  if (!simdAvailable(bytes)) throw new Error(`--wasm: ${NO_SIMD}; run without --wasm`);
+  if (!simdAvailable(bytes)) throw new Error(NO_SIMD);
   compiled = new WebAssembly.Module(bytes);
   return compiled;
 }
-const NO_SIMD = 'this runtime has no WebAssembly SIMD (f64x2)';
+// The trainer uses the kernel unless --no-wasm, so the message names it.
+const NO_SIMD = 'this runtime has no WebAssembly SIMD (f64x2); the network runs on the wasm kernel by default, ' +
+  'pass --no-wasm to run it in JS (policy.js)';
 const simdAvailable = (bytes) => typeof WebAssembly === 'object' && WebAssembly.validate(bytes);
-// defaultOn: the command uses wasm unless --no-wasm (assess, BC validation), so leaving out
-// --wasm would not help and the message points at --no-wasm instead.
-const assertAvailable = ({ defaultOn = false } = {}) => {
-  if (defaultOn && !compiled && !simdAvailable(moduleBytes())) {
-    throw new Error(`${NO_SIMD}; this command uses the wasm kernel by default, pass --no-wasm to run the network in JS`);
-  }
-  wasmModule();
-};
+// Throws NO_SIMD at startup rather than in the workers.
+const assertAvailable = () => { wasmModule(); };
 
 // --- the network -------------------------------------------------------------------
 const align16 = (bytes) => (bytes + 15) & ~15;
