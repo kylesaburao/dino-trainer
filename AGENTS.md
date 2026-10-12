@@ -26,7 +26,7 @@ There is no build step and no linter. To play, open `index.html` (or `index-css.
 Trainer CLI (`trainer/cli.js`; the header comment lists every option):
 - `train` / `assess` / `export` / `export-css` / `export-models` / `report`
 - `export-models` regenerates the pages' model selector from `BUNDLED_MODELS` in `trainer/cli.js` (run dirs and labels): `models.js` (`DINO_MODELS`, with weights, for `index.html`), `models-css/<id>.css` (one CSS network each) and `models-css/index.js` (`DINO_MODEL_INDEX`, metadata and `--nn-model-id` only, for `index-css.html`). The id is the run-dir name. It never touches the root `model.js` / `model.css`. The outputs are committed, and `test/models.test.js` fails when they are stale. After shipping a new model, move `shipped: true` in `BUNDLED_MODELS` and rerun it.
-- `assess` (held-out assessment) was called `eval` until 2026-10-10 (user order). `eval` still works as a deprecated alias and prints a one-line notice. New records go to `<run>/assess.jsonl`; older runs' `evals.jsonl` were renamed, and every reader (dashboard, `ops.js` report, `scans.js`) merges both names (`readAssessLines` in `trainer/store.js`). Historical pre-registrations still say `eval`.
+- `assess` (held-out assessment) was called `eval` until 2026-10-10 (user order). `eval` still works as a deprecated alias and prints a one-line notice. New records go to `<run>/assess.jsonl`; older runs' `evals.jsonl` were renamed, and every reader (dashboard, `ops.js` report, `scans.js`) merges both names (`readAssessLines` in `trainer/store.js`). Historical pre-registrations still say `eval`. It runs the network on wasm by default (`--no-wasm` for JS; see "Trainer flags").
 - `finish`: eval, export, browser check, report and **git commit**.
 - `session`: `train` followed by `finish`.
 
@@ -66,7 +66,7 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend pytho
   - Every other `bc-train` option is shared by the batch. The numpy step lives in `trainer/bc_train.py`; host-side parts shared by both python engines are in `trainer/bc_common.py`, which must stay Python 3.9-compatible.
 - `bc-gen` writes `demos.bin` (gitignored) and `demos.json`; `bc-train` writes `best.json` and `bc-metrics.jsonl` (per-epoch loss and recall, not `metrics.jsonl`). `eval` and `export` then work as for an ES run.
 - `bc-gen --teacher jump|duck` picks the teacher (default `jump` = `createSolver`, byte-identical demos to before; `duck` = `createDuckSolver`, label 2 = down key). The manifest records `teacherName`, `bc-train` copies it into the `best.json` config, and recall gains a `duck` key only when duck rows exist.
-- `bc-train` refuses demos from another core hash unless `--force`. The flags are in the `trainer/cli.js` header.
+- `bc-train` refuses demos from another core hash unless `--force`. Its validation runs on wasm by default (`--no-wasm` for JS). The flags are in the `trainer/cli.js` header.
 - `bc-train --backend python --snapshots` also writes each epoch's params to `<dir>/snapshots/epoch-NN.json` (gitignored research output); it leaves training unchanged. The node backend rejects it.
 - Distillation and quantization (both backends, off by default, defaults bit-identical): `bc-train --distill-from <best.json> [--distill-mode soft|hard] [--tau T] [--alpha A]` (Hinton soft targets or the teacher's argmax; `config.distillFrom` records path and params sha256), `--quant-bits N [--quant-scheme row|layer|pow2]` (QAT, symmetric int weights stored as q × scale, still `dino-mlp-v1`; `pow2` makes ALL params N-bit, weights and biases, as q × 2^-k with one integer k per layer, `config.quant.k`, verified and packed by `research/scripts/prereg-distill/pack.js`), and `bc-quantize --from <best.json> --dir <run> --quant-bits N` (post-training). Definitions in the `trainer/bc.js` header; plan in `research/prereg-distill.md`.
 
@@ -172,7 +172,10 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
   - `--window-adapt`: gated, so the window shrinks while start-0 episodes mostly fail and only grows once the opening is learned. Decided every `--window-adapt-every` generations (default 5) on pooled pass counts. Needs `--start-dist points`;
   - `--fitness-agg mean|geomean`: geomean lets a failing stage (for example the opening) dominate. Needs `--window`.
   - `--ramp-frac F --ramp-min P --ramp-max P`: natural-ramp starts. The solver (`test/solver.js`) plays from 0 and hands over to the student at a level in [P_min, P_max] (for example 400–800), when grounded with keys up. These count as "late" episodes for `--window-adapt`. Needs `--window`. Costs about 2.8 ms of teacher prefix per ramp episode.
-- Speed: `--wasm` runs the MLP forward pass as WASM SIMD in the trainer only (train, `assess --wasm`, `bench --wasm`). It is bit-identical to JS (verified on arm64 and x86) and about 1.65–1.7× faster. Use it for all experiments.
+- Speed: `--wasm` runs the MLP forward pass as WASM SIMD in the trainer only. It is bit-identical to JS (verified on arm64 and x86) and about 1.65–1.7× faster.
+  - Opt-in for `train` (and `session`) and `bench`: pass `--wasm` in all ES experiments. `DEFAULTS.wasm` stays false because ES checkpoints record it. `finish` assesses on JS.
+  - On by default for `assess` and for the validation in `bc-train`, `bc-train-batch` and `bc-quantize` (since 2026-10-12). `--no-wasm` runs them on JS.
+  - Without wasm SIMD these commands fail at startup; there is no silent fallback.
 - Selection and stopping: `--select median|count`, `--stop-rule median|allpass[:N]`, `--val-seeds N`, `--fold-validation` (validates every generation inside the training batch), `--eval-when-fit-max`.
 - ES:
   - `--rank-ties index|mid`;
