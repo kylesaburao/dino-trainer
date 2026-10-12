@@ -2,7 +2,7 @@
 'use strict';
 // Dino trainer CLI (plain Node, no npm dependencies).
 //
-//   node trainer/cli.js train  [--target 10000] [--resume [--force]] [--workers N]
+//   node trainer/cli.js train  [--target 10000] [--resume [--force]] [--workers N] [--no-wasm]
 //                              [--time-budget MIN] [--generations N] [--dir runs/main] ...
 //   node trainer/cli.js assess [--dir runs/main] [--which best|current] [--model model.js] [--target N]
 //                              [--seeds 25] [--seed-offset 0] [--no-wasm] [--game v1|v2|v3]
@@ -11,7 +11,7 @@
 //             deprecated alias that prints a notice.
 //             --game plays those rules instead of the model's own gameVersion (a cross-rules
 //             assessment, e.g. a v2 model on rules v3: it warns, and the record notes both).
-//   node trainer/cli.js bench  [--seconds 3] [--workers N] [--hidden 16] [--wasm]
+//   node trainer/cli.js bench  [--seconds 3] [--workers N] [--hidden 16] [--no-wasm]
 //   node trainer/cli.js export [--dir runs/main] [--which best|current] [--out model.js]
 //                              (also writes model.css next to it: the same weights for index-css.html)
 //   node trainer/cli.js export-css [--model model.js]   regenerate model.css from an existing model.js
@@ -55,13 +55,16 @@
 //             and export work unchanged; config.teacherName from the demos manifest, 'jump'
 //             if absent) and bc-metrics.jsonl (per-epoch loss and recall; recall.duck only
 //             when the demos have duck rows).
-//             --backend node (default; plain Node) or python (trainer/bc_train.py, needs
-//             numpy: the repo's .venv/bin/python, or the PYTHON env var) or mlx (Apple GPU:
+//             --backend node (plain Node) or python (trainer/bc_train.py, needs numpy: the
+//             repo's .venv/bin/python, or the PYTHON env var) or mlx (Apple GPU:
 //             trainer/bc_train_mlx.py, needs .venv-mlx/bin/python or PYTHON_MLX; the python
 //             backend's algorithm, init and batch order, float32 with TF32 off, so its params
 //             match python's to float32 noise; config.engine records version, device, tf32).
-//             Each backend is deterministic per --seed on one machine; node does not match the
-//             other two. Every python-only flag below also works with mlx.
+//             Default (as bc-train-batch; logged): mlx when an mlx interpreter is configured,
+//             else python when a numpy interpreter is configured, else node. best.json
+//             config.backend records the one used; pass --backend node to reproduce an older
+//             default-backend run. Each backend is deterministic per --seed on one machine;
+//             node does not match the other two. Every python-only flag below also works with mlx.
 //             Refuses demos generated on another core hash unless --force, and an
 //             existing best.json unless --overwrite.
 //             --snapshots (python or mlx backend; off by default) also writes each epoch's
@@ -103,7 +106,7 @@
 //             backend, then jobs, blasThreads (python) or group, groupSize, groupIndex (mlx)}
 //             (config.batch stays the minibatch size), and trainer names bc-train-batch.
 //             Default backend: mlx when an mlx interpreter is configured (.venv-mlx or PYTHON_MLX)
-//             and --jobs is not given, else python (user's choice, 2026-10-11).
+//             and --jobs is not given, else python (user's choice, 2026-10-11); no node backend.
 //             --backend python: --jobs K (default 6, the performance cores)
 //             bc_train.py processes at once, each with 1 BLAS thread, which gives the same params
 //             bytes as bc-train --backend python. --backend mlx: one GPU process per shape (in
@@ -207,14 +210,16 @@
 //   --pair-episodes       each antithetic pair plays its own episode seeds (and starts);
 //                         gradient weights are pair fitness differences / std (ARS V1)
 // Speed:
-//   --wasm                run the policy network on a WebAssembly SIMD kernel (trainer/wasm-net.js)
-//                         in the training, validation and held-out workers. Decisions are
-//                         bit-identical to policy.js (test/wasm-net.test.js), so results do not
-//                         change; fails at startup if the runtime has no wasm SIMD. Opt-in
-//                         for train (and session's training) and bench; finish's assessment
-//                         uses policy.js. On by default for assess and for the validation in
-//                         bc-train, bc-train-batch and bc-quantize; --no-wasm runs those on
-//                         policy.js. The browser always uses policy.js.
+//   --no-wasm             run the policy network on policy.js instead of the default WebAssembly
+//                         SIMD kernel (trainer/wasm-net.js), which every command that plays it
+//                         uses: train, assess, bench, finish, session, and the validation in
+//                         bc-train, bc-train-batch and bc-quantize. Decisions are bit-identical
+//                         to policy.js (test/wasm-net.test.js), so results do not change; the
+//                         kernel is about 1.7x faster. Without wasm SIMD these fail at startup
+//                         and name --no-wasm. --wasm is still accepted (a no-op). A runtime
+//                         choice: never saved in checkpoints or best.json, and on --resume the
+//                         current command line decides (older checkpoints' config.wasm is
+//                         dropped). The browser always uses policy.js.
 // Boolean options can be turned off on --resume with --no-<option>. Everything except
 // --hidden, --action-repeat and --game can change on --resume.
 //
@@ -277,13 +282,15 @@ const DEFAULTS = {
   sigmaAnneal: false,     // shrink sigma while perturbed candidates crash in the opening
   sigmaMin: 0.02,         // sigma-anneal floor
   pairEpisodes: false,    // per-pair episode seeds with pair-difference weights
-  wasm: false,            // network on the wasm SIMD kernel (same decisions, faster)
 };
+// Not here: wasm. The network kernel is a runtime choice of each command (wasmByDefault: on
+// unless --no-wasm), not a training setting, so it is neither saved nor restored on --resume.
+// Checkpoints from before 2026-10-12 carry config.wasm; train drops it.
 // Keys added after the first checkpoints: backfilled from DEFAULTS when resuming
 // checkpoints that predate them (their defaults reproduce the old behaviour).
 const BACKFILL = ['window', 'startZeroFrac', 'startMin', 'startDist', 'startZeroCap', 'windowAdapt', 'select', 'stopRule',
   'valSeeds', 'evalWhenFitMax', 'foldValidation', 'rankTies', 'decay', 'stallRule', 'sigmaScale', 'sigmaAnneal', 'sigmaMin', 'pairEpisodes',
-  'windowAdaptEvery', 'fitnessAgg', 'wasm', 'rampFrac', 'rampMin', 'rampMax'];
+  'windowAdaptEvery', 'fitnessAgg', 'rampFrac', 'rampMin', 'rampMax'];
 // Settings that change the parameter layout or the policy's behaviour cannot change on resume.
 const STRUCTURAL = ['hidden', 'actionRepeat', 'gameVersion'];
 
@@ -422,7 +429,9 @@ const summary = (scores) => ({ median: median(scores), min: Math.min(...scores),
 // ---------------------------------------------------------------------------
 // train
 // ---------------------------------------------------------------------------
-async function train({ config: cli, opts }) {
+async function train({ config: parsed, opts }) {
+  const { wasm: wasmFlag, ...cli } = parsed;   // the kernel is runtime-only (see DEFAULTS)
+  const wasm = wasmByDefault({ wasm: wasmFlag });
   const dir = path.resolve(opts.dir || path.join(ROOT, 'runs', 'main'));
   fs.mkdirSync(dir, { recursive: true });
   const release = acquireLock(dir);
@@ -449,7 +458,8 @@ async function train({ config: cli, opts }) {
       if (k in cli && JSON.stringify(cli[k]) !== JSON.stringify(saved)) throw new Error(`--${k} cannot change on resume`);
     }
     const backfill = Object.fromEntries(BACKFILL.filter(k => !(k in ck.config)).map(k => [k, DEFAULTS[k]]));
-    config = { ...ck.config, gameVersion: ck.config.gameVersion || 'v1', ...backfill, ...cli };
+    const { wasm: _savedWasm, ...saved } = ck.config;   // older checkpoints recorded the kernel; this command line decides
+    config = { ...saved, gameVersion: saved.gameVersion || 'v1', ...backfill, ...cli };
     if (config.generations === null) config.generations = Infinity;
     st = {
       generation: ck.generation, theta: Float64Array.from(ck.theta),
@@ -493,10 +503,10 @@ async function train({ config: cli, opts }) {
   const committedMs = () => st.cumulativeMs + (Date.now() - lastCommitAt);
 
   checkConfig(config);
-  if (config.wasm) require('./wasm-net.js').assertAvailable();
   const stopRule = parseStopRule(config.stopRule);
   const valSeedList = validationSeeds(config.valSeeds);
-  log(`train: dir=${dir} game=${config.gameVersion} workers=${workers} params=${numParams(layers)} layers=${layers.join('-')} core=${hash.slice(0, 12)}`);
+  log(`train: dir=${dir} game=${config.gameVersion} workers=${workers} params=${numParams(layers)} layers=${layers.join('-')} core=${hash.slice(0, 12)} ` +
+    `net=${wasm ? 'wasm' : 'policy.js (--no-wasm)'}`);
   log(`watch it live: node trainer/dashboard.js  ->  http://127.0.0.1:8080  (run from ${ROOT})`);
   log(`config ${JSON.stringify(config)}${budgetMs < Infinity ? ` time-budget=${opts.timeBudget}min` : ''}`);
 
@@ -558,7 +568,7 @@ async function train({ config: cli, opts }) {
     return { ...s, generation: gen };
   }
   async function validate() {
-    const scores = await scoreSeeds(pool, modelOf(st.theta), valSeedList, config.target, config.wasm);
+    const scores = await scoreSeeds(pool, modelOf(st.theta), valSeedList, config.target, wasm);
     return recordValidation(scores, st.theta, st.generation);
   }
 
@@ -567,7 +577,7 @@ async function train({ config: cli, opts }) {
     const best = st.best;
     const attempt = ((st.heldOut && st.heldOut.attempt) || 0) + 1;
     const seeds = evalSeeds(stopRule.seeds);
-    const score = (chunk) => scoreSeeds(pool, modelOf(best.params), chunk, config.target, config.wasm);
+    const score = (chunk) => scoreSeeds(pool, modelOf(best.params), chunk, config.target, wasm);
     if (stopRule.kind === 'median') {
       const scores = await score(seeds);
       const s = summary(scores);
@@ -611,7 +621,7 @@ async function train({ config: cli, opts }) {
     if (config.foldValidation) for (const s of valSeedList) jobs.push({ noiseSeed: 0, sign: 0, seeds: [s] });
     const sigmaEff = st.sigma * st.stallMult;
     const sigma = sigmaVector(layers, sigmaEff, config.sigmaScale);
-    const setup = { theta: st.theta, layers, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion, sigma, target: config.target, wasm: config.wasm };
+    const setup = { theta: st.theta, layers, actionRepeat: config.actionRepeat, gameVersion: config.gameVersion, sigma, target: config.target, wasm };
     const { train: results, val: valResults } = splitFolded(await pool.run(setup, jobs), config.popSize);
 
     // Fitness: mean capped score, using fractional distance for a finer signal.
@@ -794,13 +804,13 @@ async function evalHeldOut(opts, targetOverride, wasm = false, gameOverride) {
   return record;
 }
 
-// assess and BC validation (bc-train, bc-train-batch, bc-quantize) run the network on the wasm
-// kernel unless --no-wasm (same scores, faster). ES train/session/finish and bench keep it
-// opt-in: DEFAULTS.wasm stays false, because ES checkpoints record it. Fails at startup
-// without wasm SIMD; no silent fallback.
+// Every command that plays the network (train, assess, bench, finish, session, and BC
+// validation in bc-train, bc-train-batch and bc-quantize) runs it on the wasm kernel unless
+// --no-wasm (same decisions, faster). A runtime choice, never saved in a config. Fails at
+// startup without wasm SIMD; no silent fallback.
 function wasmByDefault(cli) {
   const wasm = cli.wasm !== false;
-  if (wasm) require('./wasm-net.js').assertAvailable({ defaultOn: true });
+  if (wasm) require('./wasm-net.js').assertAvailable();
   return wasm;
 }
 
@@ -916,8 +926,7 @@ async function benchCmd({ config: cli, opts }) {
   const { benchSingle } = require('./bench.js');
   const seconds = Number(opts.seconds) || 3;
   const workers = Number(opts.workers) || defaultWorkers();
-  const net = { hidden: cli.hidden || [16], wasm: !!cli.wasm };
-  if (net.wasm) require('./wasm-net.js').assertAvailable();
+  const net = { hidden: cli.hidden || [16], wasm: wasmByDefault(cli) };
   console.log(`bench: ${seconds}s per measurement; workers detected: ${defaultWorkers()} (using ${workers}); ` +
     `net ${layersOf(net).join('-')}${net.wasm ? ' (wasm)' : ''}`);
   const sim = benchSingle('sim', seconds * 1000);
@@ -1062,11 +1071,14 @@ const quantText = (q) => ` quant=int${q.bits}/${q.scheme}`;
 function prepareBcTrain(cli, opts, backend, say) {
   const bc = require('./bc.js');
   const pyEngine = backend === 'python' || backend === 'mlx';   // both run bc_common.py's options
-  if (opts.snapshots && !pyEngine) throw new Error('--snapshots is only supported with --backend python or mlx');
+  // node by default only when no interpreter is configured (bc.defaultBackend), so say so.
+  const why = opts.backend ? '' : ' (the default is node here: no .venv or PYTHON, no .venv-mlx or PYTHON_MLX)';
+  const pyOnly = (flag) => new Error(`${flag} is only supported with --backend python or mlx${why}`);
+  if (opts.snapshots && !pyEngine) throw pyOnly('--snapshots');
   const dz = parseDistill(opts);
   const quant = parseQuant(opts, bc);
   for (const f of ['extraDemos', 'transitionWeight']) {
-    if (opts[f] !== undefined && !pyEngine) throw new Error(`--${f.replace(/[A-Z]/g, c => '-' + c.toLowerCase())} is only supported with --backend python or mlx`);
+    if (opts[f] !== undefined && !pyEngine) throw pyOnly(`--${f.replace(/[A-Z]/g, c => '-' + c.toLowerCase())}`);
   }
   let transitionWeight;
   if (opts.transitionWeight !== undefined) {
@@ -1209,10 +1221,17 @@ async function finishBcRun(ctx, backend, run, dir, result, { trainSeconds, snaps
 const bcDoneLine = (v, seeds, trainSeconds, bestFile) => `validation: median ${v.median} min ${v.min} count ${v.count}/${seeds}; ` +
   `trained in ${trainSeconds.toFixed(1)}s -> ${path.relative(ROOT, bestFile)}`;
 
+// The default --backend of bc-train and bc-train-batch (bc.defaultBackend), logged.
+function defaultBcBackend(cmd, o) {
+  const { backend, why } = require('./bc.js').defaultBackend(ROOT, o);
+  log(`${cmd}: --backend ${backend} (default: ${why})`);
+  return backend;
+}
+
 async function bcTrainCmd({ config: cli, opts }) {
   const dir = requireDir(opts, 'bc-train');
   if (!cli.hidden) throw new Error('bc-train needs --hidden (e.g. --hidden 32,32)');
-  const backend = opts.backend || 'node';
+  const backend = opts.backend || defaultBcBackend('bc-train', { nodeFallback: true });
   if (!['node', 'python', 'mlx'].includes(backend)) throw new Error(`--backend must be node, python or mlx, got ${backend}`);
   const run = { hidden: cli.hidden, seed: cli.seed !== undefined ? cli.seed : require('./bc.js').TRAIN_DEFAULTS.seed };
   checkHidden(run.hidden);
@@ -1285,11 +1304,8 @@ async function bcTrainBatchCmd({ config: cli, opts }) {
   if (!opts.dirPattern) throw new Error("bc-train-batch needs --dir-pattern (e.g. 'runs/exp-x/v2-bc-jump-d{depth}w{width}-s{seed}')");
   if (!opts.shapes || opts.seeds === undefined) throw new Error('bc-train-batch needs --shapes (e.g. 32,32/8x2) and --seeds (e.g. 1-10)');
   if (!opts.demos) throw new Error('bc-train-batch needs --demos <dir or demos.json>');
-  // Default (user's choice, 2026-10-11): mlx when an mlx interpreter is configured (PYTHON_MLX or
-  // <root>/.venv-mlx), else python; --jobs alone also means python.
-  const mlxReady = (() => { try { require('./bc.js').mlxPythonPath(ROOT); return true; } catch (e) { return false; } })();
-  const backend = opts.backend || (opts.jobs === undefined && mlxReady ? 'mlx' : 'python');
-  if (!opts.backend) log(`bc-train-batch: --backend ${backend} (default: ${mlxReady ? 'mlx interpreter found' : 'no .venv-mlx or PYTHON_MLX'}${mlxReady && backend === 'python' ? ', but --jobs given' : ''})`);
+  // Default: mlx when an mlx interpreter is configured, else python; --jobs alone also means python.
+  const backend = opts.backend || defaultBcBackend('bc-train-batch', { jobs: opts.jobs });
   if (!['python', 'mlx'].includes(backend)) throw new Error(`bc-train-batch --backend must be python or mlx, got ${backend}`);
   if (backend === 'mlx' && opts.jobs !== undefined) throw new Error('--jobs is for --backend python (mlx trains each shape group in one GPU process)');
   const jobs = backend === 'mlx' ? null : opts.jobs !== undefined ? Number(opts.jobs) : 6;
@@ -1529,7 +1545,7 @@ async function main() {
   await cmd(args);
 }
 
-module.exports = { exportModel, evalHeldOut, loadModel, DEFAULTS, checkConfig, BUNDLED_MODELS, scoreSeeds, scoreSeedsMany };
+module.exports = { exportModel, evalHeldOut, loadModel, DEFAULTS, checkConfig, BUNDLED_MODELS, scoreSeeds, scoreSeedsMany, wasmByDefault };
 
 if (require.main === module) main().catch((e) => {
   console.error(`error: ${e.message}`);

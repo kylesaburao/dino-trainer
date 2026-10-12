@@ -33,7 +33,7 @@ Trainer CLI (`trainer/cli.js`; the header comment lists every option):
 Training outlasts foreground limits, so run it detached and log to the run directory. An experimental ES run looks like this:
 
 ```sh
-nohup node trainer/cli.js train --wasm --hidden 32,32 --target 1000000 --time-budget 70 --dir runs/exp-<name> >> runs/exp-<name>/train.log 2>&1 &
+nohup node trainer/cli.js train --hidden 32,32 --target 1000000 --time-budget 70 --dir runs/exp-<name> >> runs/exp-<name>/train.log 2>&1 &
 kill -INT <pid>    # PID is in runs/<dir>/train.lock; saves a checkpoint and releases the lock
 ```
 
@@ -41,10 +41,12 @@ Behaviour cloning (see "Model provenance"):
 
 ```sh
 node trainer/cli.js bc-gen --dir runs/bc-<name>                                   # solver demos: seeds 1-40, about 2.1M rows, seconds
-node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32                  # node backend, about 10 s/epoch, then 25-seed validation to 1M
+node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32                  # default backend (below), then 25-seed validation to 1M
 node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend python # numpy backend, about 1 s/epoch
+node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend node   # plain Node, no dependencies, about 10 s/epoch
 ```
 
+- `bc-train`'s default backend follows `bc-train-batch` (user's decision, 2026-10-12): `mlx` when an mlx interpreter is configured (`.venv-mlx` or `PYTHON_MLX`), else `python` when a numpy interpreter is configured (`.venv` or `PYTHON`), else `node`. It logs the choice (`bc-train: --backend X (default: ...)`), and `best.json` `config.backend` records it. Runs from before 2026-10-12 without `--backend` used node: pass `--backend node` to reproduce them. In a venv-less checkout, python-only flags (`--snapshots`, `--extra-demos`, `--transition-weight`) fail and say the default fell back to node.
 - `--backend python` needs `.venv` with numpy (`.venv/bin/python`); the `PYTHON` env var overrides the interpreter. A worktree has no `.venv` of its own, so set `PYTHON` there.
 - `--backend mlx` (Apple GPU, `trainer/bc_train_mlx.py`): `bc-train` and `bc-train-batch` both accept it.
   - It needs `.venv-mlx`: pyenv Python 3.14.8, `mlx==0.32.3`, `numpy==2.5.4`. The `PYTHON_MLX` env var overrides the interpreter; a worktree has no `.venv-mlx`, so set `PYTHON_MLX` there.
@@ -52,7 +54,7 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend pytho
   - It sets `MLX_ENABLE_TF32=0`: MLX's GPU float32 matmul defaults to TF32, which made gradients 1,000× noisier.
   - Every python-only flag works with it. `config.engine` records the version, the device and `tf32`.
 - Many models at once: `node trainer/cli.js bc-train-batch --dir-pattern 'runs/<group>/v2-bc-<teacher>-d{depth}w{width}-s{seed}' --shapes 32,32/8x2 --seeds 1-10 --demos <dir> [--backend python [--jobs 6] | mlx]`. Each model gets its own ordinary run dir.
-  - The default backend is `mlx` when an mlx interpreter is configured (`.venv-mlx` or `PYTHON_MLX`) and `--jobs` isn't given; otherwise `python`. This was the user's choice on 2026-10-11. The command logs which one it picked.
+  - The default backend is `mlx` when an mlx interpreter is configured (`.venv-mlx` or `PYTHON_MLX`) and `--jobs` isn't given; otherwise `python` (there is no node backend). This was the user's choice on 2026-10-11. The command logs which one it picked. `bc.defaultBackend` in `trainer/bc.js` owns this rule for both commands.
   - `--backend python` runs `--jobs` `bc_train.py` processes at once, each with 1 BLAS thread. Each member's params are byte-identical to `bc-train --backend python` with the same shape and seed (checked on the full demos, 10/10).
   - `--backend mlx` trains each shape's seeds in one GPU process (groups of at most 40).
   - Tier A runs on one shared worker pool, packed: every model waiting when the pool frees up plays its 25 games in one pool run (`scoreSeedsMany`; `worker.js` takes `setup.models` with a per-job `model` index). Validation results are unchanged. Training continues meanwhile.
@@ -172,10 +174,10 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
   - `--window-adapt`: gated, so the window shrinks while start-0 episodes mostly fail and only grows once the opening is learned. Decided every `--window-adapt-every` generations (default 5) on pooled pass counts. Needs `--start-dist points`;
   - `--fitness-agg mean|geomean`: geomean lets a failing stage (for example the opening) dominate. Needs `--window`.
   - `--ramp-frac F --ramp-min P --ramp-max P`: natural-ramp starts. The solver (`test/solver.js`) plays from 0 and hands over to the student at a level in [P_min, P_max] (for example 400–800), when grounded with keys up. These count as "late" episodes for `--window-adapt`. Needs `--window`. Costs about 2.8 ms of teacher prefix per ramp episode.
-- Speed: `--wasm` runs the MLP forward pass as WASM SIMD in the trainer only. It is bit-identical to JS (verified on arm64 and x86) and about 1.65–1.7× faster.
-  - Opt-in for `train` (and `session`) and `bench`: pass `--wasm` in all ES experiments. `DEFAULTS.wasm` stays false because ES checkpoints record it. `finish` assesses on JS.
-  - On by default for `assess` and for the validation in `bc-train`, `bc-train-batch` and `bc-quantize` (since 2026-10-12). `--no-wasm` runs them on JS.
-  - Without wasm SIMD these commands fail at startup; there is no silent fallback.
+- Speed: the trainer runs the MLP forward pass as WASM SIMD (`trainer/wasm-net.js`). It is bit-identical to JS (verified on arm64 and x86) and about 1.65–1.7× faster. The browser always uses `policy.js`.
+  - On by default (since 2026-10-12) in every command that plays the network: `train`, `session`, `finish`, `assess`, `bench`, and the validation in `bc-train`, `bc-train-batch` and `bc-quantize`; also in `research/scripts/prereg-bc-robustness/scan.js`. `--no-wasm` runs them on JS. `--wasm` is still accepted.
+  - It is a runtime choice, not a training setting: checkpoints and `best.json` no longer record it, and on `--resume` the current command line decides (older checkpoints' `config.wasm: false` is dropped). `bit-identity.js` skips that key.
+  - Without wasm SIMD these commands fail at startup and name `--no-wasm`; there is no silent fallback.
 - Selection and stopping: `--select median|count`, `--stop-rule median|allpass[:N]`, `--val-seeds N`, `--fold-validation` (validates every generation inside the training batch), `--eval-when-fit-max`.
 - ES:
   - `--rank-ties index|mid`;

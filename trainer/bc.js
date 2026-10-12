@@ -741,11 +741,14 @@ function recallOn(layers, params, { X, y, n, dim }, rng, hasDuck = false) {
 // ---------------------------------------------------------------------------
 // Python backend (trainer/bc_train.py)
 // ---------------------------------------------------------------------------
-function pythonPath(root) {
+// The configured numpy interpreter: PYTHON, else <root>/.venv/bin/python, else null.
+function configuredPython(root) {
   if (process.env.PYTHON) return process.env.PYTHON;
   const venv = path.join(root, '.venv', 'bin', 'python');
-  return fs.existsSync(venv) ? venv : 'python3';
+  return fs.existsSync(venv) ? venv : null;
 }
+// --backend python runs the configured interpreter, else whatever python3 is on PATH.
+const pythonPath = (root) => configuredPython(root) || 'python3';
 
 // Run bc_train.py on binFile; resolves to { layers, params, log[, transitions] }. onLine gets each stdout line.
 // o.snapshotDir (optional): write each epoch's params to <snapshotDir>/epoch-NN.json.
@@ -799,11 +802,29 @@ function runEngine(python, args, env, o, onLine, name) {
 // ---------------------------------------------------------------------------
 // The interpreter with mlx: PYTHON_MLX, else <root>/.venv-mlx/bin/python (pyenv Python 3.14.8,
 // mlx 0.32.3, numpy 2.5.4). A worktree has no .venv-mlx of its own, so set PYTHON_MLX there.
-function mlxPythonPath(root) {
+function configuredMlxPython(root) {
   if (process.env.PYTHON_MLX) return process.env.PYTHON_MLX;
   const venv = path.join(root, '.venv-mlx', 'bin', 'python');
-  if (fs.existsSync(venv)) return venv;
-  throw new Error(`--backend mlx needs ${venv} (research/plan-gpu-trainer.md Phase 0) or the PYTHON_MLX env var`);
+  return fs.existsSync(venv) ? venv : null;
+}
+function mlxPythonPath(root) {
+  const p = configuredMlxPython(root);
+  if (p) return p;
+  throw new Error(`--backend mlx needs ${path.join(root, '.venv-mlx', 'bin', 'python')} (research/plan-gpu-trainer.md Phase 0) or the PYTHON_MLX env var`);
+}
+
+// The --backend used when none is given (user's choices: bc-train-batch 2026-10-11, bc-train
+// "same as batch" 2026-10-12): mlx when an mlx interpreter is configured and --jobs is not
+// given; else python. With nodeFallback (bc-train; bc-train-batch has no node backend), python
+// only when a numpy interpreter is configured, else node. "Configured" means the env var is set
+// or the venv exists; neither is probed. Returns { backend, why } (why: for the log line).
+function defaultBackend(root, { jobs, nodeFallback = false } = {}) {
+  const mlx = !!configuredMlxPython(root);
+  if (mlx && jobs === undefined) return { backend: 'mlx', why: 'mlx interpreter found' };
+  const noMlx = mlx ? 'mlx interpreter found, but --jobs given' : 'no .venv-mlx or PYTHON_MLX';
+  if (!nodeFallback) return { backend: 'python', why: noMlx };
+  if (configuredPython(root)) return { backend: 'python', why: `${noMlx}; numpy interpreter found` };
+  return { backend: 'node', why: `${noMlx}, no .venv or PYTHON` };
 }
 
 // Train several models of ONE shape (o.hidden) at once on the GPU, one per o.seeds[k], into
@@ -845,7 +866,7 @@ function assembleBest({ layers, params, validation, coreHash, config }) {
 
 module.exports = {
   DEMOS_FORMAT, ROW, GEN_DEFAULTS, TRAIN_DEFAULTS, TEACHERS, resolveTeacher, actionLabel, isBoring, genEpisode, genSeed, studentFactory, transitionMask, generateDemos, resolveDemos, checkDemos,
-  loadDemos, sha256File, layerOffsets, createTrainer, classWeights, trainNode, pythonPath, trainPython, mlxPythonPath, trainMlx, assembleBest,
+  loadDemos, sha256File, layerOffsets, createTrainer, classWeights, trainNode, configuredPython, pythonPath, trainPython, configuredMlxPython, mlxPythonPath, defaultBackend, trainMlx, assembleBest,
   teacherLogits, argmaxLabels, softTargets, QUANT_SCHEMES, quantMax, checkQuantOptions, pow2Exponent, quantizeInto, quantizeParams, checkQuantized, quantRecord,
   writeLogits, paramsSha256,
 };
