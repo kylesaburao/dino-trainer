@@ -21,7 +21,9 @@ Playing needs only a browser, and the Node trainer needs only Node (v22+; v26 is
 
 ## Play
 
-Open `index.html` in a browser, directly over `file://`. There is no build step. Toggle AI mode on the page to watch the shipped model play. `index-css.html` runs the same network in the browser's CSS engine. On both pages you can pick another bundled model trained for the latest rules (the other rules-v3 clones) and fast-forward the AI from 1× to 4096×; the page shows the speed it actually achieves. Under the game, a network view (as on the dashboard) draws the AI's latest decision: activations, weights and the chosen action; a button hides it. `node trainer/cli.js export-models` regenerates the bundled models.
+**[Play it online](https://claude.ai/artifact/G9ywtZRGEZFr1SYSrogNbg)**: the JS page (`index.html`) with the shipped model, published as a Claude artifact. The link works for others once the owner shares it publicly.
+
+Open `index.html` in a browser, directly over `file://`. There is no build step. Toggle AI mode on the page to watch the shipped model play. `index-css.html` runs the same network in the browser's CSS engine. On both pages you can pick another bundled model trained for the latest rules (the other rules-v3 clones), even mid-game: the run continues with the new model, nothing restarts, and the page remembers the choice. You can also fast-forward the AI from 1× to 4096×; the page shows the speed it actually achieves. Under the game, a network view (as on the dashboard) draws the AI's latest decision: activations, weights and the chosen action; a button hides it. `node trainer/cli.js export-models` regenerates the bundled models.
 
 **Game rules.** Both pages always play the latest rules, currently rules v3; there is no option to pick other rules, and the model selector lists only models trained for the latest rules. The high score is kept per rules version. The training dashboard plays each run on the rules it was trained for. The rules versions:
 - **rules v1**: the original game; difficulty stops rising at about 1,700 points.
@@ -66,7 +68,7 @@ This prints the pass rate with a 95% confidence interval.
 node trainer/cli.js export --dir runs/exp-bc-mine --which best   # writes model.js and model.css
 node test/browser-check.js                                      # headless Chrome check, including CSS/JS agreement
 ```
-`export`, `finish`, `session` and `--auto-export` all overwrite the shipped `model.js`/`model.css`. The shipped model is `runs/exp-bc-duck/v2-bc-duck-d2w8-s1`; the previous jump-only clone is `runs/v2-bc-jump-d2w32-s1`. `node test/css-agreement.js --dir <run>` checks CSS/JS agreement through the duck phase for a candidate without touching the root files.
+`export`, `finish`, `session` and `--auto-export` all overwrite the shipped `model.js`/`model.css`. The shipped model is `runs/exp-v3-clones/v3-bc-duck-d2w8-s2` (trained for rules v3); the previous ones are `runs/exp-bc-duck/v2-bc-duck-d2w8-s1` and the jump-only clone `runs/v2-bc-jump-d2w32-s1` (both rules v2). `node test/css-agreement.js --dir <run>` checks CSS/JS agreement through the duck phase for a candidate without touching the root files.
 
 **Neuroevolution (research pipeline).** The OpenAI-ES trainer learns from the game score alone. It runs for hours, so start it detached:
 ```sh
