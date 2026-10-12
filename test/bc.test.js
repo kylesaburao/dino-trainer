@@ -179,10 +179,52 @@ test('python backend: --snapshots leaves params unchanged and writes one file pe
 });
 
 test('bc-train --snapshots is rejected with the node backend', () => {
-  const run = spawnSync(process.execPath, [path.join(ROOT, 'trainer', 'cli.js'), 'bc-train', '--dir', path.join(tmp, 'snaprun'), '--hidden', '4', '--snapshots'], { encoding: 'utf8' });
+  const run = spawnSync(process.execPath, [path.join(ROOT, 'trainer', 'cli.js'), 'bc-train', '--backend', 'node', '--dir', path.join(tmp, 'snaprun'), '--hidden', '4', '--snapshots'], { encoding: 'utf8' });
   assert.notStrictEqual(run.status, 0);
   assert.match(run.stderr, /--snapshots is only supported with --backend python/);
   assert.ok(!fs.existsSync(path.join(tmp, 'snaprun')));
+});
+
+test('default --backend: mlx if configured (and no --jobs), else python if configured, else node (bc-train) / python (batch)', (t) => {
+  const root = path.join(tmp, 'backend-root');
+  fs.mkdirSync(root, { recursive: true });
+  const saved = { PYTHON: process.env.PYTHON, PYTHON_MLX: process.env.PYTHON_MLX };
+  t.after(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+  delete process.env.PYTHON;
+  delete process.env.PYTHON_MLX;
+  const pick = (o) => bc.defaultBackend(root, o).backend;
+  const both = (o) => [pick({ nodeFallback: true, ...o }), pick(o)];   // [bc-train, bc-train-batch]
+  assert.deepStrictEqual(both(), ['node', 'python']);
+  assert.strictEqual(bc.configuredPython(root), null);
+  assert.strictEqual(bc.pythonPath(root), 'python3');
+  assert.match(bc.defaultBackend(root, { nodeFallback: true }).why, /no \.venv-mlx or PYTHON_MLX, no \.venv or PYTHON/);
+  process.env.PYTHON = '/x/python';
+  assert.deepStrictEqual(both(), ['python', 'python']);
+  delete process.env.PYTHON;
+  fs.mkdirSync(path.join(root, '.venv', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.venv', 'bin', 'python'), '');
+  assert.deepStrictEqual(both(), ['python', 'python']);
+  assert.strictEqual(bc.pythonPath(root), path.join(root, '.venv', 'bin', 'python'));
+  process.env.PYTHON_MLX = '/x/mlx-python';
+  assert.deepStrictEqual(both(), ['mlx', 'mlx']);
+  assert.deepStrictEqual(both({ jobs: '3' }), ['python', 'python']);
+  assert.strictEqual(bc.defaultBackend(root, { jobs: '3' }).why, 'mlx interpreter found, but --jobs given');
+  delete process.env.PYTHON_MLX;
+  fs.mkdirSync(path.join(root, '.venv-mlx', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.venv-mlx', 'bin', 'python'), '');
+  assert.deepStrictEqual(both(), ['mlx', 'mlx']);
+  assert.strictEqual(bc.mlxPythonPath(root), path.join(root, '.venv-mlx', 'bin', 'python'));
+});
+
+test('bc-train --snapshots with no interpreter configured: the node default says why (skipped when one is configured)', (t) => {
+  const env = { ...process.env };
+  delete env.PYTHON;
+  delete env.PYTHON_MLX;
+  if (['.venv', '.venv-mlx'].some(v => fs.existsSync(path.join(ROOT, v, 'bin', 'python')))) return t.skip('this checkout has .venv or .venv-mlx');
+  const run = spawnSync(process.execPath, [path.join(ROOT, 'trainer', 'cli.js'), 'bc-train', '--dir', path.join(tmp, 'snaprun-default'), '--hidden', '4', '--snapshots'], { encoding: 'utf8', env });
+  assert.notStrictEqual(run.status, 0);
+  assert.match(run.stdout, /bc-train: --backend node \(default: no \.venv-mlx or PYTHON_MLX, no \.venv or PYTHON\)/);
+  assert.match(run.stderr, /--snapshots is only supported with --backend python or mlx \(the default is node here: no \.venv or PYTHON, no \.venv-mlx or PYTHON_MLX\)/);
 });
 
 test('bc-train refuses demos from a different core hash unless --force', async () => {
@@ -293,7 +335,7 @@ test('a teacher that holds both jump and down throws', async () => {
 test('bc-train on duck demos: config.teacherName duck, recall.duck in bc-metrics, validation runs; old manifests read as jump', async () => {
   const { dir } = await duckDemos();
   const out = path.join(tmp, 'duckrun');
-  const run = cli('bc-train', '--dir', out, '--demos', dir, '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1');
+  const run = cli('bc-train', '--backend', 'node', '--dir', out, '--demos', dir, '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1');
   assert.strictEqual(run.status, 0, run.stderr);
   const best = JSON.parse(fs.readFileSync(path.join(out, 'best.json'), 'utf8'));
   assert.strictEqual(best.config.teacherName, 'duck');
@@ -310,7 +352,7 @@ test('bc-train on duck demos: config.teacherName duck, recall.duck in bc-metrics
   assert.strictEqual(teacherName, 'jump');
   fs.writeFileSync(path.join(old, 'demos.json'), JSON.stringify(legacy));
   const out2 = path.join(tmp, 'oldrun');
-  const run2 = cli('bc-train', '--dir', out2, '--demos', old, '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1');
+  const run2 = cli('bc-train', '--backend', 'node', '--dir', out2, '--demos', old, '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1');
   assert.strictEqual(run2.status, 0, run2.stderr);
   const best2 = JSON.parse(fs.readFileSync(path.join(out2, 'best.json'), 'utf8'));
   assert.strictEqual(best2.config.teacherName, 'jump');
@@ -505,7 +547,7 @@ let kdTeacher = null;
 async function kdTeacherFile() {
   if (kdTeacher) return kdTeacher;
   const teacherDir = path.join(tmp, 'kd-teacher');
-  const run = cli('bc-train', '--dir', teacherDir, '--demos', await smallDir('duck'), '--hidden', '8,8', '--epochs', '2', '--batch', '64', '--target', '50', '--workers', '1');
+  const run = cli('bc-train', '--backend', 'node', '--dir', teacherDir, '--demos', await smallDir('duck'), '--hidden', '8,8', '--epochs', '2', '--batch', '64', '--target', '50', '--workers', '1');
   assert.strictEqual(run.status, 0, run.stderr);
   return (kdTeacher = path.join(teacherDir, 'best.json'));
 }
@@ -515,7 +557,7 @@ test('bc-train --distill-from / --quant-bits: config records the teacher (path, 
   const tf = await kdTeacherFile();
   const teacher = JSON.parse(fs.readFileSync(tf, 'utf8'));
   const out = path.join(tmp, 'kd-student');
-  let run = cli('bc-train', '--dir', out, '--demos', dir, '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1',
+  let run = cli('bc-train', '--backend', 'node', '--dir', out, '--demos', dir, '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1',
     '--distill-from', tf, '--tau', '2', '--alpha', '0.25', '--quant-bits', '4');
   assert.strictEqual(run.status, 0, run.stderr);
   const best = JSON.parse(fs.readFileSync(path.join(out, 'best.json'), 'utf8'));
@@ -535,7 +577,7 @@ test('bc-train --distill-from / --quant-bits: config records the teacher (path, 
   assert.ok(fs.readdirSync(out).every(f => !f.endsWith('.tmp')), 'no temp files left');
   // hard mode records no tau/alpha; flags without --distill-from, or misused, are refused.
   const hard = path.join(tmp, 'kd-hard');
-  run = cli('bc-train', '--dir', hard, '--demos', dir, '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1',
+  run = cli('bc-train', '--backend', 'node', '--dir', hard, '--demos', dir, '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1',
     '--distill-from', tf, '--distill-mode', 'hard');
   assert.strictEqual(run.status, 0, run.stderr);
   const hc = JSON.parse(fs.readFileSync(path.join(hard, 'best.json'), 'utf8')).config;
@@ -705,7 +747,7 @@ test('pow2 through the CLI (bc-quantize and bc-train): config.quant records k, b
   assert.throws(() => pack.pack(srcBest), /not a pow2-quantized model/);
   // bc-train QAT pow2 (node backend): the same record, mode qat.
   const qat = path.join(tmp, 'qat-pow2');
-  run = cli('bc-train', '--dir', qat, '--demos', await smallDir('duck'), '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1',
+  run = cli('bc-train', '--backend', 'node', '--dir', qat, '--demos', await smallDir('duck'), '--hidden', '4', '--epochs', '1', '--batch', '64', '--target', '50', '--workers', '1',
     '--quant-bits', '8', '--quant-scheme', 'pow2');
   assert.strictEqual(run.status, 0, run.stderr);
   const qb = JSON.parse(fs.readFileSync(path.join(qat, 'best.json'), 'utf8'));
@@ -824,7 +866,7 @@ test('cli: release-fix flags are python-only, validated, and recorded in best.js
   const { dir: jdir } = await smallDemos();
   const { dir: ddir } = await duckDemos();
   for (const flag of [['--extra-demos', jdir], ['--transition-weight', '4']]) {
-    const r = cli('bc-train', '--dir', path.join(tmp, 'cli-node' + flag[0]), '--demos', jdir, '--hidden', '4', '--epochs', '1', ...flag);
+    const r = cli('bc-train', '--backend', 'node', '--dir', path.join(tmp, 'cli-node' + flag[0]), '--demos', jdir, '--hidden', '4', '--epochs', '1', ...flag);
     assert.notStrictEqual(r.status, 0);
     assert.match(r.stderr + r.stdout, /only supported with --backend python/);
   }

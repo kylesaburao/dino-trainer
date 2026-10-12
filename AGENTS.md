@@ -41,10 +41,12 @@ Behaviour cloning (see "Model provenance"):
 
 ```sh
 node trainer/cli.js bc-gen --dir runs/bc-<name>                                   # solver demos: seeds 1-40, about 2.1M rows, seconds
-node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32                  # node backend, about 10 s/epoch, then 25-seed validation to 1M
+node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32                  # default backend (below), then 25-seed validation to 1M
 node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend python # numpy backend, about 1 s/epoch
+node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend node   # plain Node, no dependencies, about 10 s/epoch
 ```
 
+- `bc-train`'s default backend follows `bc-train-batch` (user's decision, 2026-10-12): `mlx` when an mlx interpreter is configured (`.venv-mlx` or `PYTHON_MLX`), else `python` when a numpy interpreter is configured (`.venv` or `PYTHON`), else `node`. It logs the choice (`bc-train: --backend X (default: ...)`), and `best.json` `config.backend` records it. Runs from before 2026-10-12 without `--backend` used node: pass `--backend node` to reproduce them. In a venv-less checkout, python-only flags (`--snapshots`, `--extra-demos`, `--transition-weight`) fail and say the default fell back to node.
 - `--backend python` needs `.venv` with numpy (`.venv/bin/python`); the `PYTHON` env var overrides the interpreter. A worktree has no `.venv` of its own, so set `PYTHON` there.
 - `--backend mlx` (Apple GPU, `trainer/bc_train_mlx.py`): `bc-train` and `bc-train-batch` both accept it.
   - It needs `.venv-mlx`: pyenv Python 3.14.8, `mlx==0.32.3`, `numpy==2.5.4`. The `PYTHON_MLX` env var overrides the interpreter; a worktree has no `.venv-mlx`, so set `PYTHON_MLX` there.
@@ -52,7 +54,7 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend pytho
   - It sets `MLX_ENABLE_TF32=0`: MLX's GPU float32 matmul defaults to TF32, which made gradients 1,000× noisier.
   - Every python-only flag works with it. `config.engine` records the version, the device and `tf32`.
 - Many models at once: `node trainer/cli.js bc-train-batch --dir-pattern 'runs/<group>/v2-bc-<teacher>-d{depth}w{width}-s{seed}' --shapes 32,32/8x2 --seeds 1-10 --demos <dir> [--backend python [--jobs 6] | mlx]`. Each model gets its own ordinary run dir.
-  - The default backend is `mlx` when an mlx interpreter is configured (`.venv-mlx` or `PYTHON_MLX`) and `--jobs` isn't given; otherwise `python`. This was the user's choice on 2026-10-11. The command logs which one it picked.
+  - The default backend is `mlx` when an mlx interpreter is configured (`.venv-mlx` or `PYTHON_MLX`) and `--jobs` isn't given; otherwise `python` (there is no node backend). This was the user's choice on 2026-10-11. The command logs which one it picked. `bc.defaultBackend` in `trainer/bc.js` owns this rule for both commands.
   - `--backend python` runs `--jobs` `bc_train.py` processes at once, each with 1 BLAS thread. Each member's params are byte-identical to `bc-train --backend python` with the same shape and seed (checked on the full demos, 10/10).
   - `--backend mlx` trains each shape's seeds in one GPU process (groups of at most 40).
   - Tier A runs on one shared worker pool, packed: every model waiting when the pool frees up plays its 25 games in one pool run (`scoreSeedsMany`; `worker.js` takes `setup.models` with a per-job `model` index). Validation results are unchanged. Training continues meanwhile.
