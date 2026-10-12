@@ -23,10 +23,15 @@
 //    selectors list exactly the latest-rules models; every latest-rules bundled
 //    model (models.js, models-css/) loads with ?model=<id> and plays a few hundred
 //    frames at 4096x with the policy called once per update (index.html) and 0
-//    CSS/JS disagreements (index-css.html); the selector remembers a choice and
-//    reloads with only ?model=; a ?model= or remembered choice for other rules
-//    falls back to the root model and the remembered one is cleared. Prints the
-//    achieved speed. Independent of which model is the root.
+//    CSS/JS disagreements (index-css.html); a pick switches the model in place on
+//    both pages (no reload; the same game and run continue; index.html: with AI off
+//    and mid-run at 4096x, a new agent for the pick; index-css.html: the new
+//    stylesheet replaces the old one, then 0 disagreements with the pick; a pick
+//    with the active --nn-model-id loads nothing; a missing stylesheet keeps the
+//    old model and warns without console output) and is remembered as ?model=<id>
+//    only; a ?model= or remembered choice for other rules falls back to the root
+//    model and the remembered one is cleared. Prints the achieved speed.
+//    Independent of which model is the root.
 // 7. Network view (netview.js) under the game on both pages: it shows the selected
 //    model's shape (and follows a model change), is idle with AI off, draws live
 //    decisions during AI play at 4096x with no mismatch warning (index.html: vs the
@@ -333,23 +338,124 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
       !cdef.failed && cdef.href === 'model.css' && cdef.id === modelId(shipped) && cdef.select === rootSelect && cdef.options === wantOptions,
       `${JSON.stringify(cdef)} want options ${wantOptions}`);
 
-    // The selector remembers the choice and reloads with only ?model=<id> (a stray ?game= is dropped).
+    // A pick switches the model in place on both pages: no reload (a page marker
+    // survives), the same game and run continue, the new model decides from then on,
+    // and the choice is remembered (?model=<id> only, via history.replaceState; a
+    // stray ?game= is dropped) for both pages' next visit.
     const pick = latest.find(m => !m.shipped);
-    if (!pick) {
-      check(`a second rules-${LATEST} model to pick in models.js`, false, 'models.js has no non-shipped latest-rules model; the pick checks need one');
+    const pick2 = pick && latest.find(m => m.id !== pick.id);
+    if (!pick || !pick2) {
+      check(`two rules-${LATEST} models to pick in models.js`, false, 'models.js needs a non-shipped latest-rules model and a second one; the switch checks need them');
     } else {
+      const pickJs = (id) => `(() => { modelSelect.value = '${id}'; modelSelect.dispatchEvent(new Event('change')); })()`;
+      const remembered = `({ search: location.search, stored: localStorage.getItem('dino-model'), marker: window.__marker === 1 })`;
+      // index.html, AI off: only the model changes; turning AI on then plays the pick.
+      await evaluate(`localStorage.removeItem('dino-model')`);
       await load(path.join(ROOT, 'index.html') + `?game=${GAME_VERSIONS[0]}`);
-      await evaluate(`(() => { modelSelect.value = '${pick.id}'; modelSelect.dispatchEvent(new Event('change')); })()`);
-      await sleep(1500);
-      await waitUntil(`typeof MODEL !== 'undefined' && document.readyState === 'complete'`, 5000);
-      const picked = await evaluate(`({ search: location.search, id: MODEL.id, stored: localStorage.getItem('dino-model'), version: game.version, select: modelSelect.value,
-        arch: document.getElementById('net-arch').textContent })`);
-      check('index.html: picking a model reloads with only ?model=<id>, remembers it, and the network view shows it', picked.id === pick.id && picked.stored === pick.id &&
-        picked.search === `?model=${pick.id}` && picked.version === LATEST && picked.select === pick.id && picked.arch.startsWith(arch(pick)), JSON.stringify(picked));
+      await evaluate(`(() => { window.__marker = 1; window.__made = [];
+        const create = DinoPolicy.createAgent; DinoPolicy.createAgent = (m) => { __made.push(m.id || m.source); return create(m); }; })()`);
+      await evaluate(pickJs(pick.id));
+      const off = await evaluate(`({ ...${remembered}, id: model.id, loadTime: MODEL === DINO_MODEL, agent: agent === null, aiOn, state: game.state, select: modelSelect.value,
+        net: ${netInfo}, made: __made.length })`);
+      check(`index.html, AI off: a pick switches to ${pick.id} in place (no reload, no agent), the idle view shows its shape, remembered as ?model=<id> only`,
+        off.marker && off.id === pick.id && off.loadTime && off.agent && !off.aiOn && off.made === 0 && off.select === pick.id &&
+        off.net.arch.startsWith(arch(pick)) && !off.net.live && /turn AI on/.test(off.net.caption) &&
+        off.search === `?model=${pick.id}` && off.stored === pick.id, JSON.stringify(off));
+      const tb = await evaluate(`(() => { const r = document.getElementById('ai-toggle').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+      await click(tb.x, tb.y);
+      await sleep(50);
+      check(`index.html: turning AI on after the pick plays ${pick.id}`, await evaluate(`aiOn && __made.length === 1 && __made[0] === '${pick.id}' && model.id === '${pick.id}'`),
+        JSON.stringify(await evaluate(`({ aiOn, made: __made })`)));
+      // index.html, AI on at 4096x: switch mid-run to pick2.
+      await evaluate(`(() => {
+        window.__s = { updates: 0, runs: 0, running: 0 };
+        const update = game.update; let last = game.state;
+        game.update = (ms, n) => { __s.updates++; if (last !== 'running' && game.state === 'running') __s.runs++; if (game.state === 'running') __s.running++;
+          const r = update(ms, n); last = game.state; return r; };
+        speedSelect.value = '4096'; })()`);
+      const running = await waitUntil(`game.state === 'running' && __s.running >= ${MODEL_FRAMES}`, 20000);
+      const before = await evaluate(`(() => { window.__agent0 = agent; return { updates: __s.updates, runs: __s.runs, score: game.score(), mismatches: netView.mismatches }; })()`);
+      await evaluate(pickJs(pick2.id));
+      const now = await evaluate(`({ ...${remembered}, id: model.id, newAgent: agent !== __agent0, made: __made[__made.length - 1], updates: __s.updates, runs: __s.runs })`);
+      const goes = await waitUntil(`__s.updates >= ${now.updates + MODEL_FRAMES} && netView.decisions > 0`, 20000);
+      const after = await evaluate(`({ updates: __s.updates, runs: __s.runs, state: game.state, score: game.score(), net: ${netInfo} })`);
+      check(`index.html, AI on at 4096x: a mid-run pick switches ${pick.id} -> ${pick2.id} in place: no reload, a new agent for ${pick2.id}, remembered as ?model=<id>`,
+        running && now.marker && now.id === pick2.id && now.newAgent && now.made === (pick2.id) && now.search === `?model=${pick2.id}` && now.stored === pick2.id,
+        `${JSON.stringify(before)} ${JSON.stringify(now)}`);
+      check(`index.html: the same run continues after the switch (${MODEL_FRAMES}+ more updates, score rising, run counter unchanged)`,
+        goes && after.runs === before.runs && after.state === 'running' && after.score > before.score && after.updates > before.updates,
+        `${JSON.stringify(before)} ${JSON.stringify(after)}`);
+      check(`index.html: after the switch the network view shows ${pick2.layers.join('-')}, live, no mismatch warning, no console problems`,
+        after.net.arch.startsWith(arch(pick2)) && after.net.live && after.net.mismatches === 0 && after.net.warnHidden && problems.length === 0,
+        `${JSON.stringify(after.net)} ${problems.join('; ')}`);
+
+      // index-css.html, started on the root model.css (nothing remembered).
+      const modelLinks = `[...document.querySelectorAll('link[rel=stylesheet]')].filter(l => /^(model\\.css|models-css\\/)/.test(l.getAttribute('href')))`;
+      const cssState = `({ ...${remembered}, failed: failed && failed.message, id: cssString('--nn-model-id'), links: ${modelLinks}.map(l => l.getAttribute('href') + (l.id ? '#' + l.id : '')),
+        href: document.getElementById('model-css').getAttribute('href'), text: $modelCssLink.textContent, select: $model.value, pending: !!pending,
+        sameGame: game === window.__g0, frame: game.frameIndex, state: game.state, status: $status.textContent, warn: !!$status.querySelector('.warn') })`;
+      await evaluate(`localStorage.removeItem('dino-model')`);
+      await load(path.join(ROOT, 'index-css.html') + `?game=${GAME_VERSIONS[0]}`);
+      await waitUntil(`!!game || !!failed`, 5000);
+      await evaluate(`(() => { window.__marker = 1; window.__g0 = game; })()`);
+      // A pick whose --nn-model-id is already active (the root model.css holds the
+      // shipped entry's model): nothing loads, the choice is remembered.
+      const rootEntry = latest.find(m => m.cssId === modelId(shipped));
+      if (!rootEntry) {
+        console.log('(the root model.css is no latest-rules entry: same-cssId pick check skipped)');
+      } else {
+        await evaluate(`(() => { $model.value = '${rootEntry.id}'; $model.dispatchEvent(new Event('change')); })()`);
+        await sleep(200);
+        const same = await evaluate(cssState);
+        check(`index-css.html: a pick of ${rootEntry.id}, whose --nn-model-id the root model.css already reports, loads nothing and is remembered`,
+          same.marker && !same.failed && !same.pending && same.links.join() === 'model.css#model-css' && same.href === 'model.css' && same.id === rootEntry.cssId &&
+          same.sameGame && same.search === `?model=${rootEntry.id}` && same.stored === rootEntry.id && problems.length === 0, JSON.stringify(same));
+      }
+      await evaluate(`$speed.value = '4096'`);
+      await waitUntil(`game.state === 'running' && game.frameIndex >= ${MODEL_FRAMES}`, 20000);
+      const c0 = await evaluate(cssState);
+      await evaluate(`(() => { $model.value = '${pick.id}'; $model.dispatchEvent(new Event('change')); })()`);
+      const switched = await waitUntil(`document.getElementById('model-css').getAttribute('href') === '${pick.css}'`, 15000);
+      const c1 = await evaluate(cssState);
+      check(`index-css.html at 4096x: a mid-run pick switches to ${pick.css} in place: no reload, one model stylesheet, --nn-model-id ${pick.cssId}, remembered as ?model=<id>, link updated`,
+        switched && c1.marker && !c1.failed && !c1.pending && c1.id === pick.cssId && c1.links.join() === `${pick.css}#model-css` && c1.text === pick.css &&
+        c1.select === pick.id && c1.search === `?model=${pick.id}` && c1.stored === pick.id && !c1.warn, `${JSON.stringify(c0)} ${JSON.stringify(c1)}`);
+      // From now on every decision must be the pick's (policy.js on its weights).
+      await evaluate(`(() => { const net = DinoPolicy.createNet(${JSON.stringify(pick.layers)}, ${JSON.stringify(pick.params)});
+        const cssOnly = cssDecide; window.__cmp = { frames: 0, disagree: 0 };
+        window.cssDecide = (x) => { const a = cssOnly(x); __cmp.frames++; if (net(x) !== a) __cmp.disagree++; return a; }; })()`);
+      const cplayed = await waitUntil(`__cmp.frames >= ${MODEL_FRAMES}`, 30000);
+      const c2 = await evaluate(`({ ...${cssState}, cmp: __cmp, net: ${netInfo} })`);
+      check(`index-css.html: the same game continues (frameIndex ${c0.frame} -> ${c2.frame}), ${MODEL_FRAMES}+ decisions after the switch, 0 disagreements with ${pick.id}`,
+        cplayed && c2.sameGame && c1.sameGame && c2.frame > c1.frame && c1.frame > c0.frame && c2.cmp.disagree === 0 && !c2.failed,
+        `${JSON.stringify(c2.cmp)} frames ${c0.frame}/${c1.frame}/${c2.frame} sameGame ${c1.sameGame}/${c2.sameGame}`);
+      check(`index-css.html: after the switch the network view shows ${pick.layers.join('-')}, JS argmax = --act (no warning), no console problems`,
+        c2.net.arch.startsWith(arch(pick)) && c2.net.live && c2.net.mismatches === 0 && c2.net.warnHidden && problems.length === 0,
+        `${JSON.stringify(c2.net)} ${problems.join('; ')}`);
+      // A pick whose stylesheet is missing: the old model keeps playing, the selector
+      // goes back, the status line warns, and the page logs nothing (the browser's own
+      // failed-load entry for that file is the only problem allowed).
+      const missing = 'models-css/no-such-model.css';
+      await evaluate(`(() => { MODEL_INDEX.push({ ...MODEL_INDEX.find(m => m.id === '${pick.id}'), id: 'no-such-model', label: 'missing', css: '${missing}', cssId: 'na-missing' });
+        $model.add(new Option('missing', 'no-such-model')); $model.value = 'no-such-model'; $model.dispatchEvent(new Event('change')); })()`);
+      const aborted = await waitUntil(`!pending && /model not switched/.test($status.textContent)`, 15000);
+      const c3 = await evaluate(cssState);
+      const own = problems.filter(p => !(p.startsWith('log error: ') && p.includes('no-such-model.css')));
+      check('index-css.html: a pick whose stylesheet is missing keeps the old model, restores the selector, warns in the status line, and logs nothing itself',
+        aborted && !c3.failed && c3.id === pick.cssId && c3.links.join() === `${pick.css}#model-css` && c3.select === pick.id && c3.stored === pick.id &&
+        c3.search === `?model=${pick.id}` && c3.warn && /could not load/.test(c3.status) && c3.sameGame && own.length === 0,
+        `${JSON.stringify(c3)} problems: ${problems.join('; ')}`);
+      await waitUntil(`game.frameIndex > ${c3.frame}`, 5000);
+      problems.splice(0, problems.length, ...own);
+      check('index-css.html: the old model keeps playing after the failed switch', (await evaluate(`game.frameIndex`)) > c3.frame && !(await evaluate(`failed`)));
+      // The remembered pick, on both pages' next visit without ?model=.
       await load(path.join(ROOT, 'index-css.html'));
       await waitUntil(`!!game || !!failed`, 15000);
-      const remembered = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), select: $model.value })`);
-      check('index-css.html: plays the remembered choice without ?model=', !remembered.failed && remembered.id === pick.cssId && remembered.select === pick.id, JSON.stringify(remembered));
+      const back = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), select: $model.value })`);
+      await load(path.join(ROOT, 'index.html'));
+      const backJs = await evaluate(`({ id: MODEL.id, select: modelSelect.value })`);
+      check(`both pages play the remembered pick ${pick.id} without ?model=`, !back.failed && back.id === pick.cssId && back.select === pick.id &&
+        backJs.id === pick.id && backJs.select === pick.id, `${JSON.stringify(back)} ${JSON.stringify(backJs)}`);
       await evaluate(`localStorage.removeItem('dino-model')`);
     }
 

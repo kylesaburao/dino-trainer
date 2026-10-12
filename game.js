@@ -19,15 +19,16 @@ const GAME_VERSION = DinoPages.GAME_VERSION;
 document.documentElement.dataset.gameVersion = GAME_VERSION;
 
 // ---------------------------------------------------------------------------
-// Model: ?model=<id> (a models.js id for the latest rules), else the choice
-// remembered from the selector (if for the latest rules), else the shipped
-// model.js. Changing the selector reloads the page. See pages.js.
+// Model at load: ?model=<id> (a models.js id for the latest rules), else the
+// choice remembered from the selector (if for the latest rules), else the shipped
+// model.js. See pages.js. The selector later switches the model in place
+// (switchModel below); MODEL stays the load-time choice.
 // ---------------------------------------------------------------------------
 const MODELS = DinoPages.forPages(typeof DINO_MODELS !== 'undefined' ? DINO_MODELS : []);
 const SHIPPED = typeof DINO_MODEL !== 'undefined' ? DINO_MODEL : null;
 const MODEL = DinoPages.chooseModel(MODELS, location.search) || SHIPPED;
 // Shown in the status line when the model (the root one) is for other rules.
-const RULES_WARNING = MODEL ? DinoPages.rulesWarning(MODEL.gameVersion || 'v1') : '';
+let rulesWarning = MODEL ? DinoPages.rulesWarning(MODEL.gameVersion || 'v1') : '';
 
 // ---------------------------------------------------------------------------
 // High score (human runs only), kept per game version ('dino-hi' is v1's)
@@ -94,7 +95,7 @@ const dino = game.dino;
 // jump/duck input is ignored; after a game over the AI restarts by itself once
 // the restart lockout has passed (auto-restart).
 const aiButton = document.getElementById('ai-toggle');
-const model = MODEL;
+let model = MODEL;             // the model playing now (the selector changes it)
 let aiOn = false;
 let agent = null;
 
@@ -115,6 +116,21 @@ function setAI(on) {
   aiButton.setAttribute('aria-pressed', String(on));
   speedSelect.disabled = !on;
   netIdle();
+}
+
+// A selector pick, between display frames: the game, its run, the keys held, HI,
+// speed and clock all continue. With AI on, a fresh agent for the new model makes
+// the next update's decision (the core compares new keys with the keys held, so a
+// held key is safe); with AI off only the model changes, for when AI is turned on.
+function switchModel(next) {
+  if (!next || next === model) return;
+  model = next;
+  if (aiOn) agent = DinoPolicy.createAgent(model);
+  aiButton.disabled = !model;
+  netView.setModel(model);
+  netIdle();
+  rulesWarning = DinoPages.rulesWarning(model.gameVersion || 'v1');
+  showSpeedStatus();
 }
 
 // `look`: also show this decision in the network view (observed before the keys
@@ -144,16 +160,22 @@ aiButton.addEventListener('click', () => {
 // Model and speed selectors
 // ---------------------------------------------------------------------------
 // The model selector lists the models.js entries for the latest rules; the shipped
-// model.js appears as its own entry if they don't contain it. Picking one remembers
-// it and reloads with only ?model=<id>. The speed applies to AI mode only: a human
-// always plays at 1x, so the human HI stays comparable.
+// model.js appears as its own entry if they don't contain it. Picking one switches
+// the model in place, mid-run too (the game continues, nothing reloads), and
+// remembers it (?model=<id> in the address, localStorage). The speed applies to AI
+// mode only: a human always plays at 1x, so the human HI stays comparable.
 const modelSelect = document.getElementById('model');
 const speedSelect = document.getElementById('speed');
 const speedStatus = document.getElementById('speed-status');
 const sameModel = (a, b) => !!a && !!b && a.layers.join() === b.layers.join() && a.params.length === b.params.length &&
   a.params.every((v, i) => v === b.params[i]);
-// The status line: the rules warning (if any), then the speed readout.
-const showSpeedStatus = (text) => { speedStatus.textContent = RULES_WARNING ? `${RULES_WARNING} · ${text}` : text; };
+// The status line: the rules warning (if any), then the speed readout (the last
+// one again when called without text, after a model switch).
+let speedText = '';
+const showSpeedStatus = (text = speedText) => {
+  speedText = text;
+  speedStatus.textContent = rulesWarning ? `${rulesWarning} · ${text}` : text;
+};
 showSpeedStatus('speed applies to AI mode');
 
 (() => {
@@ -164,7 +186,11 @@ showSpeedStatus('speed applies to AI mode');
   const current = MODELS.find(m => m === MODEL) || (MODEL === SHIPPED ? shippedEntry : null);
   modelSelect.value = current ? current.id : '';
   modelSelect.disabled = options.length < 2;
-  modelSelect.addEventListener('change', () => DinoPages.pickModel(modelSelect.value));
+  modelSelect.addEventListener('change', () => {
+    const id = modelSelect.value;
+    switchModel(id ? MODELS.find(m => m.id === id) : SHIPPED);
+    DinoPages.rememberModel(id);
+  });
 })();
 
 for (const el of [modelSelect, speedSelect]) el.addEventListener('change', () => el.blur());

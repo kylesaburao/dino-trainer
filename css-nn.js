@@ -15,11 +15,21 @@
 // argmax differs from --act it shows a warning. It only reads; it never decides.
 // A stylesheet that is not in models.js has no JavaScript weights, so no view.
 //
-// Model selector: ?model=<id>, else the choice remembered by either page
+// Model selector: at load, ?model=<id>, else the choice remembered by either page
 // (localStorage 'dino-model'), switches the stylesheet to models-css/<id>.css
 // (`node trainer/cli.js export-models`; models-css/index.js lists ids, labels and
-// each file's --nn-model-id, never weights). With neither, the page plays model.css.
-// Only models trained for the latest rules are offered or accepted (pages.js).
+// each file's --nn-model-id, never weights), and play starts once the style engine
+// reports that id. With neither, the page plays model.css. Only models trained for
+// the latest rules are offered or accepted (pages.js).
+//
+// A pick switches the model in place: the game continues. The new stylesheet is
+// appended after the old one; every model's sheet declares the same properties in
+// one .css-net block, so once the new sheet applies it overrides all of them up to
+// --act at once. The old sheet keeps deciding until --nn-model-id equals the new
+// id; then, at the top of a display frame, the old link is removed and the network
+// view takes the new weights. A sheet that fails to load (or doesn't report its id
+// within MODEL_LOAD_MS) is dropped: the old model keeps playing, the selector goes
+// back and the status line warns. A pick with the active --nn-model-id loads nothing.
 //
 // Rules: always the latest (DinoPages.GAME_VERSION); nothing on the page picks
 // them. A stylesheet's --nn-game only checks consistency with its index entry,
@@ -32,7 +42,7 @@ const nn = document.getElementById('nn');
 const $status = document.getElementById('status');
 const $speed = document.getElementById('speed');
 const $model = document.getElementById('model');
-const $modelCss = document.getElementById('model-css');
+let $modelCss = document.getElementById('model-css');   // the active model stylesheet
 const $modelCssLink = document.getElementById('model-css-link');
 
 const MODEL_INDEX = DinoPages.forPages(typeof DINO_MODEL_INDEX !== 'undefined' ? DINO_MODEL_INDEX : []);
@@ -146,6 +156,7 @@ function frame(now) {
   last = now;
   if (failed || !game) return;
   try {
+    tryFinish();   // before any decision of this frame (see "Model switch")
     if (game.state === 'over') {
       if (!overAt) overAt = now;
       if (now - overAt > RESTART_MS) newGame();
@@ -188,20 +199,114 @@ function showStatus() {
     ` · achieved ${eff >= 10 ? Math.round(eff) : eff.toFixed(1)}× real time` + (behind || eff < want * 0.9 ? ` of ${want}× (CSS can't keep up)` : '') +
     ` · ${Math.round(rate.fps / actionRepeat)} CSS decisions/s`;
   if (rulesWarning) $status.prepend($rulesWarn, ' · ');
+  if (switchNote) $status.append(' · ', $switchNote);
 }
 
-// Fill the model selector (latest-rules entries only); picking a model remembers it
-// and reloads with only ?model=<id>. A loaded stylesheet that is not among them (the
-// root model.css when it holds another model) appears as its own "model.css" entry.
+// Fill the model selector (latest-rules entries only); picking a model switches to
+// it in place (requestSwitch). A loaded stylesheet that is not among them (the root
+// model.css when it holds another model) appears as its own "model.css" entry, ''.
 function fillModelSelect(loadedId) {
   const current = SELECTED || MODEL_INDEX.find(m => m.cssId === loadedId);
   if (!current) $model.add(new Option(`model.css (${loadedId})`, ''));
   for (const m of MODEL_INDEX) $model.add(new Option(m.label, m.id));
   $model.value = current ? current.id : '';
   $model.disabled = $model.options.length < 2;
-  $model.addEventListener('change', () => DinoPages.pickModel($model.value));
+  $model.addEventListener('change', () => requestSwitch($model.value));
+  activeId = $model.value;
+  activeCssId = loadedId;
+  rootCssId = current ? null : loadedId;   // the '' entry exists only then
 }
 for (const el of [$model, $speed]) el.addEventListener('change', () => el.blur());
+
+// ---------------------------------------------------------------------------
+// Model switch (see the header): the game, its run, `best` and the speed continue
+// ---------------------------------------------------------------------------
+let activeId = '', activeCssId = '', rootCssId = null;   // the selector value and --nn-model-id playing now
+let pending = null;   // { id, entry, cssId, href, link, timer } while a new stylesheet loads
+let switchNote = '';  // status-line note: loading, or why a switch failed (never the console)
+const $switchNote = document.createElement('span');
+
+function note(text, warn) {
+  switchNote = text;
+  $switchNote.textContent = text;
+  $switchNote.className = warn ? 'warn' : '';
+}
+
+function dropPending() {
+  if (!pending) return;
+  pending.link.remove();
+  clearTimeout(pending.timer);
+  pending = null;
+}
+
+function requestSwitch(id) {
+  dropPending();
+  note('');
+  const entry = id ? MODEL_INDEX.find(m => m.id === id) : null;
+  const target = entry ? { cssId: entry.cssId, href: entry.css } : rootCssId ? { cssId: rootCssId, href: 'model.css' } : null;
+  if (!target) { $model.value = activeId; return; }
+  if (target.cssId === activeCssId) {   // e.g. the root model.css holds this entry's model
+    activeId = id;
+    DinoPages.rememberModel(id);
+    return;
+  }
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  const p = { id, entry, cssId: target.cssId, href: target.href, link, timer: 0 };
+  link.onload = tryFinish;
+  link.onerror = () => { if (pending === p) abortSwitch(`could not load ${p.href}`); };
+  p.timer = setTimeout(() => {
+    tryFinish();
+    if (pending === p) abortSwitch(`${p.href} did not load (--nn-model-id "${cssString('--nn-model-id')}", expected "${p.cssId}")`);
+  }, MODEL_LOAD_MS);
+  pending = p;
+  link.href = target.href;
+  $modelCss.after(link);
+  note(`loading ${entry ? entry.label : target.href}…`);
+}
+
+// Finish the pending switch once the new sheet applies. Called at the top of
+// frame(), so no decision of a frame and the view's weights come from different
+// models, and from the link's load event and the timeout.
+function tryFinish() {
+  if (!pending || cssString('--nn-model-id') !== pending.cssId) return;
+  const p = pending;
+  let cssGame, repeat;
+  try {
+    cssGame = cssString('--nn-game') || 'v1';
+    if (p.entry && cssGame !== p.entry.gameVersion) throw new Error(`${p.href} is for rules ${cssGame}, the index says ${p.entry.gameVersion}`);
+    if (!DinoCore.GAME_VERSIONS.includes(cssGame)) throw new Error(`${p.href} is for unknown game ${cssGame}`);
+    repeat = Math.max(1, cssNumber('--nn-action-repeat') | 0);
+  } catch (e) {
+    abortSwitch(e.message);
+    return;
+  }
+  $modelCss.remove();
+  p.link.id = 'model-css';
+  $modelCss = p.link;
+  clearTimeout(p.timer);
+  pending = null;
+  actionRepeat = repeat;
+  wait = 0;
+  decided = false;   // a decision of the old model must not reach the new view
+  lastAct = -1;
+  setViewModel(p.cssId);
+  $modelCssLink.href = p.href;
+  $modelCssLink.textContent = p.href;
+  rulesWarning = DinoPages.rulesWarning(cssGame);
+  $rulesWarn.textContent = rulesWarning;
+  activeId = p.id;
+  activeCssId = p.cssId;
+  DinoPages.rememberModel(p.id);
+  note('');
+}
+
+// The old model keeps playing; the reason goes to the status line only.
+function abortSwitch(msg) {
+  dropPending();
+  $model.value = activeId;
+  note(`model not switched: ${msg}`, true);
+}
 
 // Switch the stylesheet to the selected model's and wait until the style engine
 // reports that model's --nn-model-id.
