@@ -877,13 +877,13 @@ function exportCmd({ opts }) {
 // the run-dir name; the first entry is the shipped model (the pages' default is still the
 // root model.js / model.css). Labels name the rules version, teacher or method, and shape.
 const BUNDLED_MODELS = [
-  { dir: 'runs/exp-bc-duck/v2-bc-duck-d2w8-s1', label: 'rules v2 · teacher-duck clone 2×8 (shipped)', shipped: true },
-  { dir: 'runs/v2-bc-jump-d2w32-s1', label: 'rules v2 · teacher-jump clone 2×32 (previous shipped)' },
-  { dir: 'runs/v2-es-d2w32-s1-t1m', label: 'rules v2 · ES 2×32 (generation 970)' },
-  { dir: 'runs/exp-distill/v2-bc-duck-d1w6-s1', label: 'rules v2 · teacher-duck clone 1×6' },
-  { dir: 'runs/exp-v3-clones/v3-bc-duck-d2w8-s2', label: 'rules v3 · teacher-duck clone 2×8 (uncertified)' },
+  { dir: 'runs/exp-v3-clones/v3-bc-duck-d2w8-s2', label: 'rules v3 · teacher-duck clone 2×8 (shipped)', shipped: true },
   { dir: 'runs/exp-v3-clones/v3-bc-duck-d2w32-s5', label: 'rules v3 · teacher-duck clone 2×32 (uncertified)' },
   { dir: 'runs/exp-v3-clones/v3-bc-duck-d1w6-s4', label: 'rules v3 · teacher-duck clone 1×6 (uncertified)' },
+  { dir: 'runs/exp-bc-duck/v2-bc-duck-d2w8-s1', label: 'rules v2 · teacher-duck clone 2×8 (previous shipped)' },
+  { dir: 'runs/v2-bc-jump-d2w32-s1', label: 'rules v2 · teacher-jump clone 2×32' },
+  { dir: 'runs/v2-es-d2w32-s1-t1m', label: 'rules v2 · ES 2×32 (generation 970)' },
+  { dir: 'runs/exp-distill/v2-bc-duck-d1w6-s1', label: 'rules v2 · teacher-duck clone 1×6' },
 ];
 
 // models.js (DINO_MODELS, with params, for index.html), models-css/<id>.css (one CSS network

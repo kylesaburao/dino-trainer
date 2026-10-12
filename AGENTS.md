@@ -78,8 +78,8 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend node 
 
 The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale. `runs/main` no longer exists. Pass both explicitly.
 
-- **Shipped model:** `runs/exp-bc-duck/v2-bc-duck-d2w8-s1` (44-8-8-3, duck generation: jumps and ducks; since 2026-10-10, see the decision log).
-- **Previous shipped clone:** `runs/v2-bc-jump-d2w32-s1` (44-32-32-3, jump generation), kept for comparison.
+- **Shipped model:** `runs/exp-v3-clones/v3-bc-duck-d2w8-s2` (44-8-8-3, duck generation, trained for **rules v3**; since 2026-10-12, see the decision log).
+- **Previous shipped clones:** `runs/exp-bc-duck/v2-bc-duck-d2w8-s1` (44-8-8-3, rules v2, duck generation) and `runs/v2-bc-jump-d2w32-s1` (44-32-32-3, rules v2, jump generation), kept for comparison. On rules v3 they crash just after 100k.
 - **Previous ES model:** `runs/v2-es-d2w32-s1-t1m` (generation 970), kept for comparison.
 
 **`--auto-export`, `session` and `finish` overwrite the shipped `model.js` and `model.css`**, and from an ES run that would replace the shipped clone with a weaker model. Don't use them unless an ES model has beaten the shipped one on fresh held-out seeds and the user has approved replacing it. `browser-check.js` checks that `model.css` matches `model.js`; after you replace `model.js`, run `export-css`.
@@ -241,6 +241,21 @@ Work as a methodical researcher. Don't try things to see what sticks.
 - **The full method is in `handoff/2026-10-10T1635Z-retrospective.md`, §4 and §6.** Keep the pruned-branch register (§6.4) current in each new handoff.
 
 ## Decision log
+
+### 2026-10-12: ship the rules-v3 clone `runs/exp-v3-clones/v3-bc-duck-d2w8-s2`; the pages always play the latest rules
+
+**Decision.** `model.js` and `model.css` now hold `runs/exp-v3-clones/v3-bc-duck-d2w8-s2/best.json`, a 44-8-8-3 `teacher-duck` clone trained for rules v3. The user approved it ("Ship it"). The same day the user ordered that `index.html` and `index-css.html` always play the latest rules, with no `?game=` option, and list only latest-rules models. The previous shipped model, a v2 model, scores 0/150 on rules v3, so the pages needed a v3 model first.
+
+**Evidence** (`research/prereg-cert-v3-d2w8.md`):
+- 150/150 to 1M on rules v3 on fresh held-out offsets 775–924, 95% CP [0.9757, 1.0000].
+- Detection control on the same seeds: the previous v2 `model.js` scored 0/150, every crash between 100,016 and 101,747.
+- CSS agreement through the step: 98k → 107,874, 11,854 decisions, 0 disagreements, 243 duck decisions, smallest margin 0.0126.
+- Earlier screens (`research/prereg-v3-clones.md`): tier A 25/25, opening 1,000/1,000, post-step 1,000/1,000, tier B 0/1,000 failures, duck share 1.000, min margin 8.1e-4.
+- After export: tests 144/144 with 1 skipped, and `browser-check.js` 84/84.
+
+**Caveat.** On rules v3, 2×8 was the least reliable shape across training seeds: 1 of 10 seeds was clean (`prereg-v3-clones.md`). This model is a certified individual, not a reliable recipe, so a retrained 2×8 must be screened again.
+
+**Reversibility.** Run `node trainer/cli.js export --dir runs/exp-bc-duck/v2-bc-duck-d2w8-s1 --which best`, move `shipped: true` in `BUNDLED_MODELS`, run `export-models`, then the browser check. Under the latest-rules pages, a v2 root model crashes just after 100k.
 
 ### 2026-10-12: the Mac (darwin arm64) is the reference machine; determinism is per architecture
 
