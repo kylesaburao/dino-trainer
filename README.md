@@ -1,5 +1,7 @@
 # Dino game with an AI mode
 
+**Play it online:** https://claude.ai/artifact/G9ywtZRGEZFr1SYSrogNbg
+
 A Chrome-dino clone in plain JavaScript with an "AI mode" driven by a small neural network (MLP). The game and the trainers run in plain Node with no npm dependencies. Design notes and invariants are in `AGENTS.md`.
 
 ## Setup

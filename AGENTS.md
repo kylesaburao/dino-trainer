@@ -211,7 +211,7 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 
 - **The published game artifact stays current, public and view-only** (user's order, 2026-10-12). The JS page (`index.html`) is published as a Claude artifact at **https://claude.ai/artifact/G9ywtZRGEZFr1SYSrogNbg** ("Dino Game"). It must be shared as a public link, view-only. The owner sets that in the artifact's Share menu; the Artifact tool cannot.
   - **Republish after every change to what the page plays or shows.** That covers a newly shipped model (`model.js`), regenerated `models.js`, and any change to `index.html`, `style.css`, `game.js`, `core.js`, `policy.js`, `pages.js`, `render.js` or `netview.js`. Republish in the same session as the merge to main.
-  - README.md links to this artifact ("Play it online"); keep that link correct.
+  - README.md links to this artifact ("Play it online", as the visible URL directly under the title and again in "Play"); keep both links correct.
   - **How:**
     1. Run `node tools/build-artifact.js`. It writes `dist/artifact/index.html` (gitignored) and prints the `file_path` and `files` map.
     2. Publish that file with the Artifact tool. Pass `url: https://claude.ai/artifact/G9ywtZRGEZFr1SYSrogNbg` (from another session) and the printed `files` map. Don't pass `icon`, so it stays `game`. Keep the title "Dino Game".
