@@ -47,7 +47,17 @@ const LONG = 16, SHORT = 10, PACK = 8;
 // ---------------------------------------------------------------------------
 const sha = () => crypto.createHash('sha256');
 const bufOf = (ta) => Buffer.from(ta.buffer, ta.byteOffset, ta.byteLength);
-const hashTA = (ta) => sha().update(bufOf(ta)).digest('hex');
+// NaN payloads are canonicalized (in place) before hashing float64 results: a freshly
+// generated NaN (sqrt(-1), sin(Infinity), ...) takes the hardware's default NaN, whose sign
+// bit differs by architecture (x86 SSE 0xFFF8..., arm64 0x7FF8...), which says nothing about
+// libm accuracy. Demo rows (S4) are hashed raw, as bc-gen writes them; the game has no NaN.
+const CANON_NAN = 0x7FF8000000000000n;
+function canon(ta) {
+  let u = null;
+  for (let i = 0; i < ta.length; i++) if (ta[i] !== ta[i]) { u = u || new BigUint64Array(ta.buffer, ta.byteOffset, ta.length); u[i] = CANON_NAN; }
+  return ta;
+}
+const hashTA = (ta) => sha().update(bufOf(canon(ta))).digest('hex');
 const short = (hex) => hex.slice(0, SHORT);
 const long = (hex) => hex.slice(0, LONG);
 const pack = (hexes) => hexes.map(h => h.slice(0, PACK)).join('');
@@ -61,8 +71,8 @@ function f64Stream() {
   const h = sha(), buf = new Float64Array(4096);
   let k = 0, n = 0;
   return {
-    push(x) { buf[k++] = x; n++; if (k === buf.length) { h.update(bufOf(buf)); k = 0; } },
-    copyDigest() { const c = h.copy(); if (k) c.update(bufOf(buf.subarray(0, k))); return c.digest('hex'); },
+    push(x) { buf[k++] = x; n++; if (k === buf.length) { h.update(bufOf(canon(buf))); k = 0; } },
+    copyDigest() { const c = h.copy(); if (k) c.update(bufOf(canon(buf.subarray(0, k)))); return c.digest('hex'); },
     get n() { return n; },
   };
 }
@@ -187,7 +197,10 @@ function stageS1() {
   u[at] ^= 1n;
   const after = bucketHashes(ys, BUCKET);
   const changed = after.map((h, i) => (h !== before[i] ? i : -1)).filter(i => i >= 0);
-  const selfTest = { flippedBucket: 7, changedBuckets: changed, fullChanged: hashTA(ys) !== full, pass: changed.length === 1 && changed[0] === 7 && hashTA(ys) !== full };
+  // NaN canonicalization: the x86 and arm64 default NaNs must hash alike, other values not.
+  const nanX86 = new Float64Array(new BigUint64Array([0xFFF8000000000000n, 1n]).buffer), nanArm = new Float64Array(new BigUint64Array([0x7FF8000000000000n, 1n]).buffer);
+  const nanCanon = hashTA(nanX86) === hashTA(nanArm);
+  const selfTest = { flippedBucket: 7, changedBuckets: changed, fullChanged: hashTA(ys) !== full, nanCanon, pass: changed.length === 1 && changed[0] === 7 && hashTA(ys) !== full && nanCanon };
   return { fns, domains, selfTest };
 }
 
