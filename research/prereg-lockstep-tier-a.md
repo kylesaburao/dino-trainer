@@ -125,7 +125,9 @@ Sim, tanh and the rest unchanged (§2: per lane, they do not amortize); scatter 
 |---|---|---|---|
 | Matmul to the throughput bound (the pre-registered optimistic factor) | **1.08×** | **1.06×** | **1.12×** |
 | Matmul to zero (impossible ceiling) | 1.31× | 1.12× | 1.17× |
-| Same, E core: bound (P-core bound, so overstated) / zero | 1.23× / 1.29× | 1.10× / 1.11× | 1.06× / 1.07× |
+| Same, E core: bound (scaled by the measured E/P matmul ratio) / zero | 1.07× / 1.29× | 1.06× / 1.11× | 1.05× / 1.07× |
+
+The E-core bound scales the P-core arithmetic floor by the measured E/P matmul time (2×32: 851/204 = 4.2×, so a 593 ns floor); applying the unscaled P floor to E would read 1.23× and is not meaningful.
 
 Regime factors (§3) can only lower these: (a) single-model tier A gains at most S_thread(2); (b) packed tier A and (c) scans gain at most S_thread(K) minus the K-game tail. With the pre-registered factor, every regime is **≤ 1.08× for 2×32, ≤ 1.06× for 2×8, ≤ 1.12× for 1×6**, all under 1.2×. In wall time that is at most ≈ 3–4 s off the ≈ 46 s packed tier A (10 × 2×32) and ≈ 16 s off a ≈ 215 s 1,000-game 2×32 scan, before the scatter (the measured 44-double copy-in alone is 26 ns, 3 % of a 2×32 frame) and the tail.
 
@@ -144,8 +146,11 @@ Stages 2–4 were not run: §7's stop rule fired at Stage 1.
 
 Row 1 of §8: **D3, do nothing.** Lockstep batching (and a wider single-decision kernel) cannot reach 1.2× in any regime the user runs, because the per-lane costs that lockstep does not touch, the `core.js` step + `observe` (≈ 335 ns) and the per-unit `Math.tanh` calls (5.3 ns each), are 62 % (2×32) to 86 % (1×6) of a frame.
 
+The null does not hinge on the 4.5 GHz / 4-pipe assumption behind the throughput bound: to reach 1.2× on 2×32, c(K) must be ≤ 858 / 1.2 ≈ 715 ns, so the K-lane matmul would have to cost ≤ 715 − (858 − 204) ≈ **61 ns per decision**, under half the 142 ns arithmetic floor. For 2×8 and 1×6 the required matmul is negative: 1.2× is out of reach even with a free matmul.
+
 Scope of the null: this Mac (M5 Pro, node v26.9.0), shapes 2×32 / 2×8 / 1×6 (the largest allowed width at depth 2 and the shapes the user trains), rules v2 to 1M, `wasm-net.js` at 7c398cc as the baseline, the stop rule's optimistic factor (matmul to the f64x2 throughput bound). Validity: the bound is generous (free scatter, the matmul at the arithmetic limit); a positive result was possible and would have shown as S_thread ≥ 1.2×, as it nearly does for the impossible free-matmul case on 2×32 (1.31×).
 
 What would reopen it (beyond §9):
 - **tanh.** The one cost that matters and that lockstep could amortize *if* it ran in wasm SIMD across lanes. That needs a tanh bit-identical to V8's `Math.tanh` on arm64 (fdlibm; prereg-x86-determinism §10 found V8's libm differs between arm64 and x64 by 1 ulp on about 1/3,000 inputs, so the arm64 build's exact operation sequence would have to be reproduced). Even with tanh free and the matmul at its bound, the ceiling would be 881 / (335 + 142) ≈ 1.85× for 2×32 and 515 / (338 + 25) ≈ 1.4× for 2×8, before the cost of the vector tanh itself. This is the only route with a large payoff, and it is a separate feasibility question (wasm-simd-mlp.md §3 judged it impractical).
+- **Rules v3** was not measured (the v3 clone was a Stage 3 check that never ran). The sim cost at v3 speeds could differ; the MLP share is unlikely to rise, since the network is the same size.
 - **The `core.js` step** (≈ 255 ns, 29–56 % of a frame). Out of scope here (core edits move the core hash and the parity gates).
