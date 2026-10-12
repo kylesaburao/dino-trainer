@@ -33,3 +33,15 @@ Is `runs/exp-v3-clones/v3-bc-duck-d2w8-s2` (44-8-8-3, `teacher-duck`, trained fo
 - **150/150 and the CSS gate passes:** a ship candidate. Ask the user for approval. If approved: `export --dir … --which best` (root `model.js` + `model.css`), move `shipped: true` in `BUNDLED_MODELS`, run `export-models`, `test/browser-check.js` and the test suite. Then merge together with the page change that forces the latest rules.
 - **Any failure:** not a candidate. Report the failing scores and class them as step (100–102k), late (above 130k) or other. The next step would be certifying `v3-bc-duck-d2w32-s5` on offset 925, the user's choice.
 - **CSS disagreement:** not a candidate as is. Report the frames; reopen with the margin analysis.
+
+## 7. Results (2026-10-12, Mac, main `001cf90`; both arms and the gate as registered)
+- **Detection control** (v2 `model.js` on rules v3, offsets 775–924): **0/150**. Median 100,150; every crash between 100,016 and 101,747, all inside 100,000–102,000, as predicted. The harness reaches the step.
+- **Candidate** `v3-bc-duck-d2w8-s2`: **150/150** to 1M on rules v3, 95% CP [0.9757, 1.0000], one-sided 95% upper bound on the failure rate 1.98%. It took 6.6 s on the 18-worker pool with wasm. Record: `runs/exp-v3-clones/v3-bc-duck-d2w8-s2/assess.jsonl`.
+- **CSS gate** (`test/css-agreement.js --start-score 98000`): **PASS**.
+  - 11,854 decisions compared over 98,000 → 107,874 (one game, through the step), with **0 disagreements** and 0 argmax mismatches.
+  - Agreement per class: 10,386 none, 1,225 jump, 243 duck.
+  - Mid pterodactyls: 54 ducked, 0 jumped, 0 crashed.
+  - Smallest top-2 margin 0.0126.
+  - Scope: the gate covers the step and the 10k after it, not the late game to 1M, which `assess` covers in JS/wasm.
+- **Reading (§6): a ship candidate.** Shipping awaits the user's approval.
+- Offsets 775–924 are spent; the next fresh offset is 925.
