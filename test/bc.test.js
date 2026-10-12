@@ -379,8 +379,10 @@ test('python backend: recall.duck on duck demos, absent on jump demos (skipped w
 // sha256 of JSON.stringify(params) for 1-epoch runs ({hidden [4], epochs 1, batch 64,
 // lr 1e-2, seed 1}) on the SMALL jump demos and the stub-duck demos, recorded on main
 // b057ec4 (before distillation and quantization existed). With the new flags off, both
-// backends must reproduce them. The python values depend on numpy/BLAS: recorded on the
-// Mac (darwin arm64, numpy 2.0.2), checked only there.
+// backends must reproduce them. Both depend on the machine, so both are checked only on the
+// Mac (darwin arm64) where they were recorded: the python values on numpy/BLAS (numpy 2.0.2,
+// Accelerate), the node values on V8's libm (tanh/exp/log differ by 1 ulp on some inputs on
+// x64: research/prereg-x86-determinism.md).
 const PIN_OPTS = { hidden: [4], epochs: 1, batch: 64, lr: 1e-2, seed: 1 };
 const PINS = {
   jump: { node: '27e195823b0d766363eb0e0cda76f037922d9a47a8eba9464cc1d05c71f1b90c', python: 'a21360e68e93af0a23b7b0d47f05b6f4c0c9b7ef993730241bae40165ef9ae67' },
@@ -391,7 +393,8 @@ const hasNumpy = () => {
   const probe = spawnSync(bc.pythonPath(ROOT), ['-c', 'import numpy'], { encoding: 'utf8' });
   return !probe.error && probe.status === 0;
 };
-const PY_PINNED = process.platform === 'darwin' && process.arch === 'arm64';
+const PINNED = process.platform === 'darwin' && process.arch === 'arm64';
+const notPinned = () => `pins recorded on darwin arm64, not ${process.platform} ${process.arch}`;
 const smallDir = async (which) => (which === 'duck' ? await duckDemos() : await smallDemos()).dir;
 const loadSmall = async (which) => bc.loadDemos(path.join(await smallDir(which), 'demos.bin'));
 // A one-hot "teacher": logit 1000 on the solver's label, 0 elsewhere (exp(-1000) is 0 in float64).
@@ -401,11 +404,11 @@ test('flags off: 1-epoch params on both backends are identical to main b057ec4 (
   assert.strictEqual((await duckDemos()).manifest.sha256, STUB_DUCK_SHA256);
   for (const which of ['jump', 'duck']) {
     const r = bc.trainNode(await loadSmall(which), PIN_OPTS);
-    assert.strictEqual(bc.paramsSha256(r.params), PINS[which].node, `node ${which}`);
+    if (PINNED) assert.strictEqual(bc.paramsSha256(r.params), PINS[which].node, `node ${which}`);
     assert.deepStrictEqual(Object.keys(r.log[0]), ['epoch', 'loss', 'recall', 'seconds'], 'bc-metrics keys unchanged');
   }
+  if (!PINNED) return t.skip(notPinned());
   if (!hasNumpy()) return t.skip('python pins not checked: no numpy');
-  if (!PY_PINNED) return t.skip(`python pins recorded on darwin arm64, not ${process.platform} ${process.arch}`);
   for (const which of ['jump', 'duck']) {
     const r = await bc.trainPython(path.join(await smallDir(which), 'demos.bin'), path.join(tmp, `pin-${which}.json`), PIN_OPTS, ROOT);
     assert.strictEqual(bc.paramsSha256(r.params), PINS[which].python, `python ${which}`);
@@ -487,10 +490,13 @@ test('a one-hot teacher at tau 1 reproduces hard-label training bit for bit (sof
   for (const which of ['jump', 'duck']) {
     const data = await loadSmall(which);
     const logits = oneHotLogits(data.y);
-    const plainLoss = bc.trainNode(data, PIN_OPTS).log[0].loss;
+    const plain = bc.trainNode(data, PIN_OPTS);
+    const plainLoss = plain.log[0].loss;
     for (const distill of [{ logits, mode: 'soft', tau: 1, alpha: 0 }, { logits, mode: 'hard' }]) {
       const r = bc.trainNode(data, { ...PIN_OPTS, distill });
-      assert.strictEqual(bc.paramsSha256(r.params), PINS[which].node, `node ${which} ${distill.mode}`);
+      // Against plain training on this machine (any architecture); the pin itself is darwin arm64 only.
+      assert.strictEqual(bc.paramsSha256(r.params), bc.paramsSha256(plain.params), `node ${which} ${distill.mode}`);
+      if (PINNED) assert.strictEqual(bc.paramsSha256(r.params), PINS[which].node, `node ${which} ${distill.mode} pin`);
       assert.deepStrictEqual(Object.keys(r.log[0]), ['epoch', 'loss', 'recall', 'seconds', 'distillLoss']);
       assert.ok(Math.abs(r.log[0].loss - plainLoss) < 1e-12, 'loss is the CE against the solver labels');
     }

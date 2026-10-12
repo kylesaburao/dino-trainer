@@ -77,3 +77,37 @@ An env confound (node or V8 version differs) downgrades every "cleared" for a st
 
 ## 9. What would reopen it
 A node upgrade on either machine (rerun the probe on both), a `core.js`/`policy.js` change that adds a transcendental call, or any job whose desktop and Mac results disagree outside what §7 allows.
+
+## 10. Result (2026-10-12): H2; the Mac is the reference machine
+
+**Run.** desktop-1 (Linux x64 under WSL2, AMD Ryzen 7 9700X) ran the probe at `a6eec7a` in a clean detached worktree, without python. Its node and V8 were the Mac's (v26.9.0, V8 14.6.202.34-node.32), so there is no env confound. Output: `research/scripts/x86-determinism/desktop-1-x86-a6eec7a.json` (sha256 `3b14e825…`). `compare.js` against `mac-reference.json` reproduced the same verdict on the Mac.
+
+**What differs.**
+- **S1.** The negative controls match (sqrt, fround, arithmetic), and the 1-ulp self-test passes on both machines. Every transcendental function differs on some inputs: tanh, exp, log, log10, pow, sin, cos and the rest. So do the rules tables on rules v2 and v3 (83 and 99 of 101 buckets) and the Adam powers.
+- **How large the differences are.** Diffs of `--dump` on both machines:
+
+  | Dump | Differences | Size |
+  |---|---|---|
+  | `log10:0` | 2 of 3,000 values: `log10(722.278)` and `log10(3.112)` | 1 ulp each |
+  | `tanh:2` | 1 of 3,000: `tanh(0.21792…)` | 1 ulp |
+  | `rules-v2:3` | none at every 100th score from 30,000 to 39,900, although the bucket's hash differs | — |
+
+  These are sparse last-bit differences in V8's libm on x64 against arm64, consistent with fused multiply-add contraction in the arm64 build.
+- **S3.** The trajectory bits differ only on the rules-v3 arms from 150k and from 998k (the `pow` path). All discrete trajectory fields match.
+- **S4 (decisive).** All three demo sets have the same row counts and per-class label counts but different sha256s: v2 jump `7b6762dd`, v2 duck `22d280ef`, v3 duck `6b1e98ea`. Labels and weights differ, at start levels 2000, 50000 and 300000 on rules v2 and at most levels on v3. Somewhere in those long runs a 1-ulp rules value flips a solver comparison.
+- **S5.** The scores and the action sequences match for all three models, with both the JS net and wasm, over 25 seeds to 20,000 points and the late arms. Only the logit bits differ.
+- **S6.** The BC node-backend params and the ES init, noise and Adam bits all differ. The small demos match.
+
+**Test suite on x64 at `a6eec7a`.** 129 pass, 2 fail, 12 skip (python and mlx). The two failures are the `test/bc.test.js` node-backend pins. net.test.js, parity, v2-parity and v3 pass, so the goldens' horizons don't reach a flipped comparison.
+
+**Decision (user, 2026-10-12: "Mac is the reference").**
+- Determinism holds per architecture. The Mac (darwin arm64) is the reference for demos, pins and certification.
+- On x86:
+  - no `bc-gen`;
+  - assess, scans, BC node training and ES training are valid replicates, not reproductions;
+  - each paired comparison runs on one machine;
+  - a ship candidate is certified on the Mac;
+  - `bit-identity.js` compares two trees on one machine;
+  - no cross-architecture resume.
+- The node pins in `test/bc.test.js` are now checked only on darwin arm64, like the python pins. The one-hot distillation test compares against plain training on the same machine instead of the pin, so it holds on any architecture.
+- Not done: replacing `Math.log10`, `Math.pow` and `Math.tanh` in `core.js` and `policy.js` with pure-JS versions that are bit-exact on any CPU. It would change the core hash and invalidate every golden, demo set and model. Reopen it only if bit-identity across architectures becomes a requirement.
