@@ -224,7 +224,7 @@ test('bc-train --snapshots with no interpreter configured: the node default says
   const run = spawnSync(process.execPath, [path.join(ROOT, 'trainer', 'cli.js'), 'bc-train', '--dir', path.join(tmp, 'snaprun-default'), '--hidden', '4', '--snapshots'], { encoding: 'utf8', env });
   assert.notStrictEqual(run.status, 0);
   assert.match(run.stdout, /bc-train: --backend node \(default: no \.venv-mlx or PYTHON_MLX, no \.venv or PYTHON\)/);
-  assert.match(run.stderr, /--snapshots is only supported with --backend python or mlx \(the default is node here: no \.venv or PYTHON, no \.venv-mlx or PYTHON_MLX\)/);
+  assert.match(run.stderr, /--snapshots is only supported with --backend python or mlx \(the default is node here: no \.venv or PYTHON, no \.venv-mlx or PYTHON_MLX; run \.\/setup\.sh\)/);
 });
 
 test('bc-train refuses demos from a different core hash unless --force', async () => {

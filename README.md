@@ -2,6 +2,23 @@
 
 A Chrome-dino clone in plain JavaScript with an "AI mode" driven by a small neural network (MLP). The game and the trainers run in plain Node with no npm dependencies. Design notes and invariants are in `AGENTS.md`.
 
+## Setup
+
+Playing needs only a browser, and the Node trainer needs only Node (v22+; v26 is used here). The fast behaviour-cloning backends need Python; `setup.sh` sets that up:
+```sh
+./setup.sh --check || ./setup.sh   # check (read-only, no network); set up only if something is missing or wrong
+```
+- `.venv`: the numpy backend (`--backend python`), pinned in `requirements.txt` (numpy 2.0.2). It needs CPython 3.9–3.12 (3.9 preferred; on a Mac the Command Line Tools' `/usr/bin/python3` is 3.9). Every platform.
+- `.venv-mlx`: the Apple GPU backend (`--backend mlx`), pinned in `requirements-mlx.txt` (mlx 0.32.3, numpy 2.5.4). It needs macOS 14+ on Apple silicon and CPython 3.12–3.14 (pyenv 3.14.8 preferred; the script prints the `pyenv install` command if it is missing). Skipped on other platforms.
+- On Linux/WSL only `.venv` is set up. numpy uses OpenBLAS there, so numpy-backend params are not expected to match the Mac's bit for bit (`test/bc.test.js` checks its param pins only on macOS arm64). If venv creation fails on Debian/Ubuntu, the script prints the `apt install python3.X-venv` command.
+- A venv that passes the check is left untouched. Nothing is deleted: `--recreate` moves an old venv aside to `<dir>.bak-<UTC time>`. No sudo; system Python is only used as the base interpreter.
+- `--verify` runs `node --test test/bc.test.js` against the venvs afterwards. `./setup.sh --help` lists every option (`--numpy-only`, `--mlx-only`, `--venv-dir`, `--python`, ...).
+- **Git worktrees** have no venvs of their own. Point the trainer at the main checkout's (`setup.sh` prints these lines; `--check` then checks those interpreters):
+  ```sh
+  export PYTHON=/path/to/dino-game/.venv/bin/python
+  export PYTHON_MLX=/path/to/dino-game/.venv-mlx/bin/python
+  ```
+
 ## Play
 
 Open `index.html` in a browser, directly over `file://`. There is no build step. Toggle AI mode on the page to watch the shipped model play. `index-css.html` runs the same network in the browser's CSS engine. On both pages you can pick another bundled model (the previous clones, the ES model and the uncertified rules-v3 clones) and fast-forward the AI from 1× to 4096×; the page shows the speed it actually achieves. Under the game, a network view (as on the dashboard) draws the AI's latest decision: activations, weights and the chosen action; a button hides it. `node trainer/cli.js export-models` regenerates the bundled models.
@@ -19,7 +36,7 @@ The shipped model is a **behaviour clone**: a small MLP trained by supervised le
 
 **Requirements**
 - Node (v22+; v26 is used here).
-- For the fast backend: a Python venv at `.venv` with numpy (`python3 -m venv .venv && .venv/bin/pip install numpy`). Set `PYTHON=/path/to/python` to use another interpreter (needed in a git worktree, which has no `.venv` of its own).
+- For the fast backends: the Python venvs from `./setup.sh` (see [Setup](#setup)). `PYTHON` / `PYTHON_MLX` point the trainer at other interpreters (needed in a git worktree).
 
 **1. Generate demonstrations** (seconds):
 ```sh

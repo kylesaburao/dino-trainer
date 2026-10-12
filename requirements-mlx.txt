@@ -1,0 +1,7 @@
+# mlx backend (Apple GPU, trainer/bc_train_mlx.py), installed into .venv-mlx by ./setup.sh.
+# macOS 14+ on Apple silicon only (mlx-metal ships macosx_14_0/15_0/26_0 arm64 wheels).
+# mlx 0.32.3 has wheels for CPython 3.10-3.14 and numpy 2.5.4 needs >= 3.12, so the venv needs 3.12-3.14;
+# the reference is pyenv Python 3.14.8 (research/plan-gpu-trainer.md §3.1).
+mlx==0.32.3
+mlx-metal==0.32.3
+numpy==2.5.4

@@ -1,0 +1,5 @@
+# numpy backend (trainer/bc_train.py, trainer/bc_common.py), installed into .venv by ./setup.sh.
+# numpy 2.0.2 is the reference engine: its macOS arm64 (macosx_14_0) wheel links Apple Accelerate,
+# and test/bc.test.js pins python-backend params recorded with it on darwin/arm64.
+# Binary wheels exist for CPython 3.9-3.12 only; 3.9 is preferred (bc_common.py must stay 3.9-compatible).
+numpy==2.0.2

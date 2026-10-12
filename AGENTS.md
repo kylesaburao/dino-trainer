@@ -10,7 +10,10 @@ A Chrome-dino clone (plain JS, opened over `file://`) with an "AI mode" driven b
 
 ## Commands
 
+**Python setup comes first.** Before anything that needs a Python backend (`bc-train` / `bc-train-batch` with `--backend python` or `mlx`, the `bc-train-batch` default backend choice, `test/bc.test.js` and its python param pins), run `./setup.sh --check`. If it fails, run `./setup.sh` without asking: it only creates or updates the project's own `.venv` and `.venv-mlx` from `requirements.txt` / `requirements-mlx.txt` and never deletes anything. In a git worktree, don't create venvs: export `PYTHON` and `PYTHON_MLX` to the main checkout's venvs first (the `--check` output names them), then `--check` checks those. `./setup.sh --help` lists the options; README "Setup" has the platform details.
+
 ```sh
+./setup.sh --check || ./setup.sh          # Python venvs for the numpy and mlx backends (read-only check first)
 node --test test/                         # unit/parity tests (npm test)
 node --test test/parity.test.js           # a single test file
 node --test --test-name-pattern 'v2' test/   # tests matching a name
@@ -47,9 +50,9 @@ node trainer/cli.js bc-train --dir runs/bc-<name> --hidden 32,32 --backend node 
 ```
 
 - `bc-train`'s default backend follows `bc-train-batch` (user's decision, 2026-10-12): `mlx` when an mlx interpreter is configured (`.venv-mlx` or `PYTHON_MLX`), else `python` when a numpy interpreter is configured (`.venv` or `PYTHON`), else `node`. It logs the choice (`bc-train: --backend X (default: ...)`), and `best.json` `config.backend` records it. Runs from before 2026-10-12 without `--backend` used node: pass `--backend node` to reproduce them. In a venv-less checkout, python-only flags (`--snapshots`, `--extra-demos`, `--transition-weight`) fail and say the default fell back to node.
-- `--backend python` needs `.venv` with numpy (`.venv/bin/python`); the `PYTHON` env var overrides the interpreter. A worktree has no `.venv` of its own, so set `PYTHON` there.
+- `--backend python` needs `.venv` (`./setup.sh`: CPython 3.9–3.12, 3.9 preferred, `numpy==2.0.2` from `requirements.txt`; on macOS arm64 that wheel links Accelerate, which the `test/bc.test.js` python pins assume). The `PYTHON` env var overrides the interpreter. A worktree has no `.venv` of its own, so set `PYTHON` there.
 - `--backend mlx` (Apple GPU, `trainer/bc_train_mlx.py`): `bc-train` and `bc-train-batch` both accept it.
-  - It needs `.venv-mlx`: pyenv Python 3.14.8, `mlx==0.32.3`, `numpy==2.5.4`. The `PYTHON_MLX` env var overrides the interpreter; a worktree has no `.venv-mlx`, so set `PYTHON_MLX` there.
+  - It needs `.venv-mlx` (`./setup.sh`, macOS 14+ on Apple silicon only): pyenv Python 3.14.8 (3.12–3.14 work), `mlx==0.32.3`, `mlx-metal==0.32.3`, `numpy==2.5.4` from `requirements-mlx.txt`. The `PYTHON_MLX` env var overrides the interpreter; a worktree has no `.venv-mlx`, so set `PYTHON_MLX` there.
   - It runs the python backend's algorithm with the same init and batch order (host-side RNG in `trainer/bc_common.py`). Its params match the numpy backend's to float32 noise, about 1e-7 after an epoch, and it is bitwise deterministic run to run.
   - It sets `MLX_ENABLE_TF32=0`: MLX's GPU float32 matmul defaults to TF32, which made gradients 1,000× noisier.
   - Every python-only flag works with it. `config.engine` records the version, the device and `tf32`.

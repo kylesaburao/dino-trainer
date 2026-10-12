@@ -810,7 +810,7 @@ function configuredMlxPython(root) {
 function mlxPythonPath(root) {
   const p = configuredMlxPython(root);
   if (p) return p;
-  throw new Error(`--backend mlx needs ${path.join(root, '.venv-mlx', 'bin', 'python')} (research/plan-gpu-trainer.md Phase 0) or the PYTHON_MLX env var`);
+  throw new Error(`--backend mlx needs ${path.join(root, '.venv-mlx', 'bin', 'python')} or the PYTHON_MLX env var; run ./setup.sh to create it`);
 }
 
 // The --backend used when none is given (user's choices: bc-train-batch 2026-10-11, bc-train

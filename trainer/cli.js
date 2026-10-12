@@ -1072,7 +1072,7 @@ function prepareBcTrain(cli, opts, backend, say) {
   const bc = require('./bc.js');
   const pyEngine = backend === 'python' || backend === 'mlx';   // both run bc_common.py's options
   // node by default only when no interpreter is configured (bc.defaultBackend), so say so.
-  const why = opts.backend ? '' : ' (the default is node here: no .venv or PYTHON, no .venv-mlx or PYTHON_MLX)';
+  const why = opts.backend ? '' : ' (the default is node here: no .venv or PYTHON, no .venv-mlx or PYTHON_MLX; run ./setup.sh)';
   const pyOnly = (flag) => new Error(`${flag} is only supported with --backend python or mlx${why}`);
   if (opts.snapshots && !pyEngine) throw pyOnly('--snapshots');
   const dz = parseDistill(opts);
