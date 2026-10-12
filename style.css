@@ -33,6 +33,7 @@ canvas {
   align-items: center;
   width: 600px;
   max-width: 100%;
+  min-width: 0;      /* may shrink below its content's width (a long model name) */
 }
 
 #ai-toggle {
@@ -59,9 +60,21 @@ canvas {
   justify-content: center;
   align-items: center;
   gap: 4px 12px;
+  max-width: 100%;
+}
+
+/* A label ("Model <select>") may shrink to the row's width, and its select with it:
+   a long model name is cut inside the select instead of overflowing a narrow screen. */
+.controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5ch;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .controls select {
+  min-width: 0;
   max-width: 100%;
   font: inherit;
   color: inherit;

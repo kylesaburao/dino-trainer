@@ -36,7 +36,7 @@
 //    model's shape (and follows a model change), is idle with AI off, draws live
 //    decisions during AI play at 4096x with no mismatch warning (index.html: vs the
 //    agent's keys; index-css.html: the JS argmax vs the CSS --act), its show/hide
-//    toggle works without pressing jump, and both pages fit a 375px-wide phone.
+//    toggle works without pressing jump, and both pages fit 320px- and 375px-wide phones.
 //    The CSS page loads models.js for the view only; it never loads the root model.js.
 const { execFileSync } = require('child_process');
 const fs = require('fs');
@@ -554,14 +554,24 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
     console.log('achieved speed at 4096x (simulated / real time):');
     for (const r of speedRows) console.log(`  ${r.id.padEnd(22)} index.html ${String(r.jsAchieved).padStart(5)}x   index-css.html ${String(r.cssAchieved).padStart(4)}x   (CSS ${r.cssDisagree}/${r.cssFrames} disagreements)`);
 
-    // ---- 7. Phone width: no horizontal scroll, the network view fits -------
-    await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 2, mobile: true });
-    for (const page of ['index.html', 'index-css.html']) {
-      await load(path.join(ROOT, page) + (latest.length ? `?model=${latest[latest.length - 1].id}` : ''));
-      await waitUntil(`typeof game !== 'undefined' && !!game`, 15000);
-      await sleep(300);
-      const phone = await evaluate(`({ scroll: document.documentElement.scrollWidth, inner: innerWidth, net: document.getElementById('net-canvas').getBoundingClientRect().width, draws: netView.draws })`);
-      check(`${page} at 375px: no horizontal scroll, network view fits and draws`, phone.scroll <= phone.inner && phone.net > 0 && phone.net <= phone.inner && phone.draws > 0 && problems.length === 0, JSON.stringify(phone));
+    // ---- 7. Phone width: nothing outside the screen, the network view fits ---
+    // Every element box must lie inside [0, width]: a centred element that is too wide
+    // overflows to the left too, which scrollWidth alone never shows (a long model name
+    // in the selector did, 2026-10-12), and a too-wide page widens the layout viewport.
+    for (const width of [320, 375]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 800, deviceScaleFactor: 2, mobile: true });
+      for (const page of ['index.html', 'index-css.html']) {
+        await load(path.join(ROOT, page) + (latest.length ? `?model=${latest[latest.length - 1].id}` : ''));
+        await waitUntil(`typeof game !== 'undefined' && !!game`, 15000);
+        await sleep(300);
+        const phone = await evaluate(`({ scroll: document.documentElement.scrollWidth, inner: innerWidth,
+          net: document.getElementById('net-canvas').getBoundingClientRect().width, draws: netView.draws,
+          outside: [...document.querySelectorAll('body *')].map(el => [el, el.getBoundingClientRect()])
+            .filter(([, b]) => b.width && (b.left < -0.5 || b.right > innerWidth + 0.5))
+            .map(([el, b]) => (el.id ? '#' + el.id : el.tagName.toLowerCase()) + ' ' + Math.round(b.left) + '..' + Math.round(b.right)) })`);
+        check(`${page} at ${width}px: every element on screen, no horizontal scroll, network view fits and draws`,
+          phone.inner === width && phone.scroll <= phone.inner && phone.outside.length === 0 && phone.net > 0 && phone.net <= phone.inner && phone.draws > 0 && problems.length === 0, JSON.stringify(phone));
+      }
     }
     await send('Emulation.clearDeviceMetricsOverride');
   } finally {
