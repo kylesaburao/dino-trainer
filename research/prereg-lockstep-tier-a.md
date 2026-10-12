@@ -94,3 +94,58 @@ Seeds/horizons: timings are deterministic workloads (fixed seeds), so the varian
 - Larger shapes than 2×32 (not allowed under the shape cap) or deeper nets where the MLP share grows.
 - A cheaper `core.js` step (the sim share bounds everything here).
 - A bit-exact in-wasm tanh (rejected in wasm-simd-mlp.md §3), which would remove the per-lane JS call floor.
+
+## 10. Results (Stage 1; the stop rule fired)
+
+Commit 89243be (prereg) + `research/scripts/lockstep/{common.js,bound.js}`. Run 2026-10-12 on the Mac, otherwise idle (load ≈ 2.4, the desktop session only), single thread, rules v2, validation seed 0 played to 1M by each clone (every game 1,943,237 frames, score 1,000,000). Raw rows: `research/scripts/lockstep/out/stage1-pcore.jsonl` (5 trials, min; scheduled on a P core) and `stage1-ecore.jsonl` (3 trials, under `taskpolicy -c background`, which pins to E cores **and** lowers their clock, so it is a pessimistic E figure, about 4.4× the P times). Command: `node research/scripts/lockstep/bound.js --trials 5 --cap 1000000`.
+
+### 10.1 Per-frame split, ns (P core, min of trials)
+
+| | 2×32 (`exp-bc-duck/v2-bc-duck-d2w32-s1`) | 2×8 (`exp-bc-duck/v2-bc-duck-d2w8-s1`) | 1×6 (`exp-distill/v2-bc-duck-d1w6-s1`) |
+|---|---|---|---|
+| Full wasm episode (runEpisode + wasmAgents) | **881** | **515** | **453** |
+| Sim: `core.js` step | 255 | 258 | 256 |
+| Sim: `observe` | 80 | 80 | 76 |
+| Net decide (copy-in subtracted) | 522 | 174 | 105 |
+| — of which `Math.tanh` (5.3 ns × hidden units) | **337** (64 calls) | 85 (16) | 33 (6) |
+| — of which matmul (`layerT`, tanh off) | 204 | 56 | 63 |
+| — argmax, loop and call overhead (rest) | ≈ 0 (−19, noise) | 33 | 9 |
+| Sum of parts / full episode | 858 / 881 (97 %) | 512 / 515 | 437 / 453 |
+| MLP share of the frame | 61 % | 34 % | 24 % |
+| Matmul throughput bound (§2: f64x2 mul + add per MAC pair, 4 vector ops/cycle, 4.5 GHz) | 142 | 25 | 16 |
+| Matmul share of the frame | **24 %** | 11 % | 14 % |
+
+E cores (background QoS): the same shares within a few points (2×32: matmul 851 of 3,901 ns = 22 %, tanh 1,561 = 40 %, sim 1,301 = 33 %; 2×8 and 1×6 matmul 10 % and 6 %). So the reading does not depend on which core class a worker lands on.
+
+### 10.2 Best-case per-thread speedup S_thread = c(1) / c(K)
+
+Sim, tanh and the rest unchanged (§2: per lane, they do not amortize); scatter assumed free.
+
+| | 2×32 | 2×8 | 1×6 |
+|---|---|---|---|
+| Matmul to the throughput bound (the pre-registered optimistic factor) | **1.08×** | **1.06×** | **1.12×** |
+| Matmul to zero (impossible ceiling) | 1.31× | 1.12× | 1.17× |
+| Same, E core: bound (P-core bound, so overstated) / zero | 1.23× / 1.29× | 1.10× / 1.11× | 1.06× / 1.07× |
+
+Regime factors (§3) can only lower these: (a) single-model tier A gains at most S_thread(2); (b) packed tier A and (c) scans gain at most S_thread(K) minus the K-game tail. With the pre-registered factor, every regime is **≤ 1.08× for 2×32, ≤ 1.06× for 2×8, ≤ 1.12× for 1×6**, all under 1.2×. In wall time that is at most ≈ 3–4 s off the ≈ 46 s packed tier A (10 × 2×32) and ≈ 16 s off a ≈ 215 s 1,000-game 2×32 scan, before the scatter (the measured 44-double copy-in alone is 26 ns, 3 % of a 2×32 frame) and the tail.
+
+Stages 2–4 were not run: §7's stop rule fired at Stage 1.
+
+### 10.3 Hypotheses
+
+- **H-sim: holds.** MLP share 61 / 34 / 24 % (predicted 55–65 / 25–40 / 15–30).
+- **H-lat: not supported.** The 2×32 matmul is 204 ns, 1.44× the throughput bound (predicted ≥ 1.5×, 250–330 ns). The current `layerT` is already close to the bound for wide layers; the narrow shapes have more relative headroom (2.2× for 2×8, 3.9× for 1×6) but a matmul that is 11–14 % of the frame.
+- **H-tanh: holds, more strongly than predicted.** `Math.tanh` is 65 % of the 2×32 wasm MLP (predicted 30–50 %) and the single largest item of a 2×32 frame (337 of 881 ns, 38 %), larger than the `core.js` step (29 %) and the matmul (23 %).
+- **H-lock: refuted on the bound.** Predicted S_thread(8) 1.25–1.45× for 2×32; the bound is 1.08× (1.31× even with a free matmul).
+- **H-alt: moot.** Widening `layerT` (8 accumulators) can save at most 204 − 142 = 62 ns of an 881 ns 2×32 frame (≤ 1.08×), so D2 is not worth doing either.
+- **H-null: holds** within scope.
+
+### 10.4 Reading and decision
+
+Row 1 of §8: **D3, do nothing.** Lockstep batching (and a wider single-decision kernel) cannot reach 1.2× in any regime the user runs, because the per-lane costs that lockstep does not touch, the `core.js` step + `observe` (≈ 335 ns) and the per-unit `Math.tanh` calls (5.3 ns each), are 62 % (2×32) to 86 % (1×6) of a frame.
+
+Scope of the null: this Mac (M5 Pro, node v26.9.0), shapes 2×32 / 2×8 / 1×6 (the largest allowed width at depth 2 and the shapes the user trains), rules v2 to 1M, `wasm-net.js` at 7c398cc as the baseline, the stop rule's optimistic factor (matmul to the f64x2 throughput bound). Validity: the bound is generous (free scatter, the matmul at the arithmetic limit); a positive result was possible and would have shown as S_thread ≥ 1.2×, as it nearly does for the impossible free-matmul case on 2×32 (1.31×).
+
+What would reopen it (beyond §9):
+- **tanh.** The one cost that matters and that lockstep could amortize *if* it ran in wasm SIMD across lanes. That needs a tanh bit-identical to V8's `Math.tanh` on arm64 (fdlibm; prereg-x86-determinism §10 found V8's libm differs between arm64 and x64 by 1 ulp on about 1/3,000 inputs, so the arm64 build's exact operation sequence would have to be reproduced). Even with tanh free and the matmul at its bound, the ceiling would be 881 / (335 + 142) ≈ 1.85× for 2×32 and 515 / (338 + 25) ≈ 1.4× for 2×8, before the cost of the vector tanh itself. This is the only route with a large payoff, and it is a separate feasibility question (wasm-simd-mlp.md §3 judged it impractical).
+- **The `core.js` step** (≈ 255 ns, 29–56 % of a frame). Out of scope here (core edits move the core hash and the parity gates).
