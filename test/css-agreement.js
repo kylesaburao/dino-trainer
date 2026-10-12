@@ -35,7 +35,11 @@ const ROOT = path.join(__dirname, '..');
 // ?model= and nothing remembered (a fresh profile), the page plays model.css.
 // models.js and netview.js are the network view's; a candidate that is not in
 // models.js gets no view (and no view check), the decisions are still CSS.
-const PAGE_FILES = ['index-css.html', 'style.css', 'core.js', 'render.js', 'policy.js', 'css-nn.js', 'models-css/index.js', 'models.js', 'netview.js'];
+// The shipped page always plays the latest rules (pages.js GAME_VERSION); a candidate
+// trained for other rules gets that line replaced in the scratch copy only, so it
+// plays its own rules.
+const PAGE_FILES = ['index-css.html', 'style.css', 'core.js', 'pages.js', 'render.js', 'policy.js', 'css-nn.js', 'models-css/index.js', 'models.js', 'netview.js'];
+const VERSION_LINE = /^const GAME_VERSION = .*;$/m;
 
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; };
@@ -67,7 +71,15 @@ function preparePage() {
     fs.mkdirSync(path.dirname(path.join(pageDir, f)), { recursive: true });
     fs.copyFileSync(path.join(ROOT, f), path.join(pageDir, f));
   }
-  return { scratch, pageDir, model: require(out) };
+  const model = require(out);
+  const want = model.gameVersion || 'v1';
+  if (want !== require(path.join(ROOT, 'pages.js')).GAME_VERSION) {
+    const file = path.join(pageDir, 'pages.js'), src = fs.readFileSync(file, 'utf8');
+    if (!VERSION_LINE.test(src)) throw new Error('pages.js has no GAME_VERSION line to set the candidate\'s rules in the scratch copy');
+    fs.writeFileSync(file, src.replace(VERSION_LINE, `const GAME_VERSION = ${JSON.stringify(want)};`));
+    console.error(`scratch page set to the candidate's rules ${want} (the shipped pages play the latest rules)`);
+  }
+  return { scratch, pageDir, model };
 }
 
 // Test-only page instrumentation (evaluated after the page has started).
