@@ -204,6 +204,15 @@ The CLI's `--dir` default (`runs/main`) and `--hidden` default (`16`) are stale.
 
 ## Invariants to preserve
 
+- **The published game artifact stays current, public and view-only** (user's order, 2026-10-12). The JS page (`index.html`) is published as a Claude artifact at **https://claude.ai/artifact/G9ywtZRGEZFr1SYSrogNbg** ("Dino Game"). It must be shared as a public link, view-only. The owner sets that in the artifact's Share menu; the Artifact tool cannot.
+  - **Republish after every change to what the page plays or shows.** That covers a newly shipped model (`model.js`), regenerated `models.js`, and any change to `index.html`, `style.css`, `game.js`, `core.js`, `policy.js`, `render.js` or `netview.js`. Republish in the same session as the merge to main.
+  - **How:**
+    1. Run `node tools/build-artifact.js`. It writes `dist/artifact/index.html` (gitignored) and prints the `file_path` and `files` map.
+    2. Publish that file with the Artifact tool. Pass `url: https://claude.ai/artifact/G9ywtZRGEZFr1SYSrogNbg` (from another session) and the printed `files` map. Don't pass `icon`, so it stays `game`. Keep the title "Dino Game".
+    3. Read every file you haven't already read in that session before publishing, as the Artifact tool requires. `model.js`/`models.js` are generated data; check that they are the generated wrapper plus JSON.
+  - **After publishing,** ask the owner to confirm the Share menu still shows a public, view-only link. Never publish a second artifact for the game; update this URL.
+  - The artifact copy differs from `index.html` only in its document wrapper and a 16px side gutter. Inside the artifact frame the query string never reaches the page, so the model selector relies on its remembered choice (localStorage).
+
 - **The dashboard sees every training run on this computer.** This is the user's requirement (2026-10-10). `node trainer/dashboard.js` must list and show every training run under `runs/`, while it is running and after it finishes:
   - ES runs (`train`) and behaviour-cloning runs (`bc-gen` / `bc-train`, any teacher), including runs nested one level down (`runs/<group>/<run>`);
   - their metrics and log, with live updates while running, and playback of their models.
