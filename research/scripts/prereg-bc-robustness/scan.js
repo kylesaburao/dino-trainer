@@ -8,8 +8,11 @@
 // a resumed scan appends a {resume, pid, host, start} line before its new seeds, and every
 // completed pass ends with a footer line. Readers select seed lines with `seed !== undefined`.
 // Usage: node scan.js --model <best.json> --out <arm.jsonl> [--base 30000000] [--n 2000]
-//          [--target 1000000] [--workers 18] [--chunk 180] [--wasm]
+//          [--target 1000000] [--workers 18] [--chunk 180] [--no-wasm]
 //          [--game v2|v3] [--expect-hash <prefix>] [--start S]
+//   The network runs on trainer/wasm-net.js by default (bit-identical decisions to policy.js,
+//     faster; fails at startup without wasm SIMD); --no-wasm runs it on policy.js. --wasm is
+//     still accepted. The header records the kernel used (wasm: true|false).
 // (research/prereg-v3-clones.md §4.0; every option below leaves the default scan unchanged)
 //   Rules: games are played on the model's own gameVersion (v2 or v3). --game <v> plays other
 //     rules (a cross-rules scan, as `assess --game`): warned, and the header records
@@ -37,7 +40,7 @@ const BASE = Number(opt('--base', 30000000)), N = Number(opt('--n', 2000));
 const TARGET = Number(opt('--target', 1000000));
 const WORKERS = Number(opt('--workers', defaultWorkers()));
 const CHUNK = Number(opt('--chunk', 180));
-const wasm = args.includes('--wasm');
+const wasm = !args.includes('--no-wasm');   // the wasm kernel by default; --wasm is accepted (a no-op)
 const GAME = opt('--game', null);
 const START = Number(opt('--start', 0));
 const PLAYABLE = ['v2', 'v3'];

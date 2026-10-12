@@ -1,7 +1,7 @@
 'use strict';
 // WebAssembly SIMD forward pass for the policy MLP: the default in every trainer command that
-// plays the network (train, assess, bench, finish, session, BC validation), off with
-// --no-wasm. Trainer only:
+// plays the network (train, assess, bench, finish, session, BC validation) and in the research
+// scanner (research/scripts/prereg-bc-robustness/scan.js), off with --no-wasm. Trainer only:
 // the browser, eval playback and the dashboard keep policy.js's createNet.
 //
 // Bit-identical to policy.js createNet, by construction:
@@ -99,7 +99,7 @@ function wasmModule() {
   compiled = new WebAssembly.Module(bytes);
   return compiled;
 }
-// The trainer uses the kernel unless --no-wasm, so the message names it.
+// The trainer and the scanner use the kernel unless --no-wasm, so the message names it.
 const NO_SIMD = 'this runtime has no WebAssembly SIMD (f64x2); the network runs on the wasm kernel by default, ' +
   'pass --no-wasm to run it in JS (policy.js)';
 const simdAvailable = (bytes) => typeof WebAssembly === 'object' && WebAssembly.validate(bytes);
