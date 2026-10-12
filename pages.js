@@ -11,6 +11,11 @@
 // page still plays the latest ones and shows rulesWarning(). The training dashboard
 // does not use this file: it plays every run on that run's own rules.
 //
+// chooseModel() resolves the model once, at load. A selector pick switches the
+// model in place (each page owns its own mechanism: game.js builds a new agent,
+// css-nn.js swaps stylesheets); the game continues, nothing reloads, and
+// rememberModel() records the pick for the next visit.
+//
 // Research harnesses that copy a page into a scratch directory and must play a
 // candidate trained for other rules replace the GAME_VERSION line below in THEIR
 // copy (test/css-agreement.js does); the shipped pages never do.
@@ -43,21 +48,28 @@ function chooseModel(entries, search, getStorage = () => root.localStorage) {
   return asked || remembered;
 }
 
-// A selector pick: remember it (or forget it for the root model, id '') and reload
-// with only ?model=<id>.
-function pickModel(id) {
+// A selector pick, after the page has switched to it in place: remember it (or
+// forget it for the root model, id '') and set the address to only ?model=<id>
+// (other query parameters are dropped, the hash is kept) without reloading, so the
+// address names what the page plays. `env` supplies localStorage, location and
+// history (the window by default; tests pass a fake).
+function rememberModel(id, env = root) {
   try {
-    if (id) root.localStorage.setItem(MODEL_KEY, id);
-    else root.localStorage.removeItem(MODEL_KEY);
+    if (id) env.localStorage.setItem(MODEL_KEY, id);
+    else env.localStorage.removeItem(MODEL_KEY);
   } catch (e) { /* storage unavailable */ }
-  root.location.search = id ? new URLSearchParams({ model: id }).toString() : '';
+  try {
+    const u = new URL(env.location.href);
+    u.search = id ? new URLSearchParams({ model: id }).toString() : '';
+    env.history.replaceState(env.history.state, '', u.href);
+  } catch (e) { /* no history (or the address can't change here) */ }
 }
 
 // Short status-line warning when the model was trained for other rules ('' if not).
 const rulesWarning = (modelVersion) => modelVersion && modelVersion !== GAME_VERSION
   ? `this model was trained for rules ${modelVersion}; the page plays rules ${GAME_VERSION}` : '';
 
-const DinoPages = { GAME_VERSION, MODEL_KEY, forPages, chooseModel, pickModel, rulesWarning };
+const DinoPages = { GAME_VERSION, MODEL_KEY, forPages, chooseModel, rememberModel, rulesWarning };
 
 root.DinoPages = DinoPages;
 if (typeof module !== 'undefined' && module.exports) module.exports = DinoPages;

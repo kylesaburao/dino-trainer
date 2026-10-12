@@ -1,5 +1,6 @@
 'use strict';
-// pages.js: the game pages always play the latest rules and offer only models for them.
+// pages.js: the game pages always play the latest rules and offer only models for
+// them; a selector pick is remembered without reloading.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
@@ -42,6 +43,55 @@ test('chooseModel: ?model= and the remembered choice count only for the latest r
   s = storage();
   assert.strictEqual(Pages.chooseModel(entries, '?game=v1', () => s), null);
   assert.strictEqual(Pages.chooseModel(entries, '', () => { throw new Error('no storage'); }), null);
+});
+
+// A fake window for rememberModel: storage, an address and history.replaceState.
+function fakeEnv(href, { badStorage = false, badHistory = false } = {}) {
+  const env = { d: {}, href, replaced: 0 };
+  env.localStorage = {
+    setItem: (k, v) => { if (badStorage) throw new Error('no storage'); env.d[k] = v; },
+    removeItem: (k) => { if (badStorage) throw new Error('no storage'); delete env.d[k]; },
+  };
+  env.location = { get href() { return env.href; } };
+  env.history = { state: null, replaceState: (s, t, url) => { if (badHistory) throw new Error('no history'); env.href = url; env.replaced++; } };
+  return env;
+}
+
+test('rememberModel: a pick is stored, a root pick (\'\') forgets it', () => {
+  const env = fakeEnv('file:///g/index.html');
+  Pages.rememberModel('new-a', env);
+  assert.deepStrictEqual(env.d, { 'dino-model': 'new-a' });
+  Pages.rememberModel('', env);
+  assert.deepStrictEqual(env.d, {});
+});
+
+test('rememberModel: the address becomes only ?model=<id> (hash kept), no reload', () => {
+  const env = fakeEnv('file:///g/index-css.html?game=v1&x=2#h');
+  Pages.rememberModel('new-b', env);
+  assert.strictEqual(env.href, 'file:///g/index-css.html?model=new-b#h');
+  Pages.rememberModel('', env);
+  assert.strictEqual(env.href, 'file:///g/index-css.html#h');
+  assert.strictEqual(env.replaced, 2);
+});
+
+test('rememberModel: failing storage still updates the address, failing history still stores', () => {
+  let env = fakeEnv('file:///g/index.html', { badStorage: true });
+  Pages.rememberModel('new-a', env);
+  assert.strictEqual(env.href, 'file:///g/index.html?model=new-a');
+  env = fakeEnv('file:///g/index.html', { badHistory: true });
+  Pages.rememberModel('new-a', env);
+  assert.deepStrictEqual(env.d, { 'dino-model': 'new-a' });
+  assert.strictEqual(env.href, 'file:///g/index.html');
+});
+
+test('a model pick never reloads the pages', () => {
+  for (const f of ['pages.js', 'game.js', 'css-nn.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+    assert.ok(!/location\.(search|href)\s*=[^=]/.test(src), `${f} assigns location.search or location.href`);
+    assert.ok(!/location\.(reload|assign|replace)\b/.test(src), `${f} reloads or navigates`);
+    assert.ok(!/pickModel/.test(src), `${f} still uses pickModel`);
+  }
+  assert.strictEqual(Pages.pickModel, undefined);
 });
 
 test('rulesWarning only for other rules', () => {
