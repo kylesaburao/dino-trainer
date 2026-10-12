@@ -10,17 +10,23 @@
 //    exactly once per fixed-timestep update; human jump/duck ignored while on;
 //    AI runs never write HI; turning AI off mid-run releases its keys and hands
 //    control back.
-// 4. No console errors or exceptions on the page.
+// 4. No console errors or exceptions on the page. Rules: both pages always play the
+//    latest rules (the last of DinoCore.GAME_VERSIONS); ?game= is ignored; HI is
+//    kept under the latest rules' key; a root model for other rules plays the
+//    latest rules with a status-line warning (none when it is for the latest).
 // 5. index-css.html: the model.css network (CSS-evaluated weights) plays, every
 //    decision equals policy.js on model.js, speeds 1x-4096x, auto-restart.
 //    (This covers the opening only; test/css-agreement.js compares any run's
 //    model on CSS vs JS decisions through the pterodactyl/duck phase.)
 // 6. Model selector and speed on both pages: the default is the shipped model
-//    (root model.js / model.css, and models.js marks the same model shipped);
-//    every bundled model (models.js, models-css/) loads with ?model=<id>, plays its
-//    own rules, and plays a few hundred frames at 4096x with the policy called
-//    once per update (index.html) and 0 CSS/JS disagreements (index-css.html); the
-//    selector remembers a choice and reloads with ?model=. Prints the achieved speed.
+//    (root model.js / model.css, and models.js marks the same model shipped); the
+//    selectors list exactly the latest-rules models; every latest-rules bundled
+//    model (models.js, models-css/) loads with ?model=<id> and plays a few hundred
+//    frames at 4096x with the policy called once per update (index.html) and 0
+//    CSS/JS disagreements (index-css.html); the selector remembers a choice and
+//    reloads with only ?model=; a ?model= or remembered choice for other rules
+//    falls back to the root model and the remembered one is cleared. Prints the
+//    achieved speed. Independent of which model is the root.
 // 7. Network view (netview.js) under the game on both pages: it shows the selected
 //    model's shape (and follows a model change), is idle with AI off, draws live
 //    decisions during AI play at 4096x with no mismatch warning (index.html: vs the
@@ -34,6 +40,9 @@ const path = require('path');
 const { sleep, seedMathRandom, launch } = require('./cdp.js');
 
 const ROOT = path.join(__dirname, '..');
+const { GAME_VERSIONS } = require(path.join(ROOT, 'core.js'));
+const LATEST = GAME_VERSIONS[GAME_VERSIONS.length - 1];   // the rules both pages must play
+const LATEST_HI = LATEST === 'v1' ? 'dino-hi' : `dino-hi-${LATEST}`;
 
 const results = [];
 function check(name, ok, detail = '') {
@@ -136,8 +145,8 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
     const crashed = await waitUntil(`game.state === 'over'`, 20000);
     const humanScore = await evaluate('game.score()');
     check('running into an obstacle ends the game', crashed, `score ${humanScore}`);
-    const hiSaved = await evaluate(`localStorage.getItem(HI_KEY)`);
-    check('human run saves HI to localStorage', hiSaved === String(humanScore), `HI ${hiSaved}`);
+    const hiSaved = await evaluate(`({ key: HI_KEY, hi: localStorage.getItem('${LATEST_HI}') })`);
+    check(`human run saves HI to localStorage under the latest rules' key ${LATEST_HI}`, hiSaved.key === LATEST_HI && hiSaved.hi === String(humanScore), JSON.stringify(hiSaved));
     await sleep(900);
     await tap('Space');
     check('Space restarts after the lockout', await waitUntil(`game.state === 'running'`, 1000));
@@ -198,34 +207,43 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
     check('no console errors, warnings or exceptions on the page', problems.length === 0, problems.join('; '));
     console.log(`screenshot: ${path.join(scratch, 'page.png')}`);
 
-    // ---- 4. Game versions -------------------------------------------------
-    const defaultVersion = await evaluate(`({ v: game.version, want: (typeof DINO_MODEL !== 'undefined' && DINO_MODEL.gameVersion) || 'v1' })`);
-    check('default page plays the game version its model was trained on', defaultVersion.v === defaultVersion.want, JSON.stringify(defaultVersion));
-    await load(path.join(ROOT, 'index.html') + '?game=v2');
-    await evaluate(`localStorage.setItem('dino-hi', '7')`);
-    check('?game=v2 selects the v2 rules', await evaluate(`game.version === 'v2' && HI_KEY === 'dino-hi-v2'`));
+    // ---- 4. Game versions: always the latest rules -------------------------
+    const shipped = require(path.join(ROOT, 'model.js'));
+    const shippedLatest = (shipped.gameVersion || 'v1') === LATEST;
+    // The status line warns exactly when the (root) model is for other rules.
+    const warnRe = `/trained for rules v\\d+; the page plays rules ${LATEST}/`;
+    const versionInfo = `({ v: game.version, attr: document.documentElement.dataset.gameVersion, hiKey: HI_KEY, warned: ${warnRe}.test(speedStatus.textContent), status: speedStatus.textContent })`;
+    await sleep(1100);   // past one status-line refresh
+    const defaultVersion = await evaluate(versionInfo);
+    check(`index.html plays the latest rules ${LATEST} (data-game-version too), HI key ${LATEST_HI}`, defaultVersion.v === LATEST && defaultVersion.attr === LATEST &&
+      defaultVersion.hiKey === LATEST_HI, JSON.stringify(defaultVersion));
+    check(`index.html: rules warning in the status line exactly when the root model is for other rules (root ${shipped.gameVersion})`,
+      defaultVersion.warned === !shippedLatest, JSON.stringify(defaultVersion));
+    const otherHi = GAME_VERSIONS.filter(v => v !== LATEST).map(v => v === 'v1' ? 'dino-hi' : `dino-hi-${v}`);
+    for (const v of GAME_VERSIONS.filter(v => v !== LATEST)) {
+      await load(path.join(ROOT, 'index.html') + `?game=${v}`);
+      await evaluate(`(() => { ${JSON.stringify(otherHi)}.forEach((k, i) => localStorage.setItem(k, String(7 + i))); localStorage.removeItem('${LATEST_HI}'); hi = 0; })()`);
+      const asked = await evaluate(versionInfo);
+      check(`index.html ?game=${v} is ignored: plays rules ${LATEST}, HI key ${LATEST_HI}`, asked.v === LATEST && asked.attr === LATEST && asked.hiKey === LATEST_HI, JSON.stringify(asked));
+    }
     await tap('Space');
-    check('v2 starts and scores', await waitUntil(`game.state === 'running'`, 1000) && await waitUntil(`game.score() > 0`, 3000));
+    check(`rules ${LATEST} start and score`, await waitUntil(`game.state === 'running'`, 1000) && await waitUntil(`game.score() > 0`, 3000));
     await waitUntil(`game.state === 'over'`, 20000);
-    const v2hi = await evaluate(`({ v1: localStorage.getItem('dino-hi'), v2: localStorage.getItem('dino-hi-v2'), score: game.score() })`);
-    check('v2 keeps its own HI (v1 HI untouched)', v2hi.v1 === '7' && v2hi.v2 === String(v2hi.score), JSON.stringify(v2hi));
-    check('no console errors, warnings or exceptions on the v2 page', problems.length === 0, problems.join('; '));
-    await load(path.join(ROOT, 'index.html') + '?game=v3');
-    check('?game=v3 selects the v3 rules with its own HI key', await evaluate(`game.version === 'v3' && HI_KEY === 'dino-hi-v3'`));
-    await tap('Space');
-    check('v3 starts and scores', await waitUntil(`game.state === 'running'`, 1000) && await waitUntil(`game.score() > 0`, 3000));
-    check('no console errors, warnings or exceptions on the v3 page', problems.length === 0, problems.join('; '));
+    const latestHi = await evaluate(`({ latest: localStorage.getItem('${LATEST_HI}'), others: ${JSON.stringify(otherHi)}.map(k => localStorage.getItem(k)), score: game.score() })`);
+    check(`a human run writes HI under ${LATEST_HI} only (other rules' HI untouched)`, latestHi.latest === String(latestHi.score) &&
+      latestHi.others.every((h, i) => h === String(7 + i)), JSON.stringify(latestHi));
+    check('no console errors, warnings or exceptions on the ?game= pages', problems.length === 0, problems.join('; '));
 
     // ---- 5. CSS-network page (index-css.html + model.css) -----------------
     // The page decides only in CSS (models.js is loaded for the network view only);
     // the test compares against the root model.js itself.
-    const shipped = require(path.join(ROOT, 'model.js'));
     const { modelId } = require(path.join(ROOT, 'trainer', 'css-model.js'));
     await load(path.join(ROOT, 'index-css.html'));
     const css = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), version: game && game.version,
+      attr: document.documentElement.dataset.gameVersion,
       loadsModelJs: typeof DINO_MODEL !== 'undefined', speeds: [...document.querySelectorAll('#speed option')].map(o => Number(o.value)) })`);
-    check('CSS page: self-test passes, model.css is from model.js, and the root model.js is not loaded',
-      !css.failed && css.id === modelId(shipped) && css.version === (shipped.gameVersion || 'v1') && !css.loadsModelJs, JSON.stringify(css));
+    check(`CSS page: self-test passes, model.css is from model.js, plays the latest rules ${LATEST}, and the root model.js is not loaded`,
+      !css.failed && css.id === modelId(shipped) && css.version === LATEST && css.attr === LATEST && !css.loadsModelJs, JSON.stringify(css));
     check('CSS page: speed options 1x to 4096x', css.speeds.join() === SPEEDS, css.speeds.join());
     // Test-only: wrap the page's cssDecide to compare each CSS decision with policy.js on model.js.
     await evaluate(`(() => { const net = DinoPolicy.createNet(${JSON.stringify(shipped.layers)}, ${JSON.stringify(Array.from(shipped.params))});
@@ -242,11 +260,18 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
       const o = game.obstacles[0]; if (o) game.obstacles.push({ ...o, x: game.dino.x, y: game.dino.y });
     }, 5); window.__cssGame = g0; })()`);
     check('CSS page: crash, then a new run starts by itself', await waitUntil(`game !== window.__cssGame && game.state === 'running'`, 5000));
+    const cssWarn = await evaluate(`({ warned: ${warnRe}.test($status.textContent), status: $status.textContent })`);
+    check(`CSS page: rules warning in the status line exactly when model.css is for other rules (root ${shipped.gameVersion})`,
+      cssWarn.warned === !shippedLatest, JSON.stringify(cssWarn));
     check('no console errors, warnings or exceptions on the CSS page', problems.length === 0, problems.join('; '));
-    await load(path.join(ROOT, 'index-css.html') + '?game=v3');
-    check('CSS page: ?game=v3 plays the v3 rules', await evaluate(`!failed && game.version === 'v3'`) &&
-      await waitUntil(`game.state === 'running' && game.score() > 0`, 5000));
-    check('no console errors, warnings or exceptions on the v3 CSS page', problems.length === 0, problems.join('; '));
+    for (const v of GAME_VERSIONS.filter(v => v !== LATEST)) {
+      await load(path.join(ROOT, 'index-css.html') + `?game=${v}`);
+      await waitUntil(`!!game || !!failed`, 5000);
+      const asked = await evaluate(`({ failed: failed && failed.message, v: game && game.version, attr: document.documentElement.dataset.gameVersion })`);
+      check(`CSS page: ?game=${v} is ignored: plays rules ${LATEST}`, !asked.failed && asked.v === LATEST && asked.attr === LATEST &&
+        await waitUntil(`game.state === 'running' && game.score() > 0`, 5000), JSON.stringify(asked));
+    }
+    check('no console errors, warnings or exceptions on the ?game= CSS pages', problems.length === 0, problems.join('; '));
 
     // ---- 6. Model selector and speed (both pages) --------------------------
     const bundled = require(path.join(ROOT, 'models.js'));
@@ -260,13 +285,21 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
       index.length === bundled.length && index.every((m, i) => m.id === bundled[i].id && m.cssId === modelId(bundled[i]) &&
         fs.readFileSync(path.join(ROOT, m.css), 'utf8').includes(`--nn-model-id: "${m.cssId}"`)), index.map(m => m.id).join());
 
+    // Only latest-rules models are offered. The root model appears as its models.js
+    // entry when it is for the latest rules, else as its own '' (model.js / model.css) entry.
+    const latest = bundled.filter(m => m.gameVersion === LATEST);
+    const others = bundled.filter(m => m.gameVersion !== LATEST);
+    const rootSelect = shippedLatest ? shippedEntries[0].id : '';
+    const wantOptions = (shippedLatest ? [] : ['']).concat(latest.map(m => m.id)).join();
+    const optionsOf = (sel) => `[...${sel}.options].map(o => o.value).join()`;
+
     // Defaults with nothing remembered: the shipped model on both pages.
     await evaluate(`localStorage.removeItem('dino-model')`);
     await load(path.join(ROOT, 'index.html'));
-    const def = await evaluate(`({ shipped: MODEL === DINO_MODEL, select: modelSelect.value, options: modelSelect.options.length,
+    const def = await evaluate(`({ shipped: MODEL === DINO_MODEL, select: modelSelect.value, options: ${optionsOf('modelSelect')},
       speeds: [...speedSelect.options].map(o => Number(o.value)), speedDisabled: speedSelect.disabled, version: game.version })`);
-    check('index.html: default is the shipped model, shown as its models.js entry', def.shipped && def.select === shippedEntries[0].id &&
-      def.options === bundled.length && def.version === shipped.gameVersion, JSON.stringify(def));
+    check(`index.html: default is the shipped model (${shippedLatest ? 'its models.js entry' : 'its own model.js entry'}); the selector lists exactly the rules-${LATEST} models`,
+      def.shipped && def.select === rootSelect && def.options === wantOptions && def.version === LATEST, `${JSON.stringify(def)} want options ${wantOptions}`);
     check('index.html: speed options 1x to 4096x, disabled while AI is off', def.speeds.join() === SPEEDS && def.speedDisabled, def.speeds.join());
     // Network view: idle with AI off, under the game, and its show/hide toggle.
     const netInfo = `({ arch: document.getElementById('net-arch').textContent, live: netView.live, decisions: netView.decisions, draws: netView.draws,
@@ -294,29 +327,85 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
       shownAgain.stored === 'shown' && hid.state === 'idle' && shownAgain.state === 'idle', `${JSON.stringify(hid)} ${JSON.stringify(shownAgain)}`);
     await load(path.join(ROOT, 'index-css.html'));
     await waitUntil(`!!game || !!failed`, 5000);
-    const cdef = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), href: document.getElementById('model-css').getAttribute('href'), select: $model.value })`);
-    check('index-css.html: default is model.css, shown as the shipped entry', !cdef.failed && cdef.href === 'model.css' && cdef.id === modelId(shipped) &&
-      cdef.select === shippedEntries[0].id, JSON.stringify(cdef));
+    const cdef = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), href: document.getElementById('model-css').getAttribute('href'),
+      select: $model.value, options: ${optionsOf('$model')} })`);
+    check(`index-css.html: default is model.css (${shippedLatest ? 'shown as the shipped entry' : 'its own entry'}); the selector lists exactly the rules-${LATEST} models`,
+      !cdef.failed && cdef.href === 'model.css' && cdef.id === modelId(shipped) && cdef.select === rootSelect && cdef.options === wantOptions,
+      `${JSON.stringify(cdef)} want options ${wantOptions}`);
 
-    // The selector remembers the choice and reloads with ?model=<id> (keeping ?game=).
-    const pick = bundled.find(m => !m.shipped);
-    await load(path.join(ROOT, 'index.html') + '?game=v1');
-    await evaluate(`(() => { modelSelect.value = '${pick.id}'; modelSelect.dispatchEvent(new Event('change')); })()`);
-    await sleep(1500);
-    await waitUntil(`typeof MODEL !== 'undefined' && document.readyState === 'complete'`, 5000);
-    const picked = await evaluate(`({ search: location.search, id: MODEL.id, stored: localStorage.getItem('dino-model'), version: game.version, select: modelSelect.value,
-      arch: document.getElementById('net-arch').textContent })`);
-    check('index.html: picking a model reloads with ?model=<id>, keeps ?game=, remembers it, and the network view shows it', picked.id === pick.id && picked.stored === pick.id &&
-      new URLSearchParams(picked.search).get('model') === pick.id && picked.version === 'v1' && picked.select === pick.id && picked.arch.startsWith(arch(pick)), JSON.stringify(picked));
-    await load(path.join(ROOT, 'index-css.html'));
-    await waitUntil(`!!game || !!failed`, 15000);
-    const remembered = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), select: $model.value })`);
-    check('index-css.html: plays the remembered choice without ?model=', !remembered.failed && remembered.id === pick.cssId && remembered.select === pick.id, JSON.stringify(remembered));
-    await evaluate(`localStorage.removeItem('dino-model')`);
+    // The selector remembers the choice and reloads with only ?model=<id> (a stray ?game= is dropped).
+    const pick = latest.find(m => !m.shipped);
+    if (!pick) {
+      check(`a second rules-${LATEST} model to pick in models.js`, false, 'models.js has no non-shipped latest-rules model; the pick checks need one');
+    } else {
+      await load(path.join(ROOT, 'index.html') + `?game=${GAME_VERSIONS[0]}`);
+      await evaluate(`(() => { modelSelect.value = '${pick.id}'; modelSelect.dispatchEvent(new Event('change')); })()`);
+      await sleep(1500);
+      await waitUntil(`typeof MODEL !== 'undefined' && document.readyState === 'complete'`, 5000);
+      const picked = await evaluate(`({ search: location.search, id: MODEL.id, stored: localStorage.getItem('dino-model'), version: game.version, select: modelSelect.value,
+        arch: document.getElementById('net-arch').textContent })`);
+      check('index.html: picking a model reloads with only ?model=<id>, remembers it, and the network view shows it', picked.id === pick.id && picked.stored === pick.id &&
+        picked.search === `?model=${pick.id}` && picked.version === LATEST && picked.select === pick.id && picked.arch.startsWith(arch(pick)), JSON.stringify(picked));
+      await load(path.join(ROOT, 'index-css.html'));
+      await waitUntil(`!!game || !!failed`, 15000);
+      const remembered = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), select: $model.value })`);
+      check('index-css.html: plays the remembered choice without ?model=', !remembered.failed && remembered.id === pick.cssId && remembered.select === pick.id, JSON.stringify(remembered));
+      await evaluate(`localStorage.removeItem('dino-model')`);
+    }
 
-    // Every bundled model on both pages, at 4096x.
+    // A model for other rules, asked for with ?model= and remembered: both pages
+    // fall back to the root model, still play the latest rules, and forget the choice.
+    if (!others.length) {
+      console.log(`(no models for rules other than ${LATEST} in models.js: fallback checks skipped)`);
+    } else {
+      const old = others[0];
+      for (const how of ['?model=', 'remembered', '?model= and remembered']) {
+        const url = how.startsWith('?model=') ? `?model=${old.id}` : '';
+        const remember = how.includes('remembered');
+        await evaluate(remember ? `localStorage.setItem('dino-model', '${old.id}')` : `localStorage.removeItem('dino-model')`);
+        await load(path.join(ROOT, 'index.html') + url);
+        const j = await evaluate(`({ root: MODEL === DINO_MODEL, version: game.version, select: modelSelect.value, stored: localStorage.getItem('dino-model') })`);
+        check(`index.html, rules-${old.gameVersion} model ${old.id} (${how}): falls back to the root model on rules ${LATEST}${remember ? ', remembered choice cleared' : ''}`,
+          j.root && j.version === LATEST && j.select === rootSelect && j.stored === null && problems.length === 0, `${JSON.stringify(j)} ${problems.join('; ')}`);
+        await evaluate(remember ? `localStorage.setItem('dino-model', '${old.id}')` : `localStorage.removeItem('dino-model')`);
+        await load(path.join(ROOT, 'index-css.html') + url);
+        await waitUntil(`!!game || !!failed`, 15000);
+        const c = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), href: document.getElementById('model-css').getAttribute('href'),
+          version: game && game.version, select: $model.value, stored: localStorage.getItem('dino-model') })`);
+        check(`index-css.html, rules-${old.gameVersion} model ${old.id} (${how}): falls back to model.css on rules ${LATEST}${remember ? ', remembered choice cleared' : ''}`,
+          !c.failed && c.href === 'model.css' && c.id === modelId(shipped) && c.version === LATEST && c.select === rootSelect && c.stored === null &&
+          problems.length === 0, `${JSON.stringify(c)} ${problems.join('; ')}`);
+      }
+
+      // A root model for other rules (a scratch copy of both pages whose model.js /
+      // model.css hold `old`): the pages still play the latest rules and warn.
+      const oddDir = path.join(scratch, 'other-rules-root');
+      for (const f of ['index.html', 'index-css.html', 'style.css', 'core.js', 'pages.js', 'render.js', 'policy.js', 'game.js', 'css-nn.js',
+        'netview.js', 'models.js', 'models-css/index.js']) {
+        fs.mkdirSync(path.dirname(path.join(oddDir, f)), { recursive: true });
+        fs.copyFileSync(path.join(ROOT, f), path.join(oddDir, f));
+      }
+      fs.writeFileSync(path.join(oddDir, 'model.js'), `window.DINO_MODEL = ${JSON.stringify(old)};\n`);
+      fs.copyFileSync(path.join(ROOT, old.css), path.join(oddDir, 'model.css'));
+      await evaluate(`localStorage.removeItem('dino-model')`);
+      await load(path.join(oddDir, 'index.html'));
+      await sleep(1100);
+      const oj = await evaluate(`({ ...${versionInfo}, root: MODEL === DINO_MODEL, select: modelSelect.value, options: ${optionsOf('modelSelect')} })`);
+      check(`index.html with a rules-${old.gameVersion} root model: plays rules ${LATEST}, warns in the status line, lists the root as its own entry`,
+        oj.v === LATEST && oj.attr === LATEST && oj.warned && oj.root && oj.select === '' && oj.options === ['', ...latest.map(m => m.id)].join() &&
+        problems.length === 0, `${JSON.stringify(oj)} ${problems.join('; ')}`);
+      await load(path.join(oddDir, 'index-css.html'));
+      await waitUntil(`(!!game && /trained for/.test($status.textContent)) || !!failed`, 5000);
+      const oc = await evaluate(`({ failed: failed && failed.message, id: cssString('--nn-model-id'), v: game && game.version, attr: document.documentElement.dataset.gameVersion,
+        warned: ${warnRe}.test($status.textContent), status: $status.textContent, select: $model.value, options: ${optionsOf('$model')} })`);
+      check(`index-css.html with a rules-${old.gameVersion} root model.css: plays rules ${LATEST}, warns in the status line, lists the root as its own entry`,
+        !oc.failed && oc.id === old.cssId && oc.v === LATEST && oc.attr === LATEST && oc.warned && oc.select === '' &&
+        oc.options === ['', ...latest.map(m => m.id)].join() && problems.length === 0, `${JSON.stringify(oc)} ${problems.join('; ')}`);
+    }
+
+    // Every latest-rules bundled model on both pages, at 4096x.
     const speedRows = [];
-    for (const m of bundled) {
+    for (const m of latest) {
       await load(path.join(ROOT, 'index.html') + `?model=${m.id}`);
       const page = await evaluate(`({ id: MODEL.id, version: game.version, select: modelSelect.value, hiKey: HI_KEY })`);
       await evaluate(`(() => {
@@ -362,7 +451,7 @@ const MODEL_FRAMES = 300;   // AI-played frames per bundled model and page in se
     // ---- 7. Phone width: no horizontal scroll, the network view fits -------
     await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 2, mobile: true });
     for (const page of ['index.html', 'index-css.html']) {
-      await load(path.join(ROOT, page) + `?model=${bundled[bundled.length - 1].id}`);
+      await load(path.join(ROOT, page) + (latest.length ? `?model=${latest[latest.length - 1].id}` : ''));
       await waitUntil(`typeof game !== 'undefined' && !!game`, 15000);
       await sleep(300);
       const phone = await evaluate(`({ scroll: document.documentElement.scrollWidth, inner: innerWidth, net: document.getElementById('net-canvas').getBoundingClientRect().width, draws: netView.draws })`);
