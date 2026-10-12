@@ -6,34 +6,28 @@
 // policy.js (DinoPolicy) with the shipped model in model.js (DINO_MODEL) or one
 // of the bundled models in models.js (DINO_MODELS, `node trainer/cli.js export-models`).
 // The network view under the game is netview.js (DinoNetView); it only draws.
+// The rules (always the latest) and the model choice policy are pages.js (DinoPages).
 const { FRAME_MS } = DinoCore;
 
 // Created first: its random ground texture is the page's first Math.random use.
 const renderer = DinoRender.createRenderer(document.getElementById('game'));
 
 // ---------------------------------------------------------------------------
-// Model: ?model=<id> (an id in models.js), else the choice remembered from the
-// selector, else the shipped model.js. Changing the selector reloads the page.
+// Game version: always the latest rules (pages.js); nothing on the page picks them.
 // ---------------------------------------------------------------------------
-const MODEL_KEY = 'dino-model';
-const MODELS = typeof DINO_MODELS !== 'undefined' ? DINO_MODELS : [];
-const SHIPPED = typeof DINO_MODEL !== 'undefined' ? DINO_MODEL : null;
-const MODEL = (() => {
-  const byId = (id) => (id && MODELS.find(m => m.id === id)) || null;
-  let stored = null;
-  try { stored = localStorage.getItem(MODEL_KEY); } catch (e) { /* storage unavailable */ }
-  return byId(new URLSearchParams(location.search).get('model')) || byId(stored) || SHIPPED;
-})();
+const GAME_VERSION = DinoPages.GAME_VERSION;
+document.documentElement.dataset.gameVersion = GAME_VERSION;
 
 // ---------------------------------------------------------------------------
-// Game version: ?game=v1|v2|v3 in the URL, else the version the selected model was
-// trained on (so AI mode plays the game it learned), else v2. See core.js.
+// Model: ?model=<id> (a models.js id for the latest rules), else the choice
+// remembered from the selector (if for the latest rules), else the shipped
+// model.js. Changing the selector reloads the page. See pages.js.
 // ---------------------------------------------------------------------------
-const GAME_VERSION = (() => {
-  const asked = new URLSearchParams(location.search).get('game');
-  if (DinoCore.GAME_VERSIONS.includes(asked)) return asked;
-  return MODEL ? MODEL.gameVersion || 'v1' : 'v2';
-})();
+const MODELS = DinoPages.forPages(typeof DINO_MODELS !== 'undefined' ? DINO_MODELS : []);
+const SHIPPED = typeof DINO_MODEL !== 'undefined' ? DINO_MODEL : null;
+const MODEL = DinoPages.chooseModel(MODELS, location.search) || SHIPPED;
+// Shown in the status line when the model (the root one) is for other rules.
+const RULES_WARNING = MODEL ? DinoPages.rulesWarning(MODEL.gameVersion || 'v1') : '';
 
 // ---------------------------------------------------------------------------
 // High score (human runs only), kept per game version ('dino-hi' is v1's)
@@ -149,15 +143,18 @@ aiButton.addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 // Model and speed selectors
 // ---------------------------------------------------------------------------
-// The model selector lists models.js; the shipped model.js appears as its own
-// entry if models.js doesn't contain it. Picking one remembers it and reloads
-// with ?model=<id> (keeping ?game=). The speed applies to AI mode only: a human
+// The model selector lists the models.js entries for the latest rules; the shipped
+// model.js appears as its own entry if they don't contain it. Picking one remembers
+// it and reloads with only ?model=<id>. The speed applies to AI mode only: a human
 // always plays at 1x, so the human HI stays comparable.
 const modelSelect = document.getElementById('model');
 const speedSelect = document.getElementById('speed');
 const speedStatus = document.getElementById('speed-status');
 const sameModel = (a, b) => !!a && !!b && a.layers.join() === b.layers.join() && a.params.length === b.params.length &&
   a.params.every((v, i) => v === b.params[i]);
+// The status line: the rules warning (if any), then the speed readout.
+const showSpeedStatus = (text) => { speedStatus.textContent = RULES_WARNING ? `${RULES_WARNING} · ${text}` : text; };
+showSpeedStatus('speed applies to AI mode');
 
 (() => {
   const shippedEntry = MODELS.find(m => sameModel(m, SHIPPED));
@@ -167,13 +164,7 @@ const sameModel = (a, b) => !!a && !!b && a.layers.join() === b.layers.join() &&
   const current = MODELS.find(m => m === MODEL) || (MODEL === SHIPPED ? shippedEntry : null);
   modelSelect.value = current ? current.id : '';
   modelSelect.disabled = options.length < 2;
-  modelSelect.addEventListener('change', () => {
-    const id = modelSelect.value;
-    try { if (id) localStorage.setItem(MODEL_KEY, id); else localStorage.removeItem(MODEL_KEY); } catch (e) { /* storage unavailable */ }
-    const q = new URLSearchParams(location.search);
-    if (id) q.set('model', id); else q.delete('model');
-    location.search = q.toString();
-  });
+  modelSelect.addEventListener('change', () => DinoPages.pickModel(modelSelect.value));
 })();
 
 for (const el of [modelSelect, speedSelect]) el.addEventListener('change', () => el.blur());
@@ -319,9 +310,9 @@ function frame(now) {
     rate.speed = rate.frames * FRAME_MS / (now - rate.t0);
     rate.t0 = now;
     rate.frames = 0;
-    speedStatus.textContent = aiOn
+    showSpeedStatus(aiOn
       ? `achieved ${rate.speed >= 10 ? Math.round(rate.speed) : rate.speed.toFixed(1)}×` + (behind || rate.speed < speed * 0.9 ? ` of ${speed}× (CPU-limited)` : '')
-      : 'speed applies to AI mode';
+      : 'speed applies to AI mode');
   }
   requestAnimationFrame(frame);
 }

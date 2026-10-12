@@ -19,6 +19,11 @@
 // (localStorage 'dino-model'), switches the stylesheet to models-css/<id>.css
 // (`node trainer/cli.js export-models`; models-css/index.js lists ids, labels and
 // each file's --nn-model-id, never weights). With neither, the page plays model.css.
+// Only models trained for the latest rules are offered or accepted (pages.js).
+//
+// Rules: always the latest (DinoPages.GAME_VERSION); nothing on the page picks
+// them. A stylesheet's --nn-game only checks consistency with its index entry,
+// and a root model.css for other rules plays the latest rules with a warning.
 const { FRAME_MS } = DinoCore;
 const { OBS_DIM, ACTIONS, observe } = DinoPolicy;
 
@@ -30,14 +35,8 @@ const $model = document.getElementById('model');
 const $modelCss = document.getElementById('model-css');
 const $modelCssLink = document.getElementById('model-css-link');
 
-const MODEL_KEY = 'dino-model';
-const MODEL_INDEX = typeof DINO_MODEL_INDEX !== 'undefined' ? DINO_MODEL_INDEX : [];
-const SELECTED = (() => {
-  const byId = (id) => (id && MODEL_INDEX.find(m => m.id === id)) || null;
-  let stored = null;
-  try { stored = localStorage.getItem(MODEL_KEY); } catch (e) { /* storage unavailable */ }
-  return byId(new URLSearchParams(location.search).get('model')) || byId(stored);
-})();
+const MODEL_INDEX = DinoPages.forPages(typeof DINO_MODEL_INDEX !== 'undefined' ? DINO_MODEL_INDEX : []);
+const SELECTED = DinoPages.chooseModel(MODEL_INDEX, location.search);
 const MODEL_LOAD_MS = 10000;
 const VIEW_MODELS = typeof DINO_MODELS !== 'undefined' ? DINO_MODELS : [];   // weights for the network view only
 
@@ -98,7 +97,11 @@ function setViewModel(loadedId) {
 // ---------------------------------------------------------------------------
 // Game and agent
 // ---------------------------------------------------------------------------
-let gameVersion = 'v1', actionRepeat = 1;
+let gameVersion = DinoPages.GAME_VERSION, actionRepeat = 1;
+document.documentElement.dataset.gameVersion = gameVersion;
+let rulesWarning = '';   // set in start() when the loaded stylesheet is for other rules
+const $rulesWarn = document.createElement('span');
+$rulesWarn.className = 'warn';
 let game = null, wait = 0, current = ACTIONS[0], overAt = 0, best = 0;
 let lastAct = -1, decided = false;   // the latest CSS decision (on x), for the network view
 const x = new Float64Array(OBS_DIM);
@@ -184,24 +187,19 @@ function showStatus() {
   $status.textContent = `game ${game.version}${game.version !== 'v1' ? ` (level ${game.level.toFixed(2)}${game.superLevel > 0 ? `, v3 level ${game.superLevel.toFixed(2)}` : ''})` : ''} · score ${game.score()}` +
     ` · achieved ${eff >= 10 ? Math.round(eff) : eff.toFixed(1)}× real time` + (behind || eff < want * 0.9 ? ` of ${want}× (CSS can't keep up)` : '') +
     ` · ${Math.round(rate.fps / actionRepeat)} CSS decisions/s`;
+  if (rulesWarning) $status.prepend($rulesWarn, ' · ');
 }
 
-// Fill the model selector; picking a model remembers it and reloads with ?model=<id>.
-// A loaded stylesheet that is not in the index (the root model.css when it holds
-// another model) appears as its own "model.css" entry.
+// Fill the model selector (latest-rules entries only); picking a model remembers it
+// and reloads with only ?model=<id>. A loaded stylesheet that is not among them (the
+// root model.css when it holds another model) appears as its own "model.css" entry.
 function fillModelSelect(loadedId) {
   const current = SELECTED || MODEL_INDEX.find(m => m.cssId === loadedId);
   if (!current) $model.add(new Option(`model.css (${loadedId})`, ''));
   for (const m of MODEL_INDEX) $model.add(new Option(m.label, m.id));
   $model.value = current ? current.id : '';
   $model.disabled = $model.options.length < 2;
-  $model.addEventListener('change', () => {
-    const id = $model.value;
-    try { if (id) localStorage.setItem(MODEL_KEY, id); else localStorage.removeItem(MODEL_KEY); } catch (e) { /* storage unavailable */ }
-    const q = new URLSearchParams(location.search);
-    if (id) q.set('model', id); else q.delete('model');
-    location.search = q.toString();
-  });
+  $model.addEventListener('change', () => DinoPages.pickModel($model.value));
 }
 for (const el of [$model, $speed]) el.addEventListener('change', () => el.blur());
 
@@ -241,13 +239,12 @@ function start() {
     selfTest();
     fillModelSelect(cssString('--nn-model-id'));
     setViewModel(cssString('--nn-model-id'));
-    gameVersion = cssString('--nn-game') || 'v1';
-    if (SELECTED && gameVersion !== SELECTED.gameVersion) throw new Error(`${SELECTED.css} is for rules ${gameVersion}, the index says ${SELECTED.gameVersion}`);
-    // ?game=v1|v2|v3 plays those rules instead of the model's own (as on index.html).
-    const asked = new URLSearchParams(location.search).get('game');
-    if (DinoCore.GAME_VERSIONS.includes(asked)) gameVersion = asked;
+    const cssGame = cssString('--nn-game') || 'v1';   // the rules the loaded stylesheet was trained for
+    if (SELECTED && cssGame !== SELECTED.gameVersion) throw new Error(`${SELECTED.css} is for rules ${cssGame}, the index says ${SELECTED.gameVersion}`);
+    if (!DinoCore.GAME_VERSIONS.includes(cssGame)) throw new Error(`model.css is for unknown game ${cssGame}`);
     actionRepeat = Math.max(1, cssNumber('--nn-action-repeat') | 0);
-    if (!DinoCore.GAME_VERSIONS.includes(gameVersion)) throw new Error(`model.css is for unknown game ${gameVersion}`);
+    rulesWarning = DinoPages.rulesWarning(cssGame);
+    $rulesWarn.textContent = rulesWarning;
   } catch (e) {
     fail(e);
     return;
